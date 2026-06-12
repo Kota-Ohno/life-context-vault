@@ -72,7 +72,7 @@ curl -fsS https://relay.example.com/.well-known/oauth-authorization-server
 curl -fsS https://relay.example.com/.well-known/oauth-protected-resource
 curl -i -X OPTIONS \
   -H "Origin: https://chatgpt.com" \
-  -H "Access-Control-Request-Headers: authorization,content-type,mcp-protocol-version" \
+  -H "Access-Control-Request-Headers: authorization,content-type,accept,mcp-protocol-version" \
   https://relay.example.com/mcp
 curl -i -X OPTIONS \
   -H "Origin: https://untrusted.example" \
@@ -80,12 +80,13 @@ curl -i -X OPTIONS \
 curl -i -X POST \
   -H "Origin: https://chatgpt.com" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "MCP-Protocol-Version: 2025-11-25" \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   https://relay.example.com/mcp
 ```
 
-The trusted-Origin preflight should return `204` with `Access-Control-Allow-Origin: https://chatgpt.com` and an allow-header list that includes `MCP-Protocol-Version`. The untrusted-Origin preflight should return `403`. The unauthenticated `/mcp` POST should return `401` with a `WWW-Authenticate` challenge, not a Relay or Vault error.
+The trusted-Origin preflight should return `204` with `Access-Control-Allow-Origin: https://chatgpt.com` and an allow-header list that includes `Accept` and `MCP-Protocol-Version`. The untrusted-Origin preflight should return `403`. The unauthenticated `/mcp` POST should return `401` with a `WWW-Authenticate` challenge, not a Relay or Vault error. If the POST omits `Accept: application/json, text/event-stream`, it should return `406 not_acceptable`; if it omits JSON content type, it should return `415 unsupported_media_type`.
 
 Pairing must be started from a trusted admin path:
 

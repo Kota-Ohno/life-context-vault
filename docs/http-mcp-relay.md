@@ -79,6 +79,7 @@ Development requests may include the static fallback token only when `LCV_RELAY_
 ```text
 Authorization: Bearer dev-local-token
 Content-Type: application/json
+Accept: application/json, text/event-stream
 MCP-Protocol-Version: 2025-11-25
 ```
 
@@ -122,7 +123,11 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
+`POST /mcp` requires `Content-Type: application/json` and an `Accept` header that includes both `application/json` and `text/event-stream`. A missing or unsupported content type receives `415 unsupported_media_type`; a missing or incompatible `Accept` receives `406 not_acceptable`. These checks happen before authorization or forwarding so hosted-client smoke tests fail with transport guidance instead of Vault errors.
+
 `POST /mcp` validates `MCP-Protocol-Version` when the header is present. Missing versions are treated as the 2025-03-26 default for older local clients. Supported versions are 2025-03-26, 2025-06-18, and 2025-11-25; unsupported versions receive `400 unsupported_protocol_version` before authorization or forwarding.
+
+The current relay is stateless for MCP HTTP requests: it does not return `MCP-Session-Id`, and inbound session ids are ignored. Full Streamable HTTP SSE/session semantics remain a hosted-connector hardening item; `GET /mcp` intentionally returns `405` until that path is implemented.
 
 `OPTIONS /mcp`, `POST /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
 
@@ -232,6 +237,7 @@ In another terminal:
 curl -s \
   -H 'Authorization: Bearer dev-local-token' \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
   http://127.0.0.1:8765/mcp
 ```

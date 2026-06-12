@@ -80,7 +80,7 @@ Last updated: 2026-06-13
 - Added Connections UI setup guidance for Claude Desktop-style MCP configuration.
 - Added top-bar native Vault Sync action so the app can reload MCP-written requests or memory proposals while open.
 - Added OAuth-capable HTTP MCP relay and local Vault Agent:
-  - `POST /mcp` accepts MCP JSON-RPC over HTTP
+  - `POST /mcp` accepts MCP JSON-RPC over HTTP and validates Streamable HTTP `Content-Type`, `Accept`, and `MCP-Protocol-Version` headers
   - `GET /health`
   - `GET /.well-known/oauth-protected-resource`
   - `GET /.well-known/oauth-authorization-server`
@@ -268,7 +268,7 @@ Last updated: 2026-06-13
 - Legacy Office conversion beyond the Settings/env local OCR command provider, detected OCR provider presets, and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including SSE/session transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
+- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including full SSE/session transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
 - Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
 - OCR setup now detects common local Tesseract providers, offers one-click Settings presets, and includes OS-specific guided install commands for users who do not already have an OCR provider. Remaining product-hardening: bundled OCR runtime for users who do not want to install Tesseract separately.
 
@@ -786,6 +786,14 @@ Last updated: 2026-06-13
 - Technical design: `/mcp` now allows MCP-specific browser headers, validates `MCP-Protocol-Version` for 2025-03-26/2025-06-18/2025-11-25, returns `400 unsupported_protocol_version` for unsupported versions, echoes the negotiated version on MCP responses, and returns a `WWW-Authenticate` challenge with `resource_metadata` plus required scope on unauthorized MCP calls.
 - Verification: Relay unit tests cover MCP CORS headers, unauthorized OAuth challenge contents, unsupported protocol-version rejection, and public OAuth resource binding.
 
+### Remote MCP Transport Header Slice
+
+- Product fit: ChatGPT/Claude-style hosted MCP smoke tests now get explicit Streamable HTTP transport guidance when `/mcp` is called with missing or incompatible POST headers.
+- Security/privacy: malformed MCP POSTs are rejected before OAuth, Agent forwarding, direct sidecar fallback, or any Vault read path. The Relay still exposes only Context Pack tools and does not store MCP request bodies.
+- Technical design: `POST /mcp` requires `Content-Type: application/json` and `Accept: application/json, text/event-stream`, returning `415 unsupported_media_type` or `406 not_acceptable` before authorization. The current Relay remains stateless for MCP HTTP and does not return `MCP-Session-Id`; full SSE/session support stays deferred.
+- Verification: Relay unit tests cover missing `Accept`, non-JSON `Content-Type`, preserved OAuth challenges for well-formed unauthenticated requests, and cached handoff behavior under the new header contract. `npm run product:check` passed.
+- Review fallback: SubAgents were not used for this incremental protocol-hardening slice; the main thread ran separate compatibility, security/privacy, product, and maintainability passes.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -793,6 +801,6 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
 - Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state plus an open-app review path.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
-- Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, including SSE/session semantics and real hosted-client certification, remains before a hosted connector beta.
+- Deferred protocol-hardening findings: full Streamable HTTP SSE/session semantics and real hosted-client certification remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
 - Deferred general-user polish: a bundled OCR runtime remains product-hardening work after the core AI access boundary.

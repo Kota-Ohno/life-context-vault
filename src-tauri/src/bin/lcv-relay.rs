@@ -1524,8 +1524,6 @@ fn pairing_status(request: &HttpRequest, state: &RelayState) -> HttpResponse {
 }
 
 fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
-  let required_scope = required_scope_for_mcp_body(&request.body);
-  let (method, tool_name) = mcp_request_summary(&request.body);
   let protocol_version = match mcp_protocol_version_for_request(request) {
     Ok(protocol_version) => protocol_version,
     Err(message) => {
@@ -1536,6 +1534,12 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       }));
     }
   };
+  if let Some(response) = mcp_transport_header_error(request, config, &protocol_version) {
+    return response;
+  }
+
+  let required_scope = required_scope_for_mcp_body(&request.body);
+  let (method, tool_name) = mcp_request_summary(&request.body);
   let Some(client_id) = mcp_authorized_client(request, config, state, required_scope) else {
     record_relay_event(
       state,
@@ -1685,6 +1689,78 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       }))
       .with_mcp_protocol_version(&protocol_version)
     }
+  }
+}
+
+fn mcp_transport_header_error(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  protocol_version: &str,
+) -> Option<HttpResponse> {
+  if !content_type_is_json(request.header("Content-Type")) {
+    return Some(
+      mcp_json_response(request, config, 415, json!({
+        "error": "unsupported_media_type",
+        "message": "MCP Streamable HTTP POST requests must use Content-Type: application/json."
+      }))
+      .with_mcp_protocol_version(protocol_version),
+    );
+  }
+
+  if !accepts_mcp_post_response_types(request) {
+    return Some(
+      mcp_json_response(request, config, 406, json!({
+        "error": "not_acceptable",
+        "message": "MCP Streamable HTTP POST requests must include Accept with application/json and text/event-stream."
+      }))
+      .with_mcp_protocol_version(protocol_version),
+    );
+  }
+
+  None
+}
+
+fn content_type_is_json(content_type: Option<&str>) -> bool {
+  media_type_without_parameters(content_type.unwrap_or_default())
+    .map(|media_type| media_type.eq_ignore_ascii_case("application/json"))
+    .unwrap_or(false)
+}
+
+fn accepts_mcp_post_response_types(request: &HttpRequest) -> bool {
+  let accept_values = request.header_values("Accept");
+  !accept_values.is_empty()
+    && ["application/json", "text/event-stream"]
+      .iter()
+      .all(|required| media_range_accepts(&accept_values, required))
+}
+
+fn media_range_accepts(header_values: &[&str], required: &str) -> bool {
+  header_values.iter().any(|value| {
+    value.split(',').any(|part| {
+      let Some(media_type) = media_type_without_parameters(part) else {
+        return false;
+      };
+      media_type.eq_ignore_ascii_case(required)
+        || media_type == "*/*"
+        || required
+          .split_once('/')
+          .map(|(required_type, _)| media_type == format!("{required_type}/*"))
+          .unwrap_or(false)
+    })
+  })
+}
+
+fn media_type_without_parameters(value: &str) -> Option<String> {
+  let media_type = value
+    .split_once(';')
+    .map(|(media_type, _)| media_type)
+    .unwrap_or(value)
+    .trim()
+    .to_ascii_lowercase();
+  if media_type.is_empty() {
+    None
+  } else {
+    Some(media_type)
   }
 }
 
@@ -1958,6 +2034,15 @@ impl HttpRequest {
       .iter()
       .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
       .map(|(_, value)| value.as_str())
+  }
+
+  fn header_values(&self, name: &str) -> Vec<&str> {
+    self
+      .headers
+      .iter()
+      .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+      .map(|(_, value)| value.as_str())
+      .collect()
   }
 }
 
@@ -2310,6 +2395,8 @@ fn reason_phrase(status: u16) -> &'static str {
     403 => "Forbidden",
     404 => "Not Found",
     405 => "Method Not Allowed",
+    406 => "Not Acceptable",
+    415 => "Unsupported Media Type",
     500 => "Internal Server Error",
     _ => "OK",
   }
@@ -2342,6 +2429,22 @@ mod tests {
       .iter()
       .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
       .map(|(_, value)| value.as_str())
+  }
+
+  fn mcp_post_headers() -> Vec<(String, String)> {
+    vec![
+      ("Content-Type".to_string(), "application/json".to_string()),
+      (
+        "Accept".to_string(),
+        "application/json, text/event-stream".to_string(),
+      ),
+    ]
+  }
+
+  fn authorized_mcp_post_headers(token: &str) -> Vec<(String, String)> {
+    let mut headers = mcp_post_headers();
+    headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+    headers
   }
 
   fn public_test_config() -> RelayConfig {
@@ -2425,14 +2528,14 @@ mod tests {
 
   #[test]
   fn mcp_unauthorized_response_points_to_oauth_resource_metadata() {
+    let mut headers = mcp_post_headers();
+    headers.push(("Origin".to_string(), "https://chatgpt.com".to_string()));
+    headers.push(("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()));
     let request = HttpRequest {
       method: "POST".to_string(),
       path: "/mcp".to_string(),
       query: String::new(),
-      headers: vec![
-        ("Origin".to_string(), "https://chatgpt.com".to_string()),
-        ("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()),
-      ],
+      headers,
       body: r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"life_context.get_request_status"}}"#.to_string(),
     };
     let config = RelayConfig {
@@ -2450,6 +2553,59 @@ mod tests {
     assert!(challenge.contains("Bearer"));
     assert!(challenge.contains("resource_metadata=\"http://127.0.0.1:8765/.well-known/oauth-protected-resource\""));
     assert!(challenge.contains("scope=\"request.status\""));
+  }
+
+  #[test]
+  fn mcp_rejects_streamable_http_requests_without_required_accept() {
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("Authorization".to_string(), "Bearer test-token".to_string()),
+        ("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()),
+      ],
+      body: r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string(),
+    };
+
+    let response = route_request(&request, &test_config(), &RelayState::new());
+
+    assert_eq!(response.status, 406);
+    assert_eq!(response.reason, "Not Acceptable");
+    assert_eq!(
+      response_header(&response, "MCP-Protocol-Version"),
+      Some("2025-11-25")
+    );
+    let body = String::from_utf8(response.body).expect("response body");
+    assert!(body.contains("not_acceptable"));
+    assert!(body.contains("application/json"));
+    assert!(body.contains("text/event-stream"));
+  }
+
+  #[test]
+  fn mcp_rejects_non_json_streamable_http_content_type() {
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![
+        ("Content-Type".to_string(), "text/plain".to_string()),
+        (
+          "Accept".to_string(),
+          "application/json, text/event-stream".to_string(),
+        ),
+        ("Authorization".to_string(), "Bearer test-token".to_string()),
+      ],
+      body: r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string(),
+    };
+
+    let response = route_request(&request, &test_config(), &RelayState::new());
+    let body = String::from_utf8(response.body).expect("response body");
+
+    assert_eq!(response.status, 415);
+    assert_eq!(response.reason, "Unsupported Media Type");
+    assert!(body.contains("unsupported_media_type"));
   }
 
   #[test]
@@ -3031,7 +3187,7 @@ mod tests {
       method: "POST".to_string(),
       path: "/mcp".to_string(),
       query: String::new(),
-      headers: vec![("Authorization".to_string(), "Bearer test-token".to_string())],
+      headers: authorized_mcp_post_headers("test-token"),
       body: r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"life_context.get_request_status","arguments":{"requestId":"req_cached"}}}"#.to_string(),
     };
     let response = handle_mcp_request(
@@ -3070,7 +3226,7 @@ mod tests {
       method: "POST".to_string(),
       path: "/mcp".to_string(),
       query: String::new(),
-      headers: vec![("Authorization".to_string(), "Bearer test-token".to_string())],
+      headers: authorized_mcp_post_headers("test-token"),
       body: r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"life_context.get_request_status","arguments":{"requestId":"req_other_client"}}}"#.to_string(),
     };
     let response = handle_mcp_request(
