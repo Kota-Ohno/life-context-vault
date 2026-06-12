@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::{
   collections::HashSet,
   env,
+  ffi::OsString,
   fs,
   io::{Cursor, Read, Write},
   net::TcpStream,
@@ -226,6 +227,16 @@ struct NativeDocumentExtractionCapabilities {
   native_document_extraction: bool,
   ocr_extraction: bool,
   ocr_provider_label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrProviderCandidate {
+  label: String,
+  command: String,
+  args: String,
+  timeout_seconds: u64,
+  source: String,
 }
 
 #[derive(Serialize)]
@@ -4417,6 +4428,83 @@ fn ocr_command_config_from_input(
   command.and_then(|command| ocr_command_config_from_parts(command, args, timeout_seconds))
 }
 
+fn detect_ocr_provider_candidates_from_sources(
+  path_env: Option<OsString>,
+  common_paths: &[PathBuf],
+) -> Vec<OcrProviderCandidate> {
+  let mut candidates = Vec::new();
+  let mut seen = HashSet::new();
+
+  if let Some(path_env) = path_env {
+    for dir in env::split_paths(&path_env) {
+      for binary in tesseract_binary_names() {
+        let path = dir.join(binary);
+        push_tesseract_candidate(&mut candidates, &mut seen, &path, "PATH");
+      }
+    }
+  }
+
+  for path in common_paths {
+    push_tesseract_candidate(&mut candidates, &mut seen, path, "common-path");
+  }
+
+  candidates
+}
+
+fn detect_ocr_provider_candidates_internal() -> Vec<OcrProviderCandidate> {
+  detect_ocr_provider_candidates_from_sources(env::var_os("PATH"), &common_ocr_provider_paths())
+}
+
+fn common_ocr_provider_paths() -> Vec<PathBuf> {
+  let mut paths = vec![
+    PathBuf::from("/opt/homebrew/bin/tesseract"),
+    PathBuf::from("/usr/local/bin/tesseract"),
+    PathBuf::from("/usr/bin/tesseract"),
+  ];
+  if cfg!(windows) {
+    paths.push(PathBuf::from(
+      r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    ));
+  }
+  paths
+}
+
+fn tesseract_binary_names() -> Vec<&'static str> {
+  if cfg!(windows) {
+    vec!["tesseract.exe", "tesseract"]
+  } else {
+    vec!["tesseract"]
+  }
+}
+
+fn push_tesseract_candidate(
+  candidates: &mut Vec<OcrProviderCandidate>,
+  seen: &mut HashSet<String>,
+  path: &Path,
+  source: &str,
+) {
+  if !path_is_file(path) {
+    return;
+  }
+  let command = path.to_string_lossy().to_string();
+  if !seen.insert(command.clone()) {
+    return;
+  }
+  candidates.push(OcrProviderCandidate {
+    label: format!("Tesseract OCR ({source})"),
+    command,
+    args: "{input} stdout".to_string(),
+    timeout_seconds: 30,
+    source: source.to_string(),
+  });
+}
+
+fn path_is_file(path: &Path) -> bool {
+  fs::metadata(path)
+    .map(|metadata| metadata.is_file())
+    .unwrap_or(false)
+}
+
 fn ocr_config_or_env(config: Option<OcrCommandConfig>) -> Option<OcrCommandConfig> {
   config.or_else(ocr_command_config_from_env)
 }
@@ -6994,6 +7082,11 @@ fn native_document_extraction_capabilities() -> NativeDocumentExtractionCapabili
 }
 
 #[tauri::command]
+fn detect_ocr_provider_candidates() -> Vec<OcrProviderCandidate> {
+  detect_ocr_provider_candidates_internal()
+}
+
+#[tauri::command]
 fn approve_native_candidate(
   app: AppHandle,
   candidate_id: String,
@@ -7370,6 +7463,7 @@ pub fn run() {
       deny_native_context_pack_request,
       extract_native_document_text,
       native_document_extraction_capabilities,
+      detect_ocr_provider_candidates,
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
@@ -7566,6 +7660,31 @@ mod tests {
     assert!(warnings
       .iter()
       .any(|warning| warning.contains("OCR Provider")));
+  }
+
+  #[test]
+  fn ocr_provider_detection_finds_path_candidate_without_running_it() {
+    let temp_dir = env::temp_dir().join(new_id("lcv_ocr_detect_test"));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let binary_name = if cfg!(windows) {
+      "tesseract.exe"
+    } else {
+      "tesseract"
+    };
+    let binary_path = temp_dir.join(binary_name);
+    fs::write(&binary_path, b"not a real executable").expect("write fake provider");
+    let path_env = env::join_paths([temp_dir.clone()]).expect("join path");
+
+    let candidates =
+      detect_ocr_provider_candidates_from_sources(Some(path_env), &[binary_path.clone()]);
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].command, binary_path.to_string_lossy().to_string());
+    assert_eq!(candidates[0].args, "{input} stdout");
+    assert_eq!(candidates[0].timeout_seconds, 30);
+    assert_eq!(candidates[0].source, "PATH");
+
+    fs::remove_dir_all(temp_dir).ok();
   }
 
   fn benchmark_size_from_env(name: &str, default: usize) -> usize {

@@ -36,12 +36,14 @@ import {
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
   NativeDocumentExtractionCapabilities,
+  NativeOcrProviderCandidate,
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   approveNativeCandidate,
   confirmNativeContextPack,
   createNativeContextPackRequest,
   denyNativeContextPackRequest,
+  detectNativeOcrProviderCandidates,
   extractNativeDocumentText,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
@@ -257,6 +259,7 @@ export function App() {
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
   const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
     useState<NativeDocumentExtractionCapabilities | null>(null);
+  const [ocrProviderCandidates, setOcrProviderCandidates] = useState<NativeOcrProviderCandidate[]>([]);
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(() =>
     loadRuntimePreferences()
   );
@@ -282,11 +285,12 @@ export function App() {
     let cancelled = false;
     async function hydrateNativeStorage() {
       try {
-        const [nativeSnapshot, path, configTemplate, extractionCapabilities] = await Promise.all([
+        const [nativeSnapshot, path, configTemplate, extractionCapabilities, detectedOcrProviders] = await Promise.all([
           loadNativeVaultSnapshot(),
           getNativeVaultPath(),
           getClaudeDesktopConfigTemplate(),
-          getNativeDocumentExtractionCapabilities().catch(() => null)
+          getNativeDocumentExtractionCapabilities().catch(() => null),
+          detectNativeOcrProviderCandidates().catch(() => [])
         ]);
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
@@ -294,6 +298,7 @@ export function App() {
         setNativeRevision(nativeSnapshot?.updatedAt ?? null);
         setNativePath(path);
         setDocumentExtractionCapabilities(extractionCapabilities);
+        setOcrProviderCandidates(detectedOcrProviders);
         if (configTemplate) setClaudeConfig(configTemplate);
       } catch (error) {
         console.warn("Native storage unavailable", error);
@@ -1780,6 +1785,7 @@ export function App() {
             nativeRevision={nativeRevision}
             storageReady={storageReady}
             runtimePreferences={runtimePreferences}
+            ocrProviderCandidates={ocrProviderCandidates}
             updateRuntimePreference={updateRuntimePreference}
           />
         )}
@@ -3771,6 +3777,7 @@ function SettingsView({
   nativeRevision,
   storageReady,
   runtimePreferences,
+  ocrProviderCandidates,
   updateRuntimePreference
 }: {
   passphrase: string;
@@ -3785,6 +3792,7 @@ function SettingsView({
   nativeRevision: string | null;
   storageReady: boolean;
   runtimePreferences: RuntimePreferences;
+  ocrProviderCandidates: NativeOcrProviderCandidate[];
   updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
 }) {
   const hasOcrCommand = Boolean(runtimePreferences.ocrCommand.trim());
@@ -3846,6 +3854,38 @@ function SettingsView({
             <ShieldCheck size={16} />
             <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
           </div>
+          {ocrProviderCandidates.length > 0 ? (
+            <div className="table-list">
+              {ocrProviderCandidates.map((candidate) => (
+                <div className="table-row" key={`${candidate.source}:${candidate.command}`}>
+                  <div>
+                    <strong>{candidate.label}</strong>
+                    <span>{candidate.command}</span>
+                    <span>検出だけを行い、ここではOCR実行や画像送信はしていません。</span>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateRuntimePreference({
+                        ocrCommand: candidate.command,
+                        ocrArgs: candidate.args,
+                        ocrTimeoutSeconds: candidate.timeoutSeconds
+                      })
+                    }
+                    type="button"
+                  >
+                    <Check size={16} />
+                    この候補を使う
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="trust-note">
+              <ShieldAlert size={16} />
+              <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のCommandへローカルOCRコマンドを直接入力してください。</span>
+            </div>
+          )}
           <Input
             label="Command"
             value={runtimePreferences.ocrCommand}
@@ -3871,7 +3911,15 @@ function SettingsView({
               type="button"
             >
               <Settings size={16} />
-              Tesseract args
+              基本引数
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout -l jpn+eng" })}
+              type="button"
+            >
+              <Settings size={16} />
+              日本語+英語
             </button>
             <button
               className="danger-button"
@@ -4391,7 +4439,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "画像OCRはまだ未接続です",
-      body: `${file.name} は画像として検出しました。Desktopで LCV_OCR_COMMAND を設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+      body: `${file.name} は画像として検出しました。SettingsのLocal OCRで検出候補を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
     };
   }
   if (reason === "legacy_office") {

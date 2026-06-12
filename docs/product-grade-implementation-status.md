@@ -265,11 +265,12 @@ Last updated: 2026-06-13
 ## Still Remaining For Full Product Grade
 
 - Provisioning the actual public HTTPS Relay domain, TLS termination, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
-- Legacy Office conversion beyond the Settings/env local OCR command provider and local PDF/modern Office extractor.
+- Legacy Office conversion beyond the Settings/env local OCR command provider, detected OCR provider presets, and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and `GET /mcp` behavior expected by hosted clients.
 - Browser Capture now supports explicit popup capture and opt-in Auto Capture with persistent in-page status. Remaining product-hardening: extension-side recent captured Source review/delete and true delta queueing instead of debounced changed-text capture.
+- OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
 ## Verification
 
@@ -722,6 +723,13 @@ Last updated: 2026-06-13
 - Technical design: popup manual capture and content-script Auto Capture now share the same background `capturePageFragment` path and recent status metadata. The content script responds to popup setting changes without a page reload.
 - Verification: extension static checks passed with `node --check browser-extension/background.js`, `node --check browser-extension/content.js`, and `node --check browser-extension/popup.js`. Static popup visual inspection via the in-app browser was attempted, but local `file://` extension HTML was blocked by the browser URL policy; no alternate browser workaround was used.
 
+### OCR Setup Assistant Slice
+
+- Product fit: Settings now detects common local Tesseract OCR providers from `PATH` and platform-standard install locations, then lets the user apply a safe command/argument preset without copying paths by hand.
+- Security/privacy: detection checks only local executable paths and does not run OCR, inspect images, or send data. Image OCR execution remains explicit, local-command based, timeout bounded, and still produces only Source text plus unapproved Inbox candidates.
+- Technical design: Tauri exposes `detect_ocr_provider_candidates`, TypeScript keeps the native boundary typed, and the Settings view applies detected command, basic `{input} stdout` args, and timeout through existing runtime preferences.
+- Verification: Rust provider-detection test covers PATH detection and duplicate suppression without executing the fake provider. `npm run product:check` passed. Browser checks at desktop `1280x900` and mobile `390x844` confirmed the Settings Local OCR card renders without horizontal overflow and keeps the preset buttons within the panel.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -731,4 +739,4 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish, public Origin allowlists, detailed OAuth challenge headers, and `GET /mcp` semantics remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: browser Capture recent-source review/delete, true delta queueing, and bundled/non-developer OCR setup remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: browser Capture recent-source review/delete, true delta queueing, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.

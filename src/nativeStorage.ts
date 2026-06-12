@@ -42,6 +42,14 @@ export interface NativeDocumentExtractionCapabilities {
   ocrProviderLabel: string | null;
 }
 
+export interface NativeOcrProviderCandidate {
+  label: string;
+  command: string;
+  args: string;
+  timeoutSeconds: number;
+  source: string;
+}
+
 interface NativeVaultSnapshotPayload {
   payload: string | null;
   updatedAt: string | null;
@@ -119,6 +127,12 @@ export async function getNativeDocumentExtractionCapabilities(): Promise<NativeD
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<NativeDocumentExtractionCapabilities>("native_document_extraction_capabilities");
+}
+
+export async function detectNativeOcrProviderCandidates(): Promise<NativeOcrProviderCandidate[]> {
+  if (!isTauriRuntime()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<NativeOcrProviderCandidate[]>("detect_ocr_provider_candidates");
 }
 
 export interface AiAccessServiceStatus {
