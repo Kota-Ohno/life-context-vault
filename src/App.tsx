@@ -70,6 +70,14 @@ import {
   saveRuntimePreferences
 } from "./runtimePreferences";
 import {
+  MAX_TEXT_SOURCE_BYTES,
+  SUPPORTED_TEXT_SOURCE_ACCEPT,
+  SUPPORTED_TEXT_SOURCE_LABEL,
+  describeTextSourceFile,
+  formatFileSize,
+  looksLikeReadableText
+} from "./sourceUpload";
+import {
   addSourceWithCandidates,
   addPassiveCaptureEvent,
   approveCandidate,
@@ -147,6 +155,12 @@ type OnboardingStep = {
 
 type SearchMode = "native_fts" | "browser_fallback" | "loading";
 
+type UploadFeedback = {
+  tone: "ready" | "attention";
+  title: string;
+  body: string;
+};
+
 const domainOptions: Array<LifeContextDomain | "all"> = [
   "all",
   "identity_and_profile",
@@ -204,6 +218,7 @@ export function App() {
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
   const [manualBody, setManualBody] = useState("");
+  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [question, setQuestion] = useState("");
   const [requestClientId, setRequestClientId] = useState("conn_chatgpt");
   const [activePackId, setActivePackId] = useState<string | null>(null);
@@ -610,7 +625,33 @@ export function App() {
   }
 
   async function handleFileUpload(file: File) {
-    const text = await file.text();
+    const support = describeTextSourceFile(file);
+    if (!support.supported) {
+      setUploadFeedback(unsupportedFileFeedback(file, support.reason));
+      return;
+    }
+
+    let text = "";
+    try {
+      text = await file.text();
+    } catch {
+      setUploadFeedback({
+        tone: "attention",
+        title: "ファイルを読めませんでした",
+        body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、Manual sourceに貼り付けてください。"
+      });
+      return;
+    }
+
+    if (!looksLikeReadableText(text)) {
+      setUploadFeedback({
+        tone: "attention",
+        title: "テキストとして読めませんでした",
+        body: "PDF、画像、Word文書などのバイナリ文書はまだ候補化しません。誤った記憶を作らないため、テキスト化した内容だけをSourceにしてください。"
+      });
+      return;
+    }
+
     const addStatus = await addSourceThroughCore(
       {
         kind: "document",
@@ -630,6 +671,7 @@ export function App() {
       apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。`);
       setView("inbox");
     }
+    if (addStatus !== "failed") setUploadFeedback(null);
   }
 
   async function addSourceThroughCore(
@@ -1486,6 +1528,7 @@ export function App() {
             setManualBody={setManualBody}
             addManualSource={addManualSource}
             handleFileUpload={handleFileUpload}
+            uploadFeedback={uploadFeedback}
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
             editSourceBody={editSourceBody}
@@ -2000,6 +2043,7 @@ function SourcesView({
   setManualBody,
   addManualSource,
   handleFileUpload,
+  uploadFeedback,
   changeSourceLifecycle,
   editSourceMetadata,
   editSourceBody
@@ -2013,6 +2057,7 @@ function SourcesView({
   setManualBody: (value: string) => void;
   addManualSource: () => void;
   handleFileUpload: (file: File) => void;
+  uploadFeedback: UploadFeedback | null;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
   editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
@@ -2049,8 +2094,9 @@ function SourcesView({
         </div>
         <label className="drop-zone">
           <Upload size={24} />
-          <span>TXT/MD/CSV/JSONなどテキストとして読めるファイル</span>
+          <span>{SUPPORTED_TEXT_SOURCE_LABEL}</span>
           <input
+            accept={SUPPORTED_TEXT_SOURCE_ACCEPT}
             type="file"
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -2059,7 +2105,16 @@ function SourcesView({
             }}
           />
         </label>
-        <p className="muted">アップロード直後は候補化だけを行います。PDF/OCRはTauri版以降の抽出パイプラインに分離予定です。</p>
+        {uploadFeedback && (
+          <div className={`upload-feedback ${uploadFeedback.tone}`}>
+            {uploadFeedback.tone === "ready" ? <CheckCircle2 size={16} /> : <ShieldAlert size={16} />}
+            <div>
+              <strong>{uploadFeedback.title}</strong>
+              <span>{uploadFeedback.body}</span>
+            </div>
+          </div>
+        )}
+        <p className="muted">PDF/画像/Wordは誤抽出を避けるため、OCR/文書抽出パイプラインが入るまでSource化しません。</p>
       </div>
 
       <div className="panel wide">
@@ -3690,6 +3745,24 @@ function sourceBodyNotice(
   invalidatedPackCount: number
 ): string {
   return `Source本文を保存し、${candidateCount}件の候補を再生成しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
+function unsupportedFileFeedback(
+  file: Pick<File, "name" | "size">,
+  reason: "too_large" | "unsupported_type"
+): UploadFeedback {
+  if (reason === "too_large") {
+    return {
+      tone: "attention",
+      title: "ファイルが大きすぎます",
+      body: `${file.name} は ${formatFileSize(file.size)} です。現在のローカル候補化は ${formatFileSize(MAX_TEXT_SOURCE_BYTES)} までのテキストSourceだけを扱います。`
+    };
+  }
+  return {
+    tone: "attention",
+    title: "まだ対応していない形式です",
+    body: `${file.name} はSource化しませんでした。対応形式は ${SUPPORTED_TEXT_SOURCE_LABEL} です。PDF、画像、Word文書はテキスト化してManual sourceに貼り付けてください。`
+  };
 }
 
 function linkedFactCount(state: VaultState, sourceId: string): number {

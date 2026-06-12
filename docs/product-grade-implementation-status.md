@@ -190,6 +190,10 @@ Last updated: 2026-06-12
   - conflicting candidates persist `conflictWithFactIds` and `conflictReason` in the JSON snapshot and normalized `memory_candidates` table
   - Inbox shows a conflict badge, warning copy, and prioritizes the suspected old Fact in the explicit replacement choices
   - Source body re-extraction moves linked Facts to `needs_review` before conflict annotation so regenerated candidates do not self-conflict against the same edited Source
+- Added safe text-upload guard for document Sources:
+  - Sources upload now accepts only text-like formats within the local extraction size ceiling
+  - PDFs, images, office documents, unreadable binary content, and oversized files are rejected before RawSource or MemoryCandidate creation
+  - the Upload card explains the safe fallback to Manual source text until OCR/document extraction is available
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -197,7 +201,7 @@ Last updated: 2026-06-12
 - Public HTTPS deployment and durable hosted relay domain.
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
-- Provider-backed LLM extraction and PDF/OCR ingestion.
+- Provider-backed LLM extraction and full PDF/OCR/office-document ingestion beyond the current safe text-upload guard.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
@@ -228,6 +232,7 @@ Last updated: 2026-06-12
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Context Pack minimization tests proving user-hidden items are removed from the AI-bound Pack, retained as exclusions, and remain absent after confirmation and `get_request_status`
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
+- Text upload guard tests proving supported text-like files are accepted while PDF/image-style binaries, unreadable text, and oversized files are rejected before Source creation
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
 - Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
@@ -263,6 +268,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Sources metadata edit form stacks fields and lifecycle actions without page-level horizontal overflow
   - desktop `1280x720`: Sources body edit form is accessible by label, saves edited body text, regenerates one candidate, moves the linked Fact to the Search review queue, and has no page-level horizontal overflow
   - mobile `390x844`: Sources body edit form keeps textarea, warning copy, and action buttons inside the row without page-level horizontal overflow
+  - desktop `1280x720`: Sources upload card shows the safe text-file boundary and accepted extension contract without page-level or card horizontal overflow
+  - mobile `390x844`: Sources upload card, accepted format label, and unsupported-file explanation stack without page-level or card horizontal overflow
   - desktop `1280x720`: Inbox replacement choices show same-domain active Facts, switch the save button to "置き換えて保存", and save one new Fact while moving the old Fact into Search history without page-level overflow
   - mobile `390x844`: Inbox replacement panel and action buttons stack without page-level, card, or panel horizontal overflow
   - desktop `1280x720`: Inbox conflicting candidate shows `衝突候補`, conflict warning, old/new renewal dates, and switches to "置き換えて保存" after selecting the suspected old Fact without page/card/panel horizontal overflow

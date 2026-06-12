@@ -158,6 +158,7 @@ The ingestion pipeline stores the original file, structured answer, conversation
 Initial command behavior:
 
 - Save a RawSource with provenance, origin, sensitivity, and deletion state.
+- Accept only text-like uploads until document extraction is implemented. Unsupported binary files such as PDFs, images, and office documents must be rejected before RawSource creation so garbled text cannot become MemoryCandidates.
 - Preserve line boundaries for candidate extraction after secret redaction.
 - Generate MemoryCandidates only; never create ApprovedFacts directly.
 - Redact secret indicators and adjacent secret values before persistence.

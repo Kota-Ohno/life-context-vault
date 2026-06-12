@@ -152,14 +152,16 @@ Guided setup must be optional. The product should become useful through normal c
 ### Flow 2: Upload Important Document
 
 1. User drops a document into the app.
-2. App stores the raw source locally.
-3. App extracts text locally when possible.
-4. App classifies document type, sensitivity, dates, parties, obligations, and contact points.
-5. App creates MemoryCandidate records.
-6. User reviews candidates in Memory Inbox.
-7. Approved candidates become ApprovedFact records.
-8. Search indexes are updated.
-9. App shows a summary: saved facts, rejected facts, sensitive items requiring stronger confirmation.
+2. App checks whether the file is currently safe to read as text.
+3. Unsupported PDFs, images, office files, or oversized files are not stored as RawSource records; the app explains that the user can paste extracted text manually until OCR/document extraction is available.
+4. Supported text files are stored locally as RawSource records.
+5. App extracts text locally when possible.
+6. App classifies document type, sensitivity, dates, parties, obligations, and contact points.
+7. App creates MemoryCandidate records.
+8. User reviews candidates in Memory Inbox.
+9. Approved candidates become ApprovedFact records.
+10. Search indexes are updated.
+11. App shows a summary: saved facts, rejected facts, sensitive items requiring stronger confirmation.
 
 Example user-visible outcome:
 

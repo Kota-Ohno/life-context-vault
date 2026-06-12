@@ -1151,6 +1151,44 @@ button:focus-visible {
   border: 0;
 }
 
+.upload-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #3e4c43;
+}
+
+.upload-feedback.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.upload-feedback.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.upload-feedback div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.upload-feedback strong,
+.upload-feedback span {
+  overflow-wrap: anywhere;
+}
+
+.upload-feedback span {
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .ask-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.7fr) minmax(0, 1.3fr);
