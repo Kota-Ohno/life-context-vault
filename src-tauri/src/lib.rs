@@ -20,6 +20,7 @@ mod mcp_stdio;
 mod vault_crypto;
 
 const VAULT_STATE_KEY: &str = "vault_state";
+const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
 const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
 const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
 const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
@@ -144,7 +145,7 @@ fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
   let path = vault_db_path(app)?;
-  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
+  let mut connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   connection
     .execute(
       "CREATE TABLE IF NOT EXISTS vault_state (
@@ -157,6 +158,7 @@ fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
     .map_err(|error| format!("failed to initialize vault database: {error}"))?;
   ensure_vault_state_updated_at_column(&connection)?;
   initialize_vault_schema(&connection)?;
+  sync_normalized_tables_if_stale(&mut connection)?;
   Ok(connection)
 }
 
@@ -198,8 +200,14 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS projection_state (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       INSERT INTO schema_versions (component, version, updated_at)
-      VALUES ('vault_core', 1, CURRENT_TIMESTAMP)
+      VALUES ('vault_core', 2, CURRENT_TIMESTAMP)
       ON CONFLICT(component) DO UPDATE SET
         version = excluded.version,
         updated_at = CURRENT_TIMESTAMP;
@@ -651,6 +659,45 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
   transaction
     .commit()
     .map_err(|error| format!("failed to commit vault sync transaction: {error}"))
+}
+
+fn sync_normalized_tables_if_stale(connection: &mut Connection) -> Result<(), String> {
+  let snapshot = load_vault_state_snapshot_from_connection(connection)?;
+  let Some(payload) = snapshot.payload else {
+    return Ok(());
+  };
+  let Some(updated_at) = snapshot.updated_at else {
+    return Ok(());
+  };
+
+  let projected_updated_at = connection
+    .query_row(
+      "SELECT value FROM projection_state WHERE key = ?1",
+      params![PROJECTION_STATE_KEY],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| format!("failed to read projection state: {error}"))?;
+  if projected_updated_at.as_deref() == Some(updated_at.as_str()) {
+    return Ok(());
+  }
+
+  sync_normalized_tables(connection, &payload)?;
+  mark_projection_synced(connection, &updated_at)
+}
+
+fn mark_projection_synced(connection: &Connection, updated_at: &str) -> Result<(), String> {
+  connection
+    .execute(
+      "INSERT INTO projection_state (key, value, updated_at)
+       VALUES (?1, ?2, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP",
+      params![PROJECTION_STATE_KEY, updated_at],
+    )
+    .map(|_| ())
+    .map_err(|error| format!("failed to update projection state: {error}"))
 }
 
 fn value_array<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
@@ -1509,6 +1556,7 @@ fn save_vault_state_payload(
     .map_err(|error| format!("failed to save vault state: {error}"))?;
   sync_normalized_tables(connection, payload)?;
   let updated_at = vault_state_updated_at(&connection)?;
+  mark_projection_synced(connection, &updated_at)?;
   Ok(SaveVaultStateResult {
     updated_at: Some(updated_at),
     conflict: false,
@@ -1740,6 +1788,34 @@ pub fn run() {
 mod tests {
   use super::*;
 
+  fn initialize_test_vault_connection(connection: &Connection) {
+    connection
+      .execute(
+        "CREATE TABLE IF NOT EXISTS vault_state (
+          key TEXT PRIMARY KEY NOT NULL,
+          payload TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+      )
+      .expect("vault_state table");
+    ensure_vault_state_updated_at_column(connection).expect("vault_state updated_at");
+    initialize_vault_schema(connection).expect("schema");
+  }
+
+  fn write_test_vault_state(connection: &Connection, payload: &str, updated_at: &str) {
+    connection
+      .execute(
+        "INSERT INTO vault_state (key, payload, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET
+           payload = excluded.payload,
+           updated_at = excluded.updated_at",
+        params![VAULT_STATE_KEY, payload, updated_at],
+      )
+      .expect("write vault_state");
+  }
+
   #[test]
   fn syncs_vault_snapshot_into_normalized_tables() {
     let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
@@ -1818,6 +1894,172 @@ mod tests {
     assert_eq!(candidate_count, 1);
     assert_eq!(fact_count, 1);
     assert_eq!(fts_count, 1);
+  }
+
+  #[test]
+  fn opening_vault_syncs_projection_after_external_snapshot_write() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+
+    let first_payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_address",
+          "factText": "Moving address update is due before July.",
+          "domain": "home_and_places",
+          "factType": "deadline",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    write_test_vault_state(&connection, first_payload, "2026-06-12T00:00:00.000Z");
+    sync_normalized_tables_if_stale(&mut connection).expect("first projection sync");
+
+    let address_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'address'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("address FTS count");
+    let first_projection: String = connection
+      .query_row(
+        "SELECT value FROM projection_state WHERE key = ?1",
+        params![PROJECTION_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("first projection state");
+    assert_eq!(address_count, 1);
+    assert_eq!(first_projection, "2026-06-12T00:00:00.000Z");
+
+    let second_payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_passport",
+          "factText": "Passport renewal reminder is due in September.",
+          "domain": "identity_and_profile",
+          "factType": "deadline",
+          "sourceIds": [],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T01:00:00.000Z",
+          "approvedAt": "2026-06-12T01:10:00.000Z",
+          "updatedAt": "2026-06-12T01:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    write_test_vault_state(&connection, second_payload, "2026-06-12T01:00:00.000Z");
+    sync_normalized_tables_if_stale(&mut connection).expect("stale projection resync");
+
+    let stale_address_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'address'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("stale address FTS count");
+    let passport_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'passport'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("passport FTS count");
+    let fact_ids: Vec<String> = connection
+      .prepare("SELECT id FROM facts ORDER BY id")
+      .expect("facts statement")
+      .query_map([], |row| row.get::<_, String>(0))
+      .expect("facts query")
+      .collect::<Result<Vec<_>, _>>()
+      .expect("facts collect");
+    let second_projection: String = connection
+      .query_row(
+        "SELECT value FROM projection_state WHERE key = ?1",
+        params![PROJECTION_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("second projection state");
+
+    assert_eq!(stale_address_count, 0);
+    assert_eq!(passport_count, 1);
+    assert_eq!(fact_ids, vec!["fact_passport"]);
+    assert_eq!(second_projection, "2026-06-12T01:00:00.000Z");
+  }
+
+  #[test]
+  fn saving_vault_marks_projection_revision() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_policy",
+          "factText": "Insurance policy renews each October.",
+          "domain": "contracts_and_policies",
+          "factType": "deadline",
+          "sourceIds": [],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+
+    let result = save_vault_state_payload(&mut connection, payload, None).expect("save vault");
+    let projection: String = connection
+      .query_row(
+        "SELECT value FROM projection_state WHERE key = ?1",
+        params![PROJECTION_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("projection state");
+
+    assert!(!result.conflict);
+    assert_eq!(Some(projection), result.updated_at);
   }
 
   #[test]

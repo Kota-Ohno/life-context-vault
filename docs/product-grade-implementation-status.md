@@ -47,6 +47,7 @@ Last updated: 2026-06-12
   - domain and sensitivity filters are applied in SQL
   - Search UI shows whether results came from Vault Core FTS or browser fallback
   - native search returns only active ApprovedFacts, never MemoryCandidates or Raw Source body text
+  - Tauri open/search resyncs normalized tables and `facts_fts` when `vault_state.updated_at` changed outside the app
 - Added SQLCipher-backed local database encryption:
   - macOS Keychain-managed Vault key by default
   - `LCV_VAULT_DB_KEY` override for CI and smoke tests
@@ -154,6 +155,7 @@ Last updated: 2026-06-12
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
 - Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
+- Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
@@ -189,6 +191,7 @@ Last updated: 2026-06-12
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
 - Technical design: normalized SQLite tables and native FTS search are present, but write-side CRUD and Context Pack generation still use the JSON snapshot projected into tables.
+- External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
 - Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
 
@@ -239,6 +242,14 @@ Last updated: 2026-06-12
 - UX: when a save conflict happens, the app merges external records and local edits, then tells the user that external AI updates were merged.
 - Safety: same-id records prefer the user's local edit, while new external Sources, Candidates, Context Requests, Context Packs, Audit Events, and connector records are preserved.
 - Verification: Rust tests confirm stale saves return conflict without changing the stored payload.
+
+### Native Projection Sync Slice
+
+- Product fit: external AI writes made while the Control Center is closed are now visible to native search after the next app open/search path.
+- Security/privacy: the sync path still projects only from encrypted local `vault_state`; it does not add a new Raw Source or full-Vault external read path.
+- Technical design: `projection_state` records the `vault_state.updated_at` revision already reflected in normalized tables and `facts_fts`.
+- Review disposition: stale FTS after MCP/Relay writes was the material finding; fixed with open-time projection sync and regression coverage.
+- Verification: Rust tests cover first projection, stale projection replacement, and save-time projection revision marking.
 
 ## Independent Review Passes
 
