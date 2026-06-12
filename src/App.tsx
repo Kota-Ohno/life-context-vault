@@ -110,7 +110,9 @@ const blankSetup: BackgroundSetupInput = {
 };
 
 const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
-const localRelayUrl = "http://127.0.0.1:8765/mcp";
+const localAgentBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-agent";
+const localRelayBaseUrl = "http://127.0.0.1:8765";
+const localRelayUrl = `${localRelayBaseUrl}/mcp`;
 const localRelayToken = "dev-local-token";
 
 export function App() {
@@ -966,20 +968,20 @@ function ConnectionsView({
       <div className="panel wide">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">HTTP Relay setup</p>
-            <h3>Remote MCP形式に近いHTTP接続をローカルで試す</h3>
+            <p className="eyebrow">Remote MCP Relay</p>
+            <h3>ChatGPT / ClaudeからVault Agentへ接続する</h3>
           </div>
           <Radio size={18} />
         </div>
-        <div className="setup-grid relay-setup">
+        <div className="setup-grid remote-relay-setup">
           <div className="setup-step">
             <Badge>1</Badge>
-            <strong>Relayをビルド</strong>
-            <pre className="code-box">npm run relay:build</pre>
+            <strong>RelayとAgentをビルド</strong>
+            <pre className="code-box">npm run relay:build{"\n"}npm run agent:build</pre>
           </div>
           <div className="setup-step">
             <Badge>2</Badge>
-            <strong>Relayを起動</strong>
+            <strong>OAuth Relayを起動</strong>
             <pre className="code-box">{makeRelayCommand(nativePath)}</pre>
             <button
               className="secondary-button"
@@ -992,11 +994,46 @@ function ConnectionsView({
           </div>
           <div className="setup-step">
             <Badge>3</Badge>
-            <strong>HTTP MCP endpoint</strong>
-            <pre className="code-box">{JSON.stringify({ url: localRelayUrl, authorization: `Bearer ${localRelayToken}` }, null, 2)}</pre>
+            <strong>Pairing codeを発行</strong>
+            <pre className="code-box">{makePairingCommand()}</pre>
+            <button
+              className="secondary-button"
+              onClick={() => copyText(makePairingCommand(), "Agent pairingコマンドをコピーしました。")}
+              type="button"
+            >
+              <Clipboard size={16} />
+              Copy pairing
+            </button>
+          </div>
+          <div className="setup-step">
+            <Badge>4</Badge>
+            <strong>Local Agentを接続</strong>
+            <pre className="code-box">{makeAgentCommand(nativePath)}</pre>
+            <button
+              className="secondary-button"
+              onClick={() => copyText(makeAgentCommand(nativePath), "Local Agent起動コマンドをコピーしました。")}
+              type="button"
+            >
+              <Clipboard size={16} />
+              Copy agent
+            </button>
+          </div>
+          <div className="setup-step">
+            <Badge>OAuth</Badge>
+            <strong>ChatGPT / Claude connectorへ渡すURL</strong>
+            <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(), null, 2)}</pre>
+          </div>
+          <div className="setup-step">
+            <Badge>Boundary</Badge>
+            <strong>Relayが保持しないもの</strong>
+            <div className="scope-row">
+              <Badge>Raw Vault</Badge>
+              <Badge>Raw Source</Badge>
+              <Badge>long-lived Pack</Badge>
+            </div>
           </div>
         </div>
-        <p className="muted">RelayはHTTPで受けたMCP JSON-RPCをローカルMCP sidecarへ中継します。デフォルトは127.0.0.1だけにbindし、外部公開時は明示的なBearer tokenを要求します。</p>
+        <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。AgentがオフラインならContext Packは返さず、Vault本体やRaw SourceはRelayに置きません。</p>
       </div>
 
       <div className="panel">
@@ -1515,10 +1552,42 @@ function makeRelayCommand(nativePath: string | null): string {
   return [
     `LCV_RELAY_TOKEN=${localRelayToken}`,
     `LCV_RELAY_BIND=127.0.0.1:8765`,
+    `LCV_RELAY_BASE_URL=${localRelayBaseUrl}`,
+    `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`,
     `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
     `LCV_VAULT_DB_PATH="${vaultPath}"`,
     `src-tauri/target/release/lcv-relay`
   ].join(" ");
+}
+
+function makePairingCommand(): string {
+  return `curl -s -X POST ${localRelayBaseUrl}/pairing/start`;
+}
+
+function makeAgentCommand(nativePath: string | null): string {
+  const vaultPath =
+    nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3";
+  return [
+    `LCV_AGENT_RELAY_WS="ws://127.0.0.1:8765/agent/ws?pairing_code=<pairingCode>"`,
+    `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
+    `LCV_VAULT_DB_PATH="${vaultPath}"`,
+    `${localAgentBinaryPath}`
+  ].join(" ");
+}
+
+function makeRemoteConnectorInfo() {
+  return {
+    mcpServerUrl: localRelayUrl,
+    authorizationServerMetadata: `${localRelayBaseUrl}/.well-known/oauth-authorization-server`,
+    protectedResourceMetadata: `${localRelayBaseUrl}/.well-known/oauth-protected-resource`,
+    dynamicClientRegistration: `${localRelayBaseUrl}/oauth/register`,
+    scopes: [
+      "context_pack.request",
+      "memory.propose",
+      "policy.read",
+      "request.status"
+    ]
+  };
 }
 
 function groupByDomain(facts: ApprovedFact[]): Partial<Record<LifeContextDomain, ApprovedFact[]>> {

@@ -55,13 +55,20 @@ Last updated: 2026-06-12
   - private consequential and sensitive packs are queued for confirmation instead of returned directly
 - Added Connections UI setup guidance for Claude Desktop-style MCP configuration.
 - Added top-bar native Vault Sync action so the app can reload MCP-written requests or memory proposals while open.
-- Added local HTTP MCP relay:
-  - `POST /mcp` forwards JSON-RPC to `lcv-mcp`
+- Added OAuth-capable HTTP MCP relay and local Vault Agent:
+  - `POST /mcp` accepts MCP JSON-RPC over HTTP
   - `GET /health`
   - `GET /.well-known/oauth-protected-resource`
-  - bearer token required for `/mcp`
+  - `GET /.well-known/oauth-authorization-server`
+  - `POST /oauth/register`
+  - Authorization Code + PKCE endpoints at `/oauth/authorize`, `/oauth/approve`, and `/oauth/token`
+  - device pairing endpoints at `/pairing/start` and `/pairing/status`
+  - local Agent WebSocket endpoint at `/agent/ws`
+  - `lcv-agent` forwards paired relay requests to the local encrypted `lcv-mcp` sidecar
+  - minimum OAuth scopes are mapped per exposed MCP tool
+  - static bearer token fallback remains for local development
   - loopback bind by default
-- Added Connections UI setup guidance for local relay endpoint and launch command.
+- Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -73,7 +80,9 @@ Last updated: 2026-06-12
 
 ## Still Remaining For Full Product Grade
 
-- Hosted remote MCP relay with public HTTPS, OAuth, pairing, and local Agent websocket.
+- Public HTTPS deployment and durable hosted relay domain.
+- Persistent OAuth client registration store.
+- Installer-managed local Agent launch, reconnect, and background status.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
@@ -87,7 +96,8 @@ Last updated: 2026-06-12
 - `npm run mcp:build`
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
-- HTTP relay smoke test for `/health`, unauthorized `/mcp`, authorized `tools/list`, and encrypted `propose_memory` writes
+- `npm run agent:build`
+- HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, and paired Agent WebSocket writes
 - `npm run capture:build`
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
@@ -97,8 +107,8 @@ Last updated: 2026-06-12
 - Browser UI checks:
   - desktop `1440x980`: Connections MCP setup card displays without horizontal overflow
   - mobile `390x844`: Connections MCP setup card and code blocks fit without page-level horizontal overflow
-  - desktop `1440x980`: Connections HTTP Relay setup card displays endpoint and launch command without horizontal overflow
-  - mobile `390x844`: MCP and Relay setup grids stack without page-level horizontal overflow
+  - desktop `1440x980`: Connections Remote MCP Relay setup displays OAuth, pairing, Agent, and connector details without horizontal overflow
+  - mobile `390x844`: MCP and Remote Relay setup grids stack without page-level horizontal overflow
   - desktop `1440x980`: Connections browser extension setup card displays native host instructions without horizontal overflow
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow

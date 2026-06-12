@@ -28,6 +28,10 @@ name = "lcv-relay"
 path = "src/bin/lcv-relay.rs"
 
 [[bin]]
+name = "lcv-agent"
+path = "src/bin/lcv-agent.rs"
+
+[[bin]]
 name = "lcv-capture-host"
 path = "src/bin/lcv-capture-host.rs"
 
@@ -40,5 +44,8 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+base64 = "0.22.1"
+sha2 = "0.10.9"
+tungstenite = "0.28.0"
 tauri = { version = "2.11.2", features = [] }
 tauri-plugin-log = "2"

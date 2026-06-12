@@ -38,6 +38,7 @@ npm test
 npm run build
 npm run mcp:build
 npm run relay:build
+npm run agent:build
 npm run capture:build
 npm run tauri:build
 npm run tauri:bundle
@@ -59,7 +60,7 @@ npm run tauri:bundle
 - Tauri desktop wrapper with SQLCipher-backed encrypted native persistence
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
 - Local MCP stdio sidecar for same-device AI clients
-- HTTP MCP relay for local Remote-MCP-style testing
+- OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge for Remote-MCP-style testing
 - Chrome browser capture extension and Native Messaging host
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to an encrypted SQLCipher database in the app data directory, keyed by the OS secure credential store, and projected into normalized tables.
@@ -85,11 +86,12 @@ See `docs/local-mcp-sidecar.md` for setup, safety boundaries, and a stdio smoke 
 
 ```bash
 npm run relay:build
+npm run agent:build
 ```
 
-Then open **Connections** and copy the relay command.
+Then open **Connections** and copy the relay, pairing, and local Agent commands.
 
-The relay defaults to `http://127.0.0.1:8765/mcp`, requires a bearer token, and forwards requests to the local MCP sidecar. See `docs/http-mcp-relay.md`.
+The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
 
 ## Run Browser Capture Extension
 
