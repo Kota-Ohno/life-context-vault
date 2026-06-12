@@ -60,7 +60,7 @@ The sidecar exposes:
 ## Safety Boundary
 
 - The sidecar never exposes raw Vault-wide reads.
-- `request_context_pack` returns low-risk Context Packs directly.
+- `request_context_pack` uses the shared Rust Vault Core Context Pack Engine and returns low-risk Context Packs directly.
 - Context Packs with `private_consequential` or higher sensitivity are written to the Vault as `pending_user_confirmation` and are not returned directly.
 - `propose_memory` creates a `MemoryCandidate` only. It never creates an `ApprovedFact`.
 - `get_policy_summary` returns policy and connector metadata, not raw life context.

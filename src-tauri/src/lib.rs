@@ -9,7 +9,7 @@ use std::{
   fs,
   io::{Read, Write},
   net::TcpStream,
-  path::PathBuf,
+  path::{Path, PathBuf},
   process::{Child, Command, Stdio},
   sync::Mutex,
   thread,
@@ -140,6 +140,18 @@ struct NativeContextPackBuildResult {
   generated_by: String,
 }
 
+pub struct VaultCoreContextPackResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub request_id: String,
+  pub pack_id: String,
+  pub request_status: String,
+  pub expires_at: String,
+  pub max_sensitivity_included: String,
+  pub confirmation_status: String,
+  pub context_pack: Option<Value>,
+}
+
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -156,7 +168,15 @@ fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
   let path = vault_db_path(app)?;
-  let mut connection = vault_crypto::open_encrypted_vault_connection(&path)?;
+  open_vault_db_at_path(&path)
+}
+
+fn open_vault_db_at_path(path: &Path) -> Result<Connection, String> {
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent)
+      .map_err(|error| format!("failed to create vault database directory: {error}"))?;
+  }
+  let mut connection = vault_crypto::open_encrypted_vault_connection(path)?;
   connection
     .execute(
       "CREATE TABLE IF NOT EXISTS vault_state (
@@ -737,6 +757,10 @@ fn json_field(value: &Value, key: &str) -> String {
     .unwrap_or_else(|| "null".to_string())
 }
 
+fn optional_value(value: &Value, key: &str) -> Value {
+  value.get(key).cloned().unwrap_or(Value::Null)
+}
+
 fn parse_json_string_array(value: String) -> Vec<String> {
   serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()
 }
@@ -1043,6 +1067,89 @@ fn create_native_context_pack_request_in_connection(
   );
 
   Ok((request_id, pack_id))
+}
+
+pub fn create_context_pack_request_at_path(
+  path: &Path,
+  client_id: &str,
+  client_name: &str,
+  task_text: &str,
+  purpose: Option<&str>,
+  sensitivity_ceiling: Option<&str>,
+  approval_mode: Option<&str>,
+) -> Result<VaultCoreContextPackResult, String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+  let mut vault = snapshot
+    .payload
+    .as_deref()
+    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+    .unwrap_or_else(empty_vault_json);
+  let (request_id, pack_id) = create_native_context_pack_request_in_connection(
+    &connection,
+    &mut vault,
+    client_id,
+    client_name,
+    task_text,
+    purpose,
+    sensitivity_ceiling,
+    approval_mode,
+  )?;
+  let request = find_vault_item_by_id(&vault, "contextPackRequests", &request_id)
+    .ok_or_else(|| format!("created ContextPackRequest was not found: {request_id}"))?;
+  let pack = find_vault_item_by_id(&vault, "contextPacks", &pack_id)
+    .ok_or_else(|| format!("created ContextPack was not found: {pack_id}"))?;
+  let request_status = str_field(&request, "status");
+  let expires_at = str_field(&request, "expiresAt");
+  let max_sensitivity_included = str_field(&pack, "maxSensitivityIncluded");
+  let confirmation_status = str_field(&pack, "confirmationStatus");
+  let context_pack = if confirmation_status == "not_required" || confirmation_status == "confirmed" {
+    Some(safe_context_pack_for_client(&pack))
+  } else {
+    None
+  };
+
+  let payload = vault.to_string();
+  let save_result = save_vault_state_payload(&mut connection, &payload, None)?;
+  let saved_snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+
+  Ok(VaultCoreContextPackResult {
+    payload: saved_snapshot.payload.unwrap_or(payload),
+    updated_at: save_result.updated_at,
+    request_id,
+    pack_id,
+    request_status,
+    expires_at,
+    max_sensitivity_included,
+    confirmation_status,
+    context_pack,
+  })
+}
+
+fn find_vault_item_by_id(vault: &Value, key: &str, id: &str) -> Option<Value> {
+  vault
+    .get(key)
+    .and_then(Value::as_array)
+    .and_then(|items| items.iter().find(|item| str_field(item, "id") == id))
+    .cloned()
+}
+
+fn safe_context_pack_for_client(pack: &Value) -> Value {
+  json!({
+    "trustBoundary": "ContextPack only",
+    "id": str_field(pack, "id"),
+    "requestId": optional_value(pack, "requestId"),
+    "taskText": str_field(pack, "taskText"),
+    "taskDomain": str_field(pack, "taskDomain"),
+    "generatedAt": str_field(pack, "generatedAt"),
+    "expiresAt": optional_value(pack, "expiresAt"),
+    "maxSensitivityIncluded": str_field(pack, "maxSensitivityIncluded"),
+    "items": pack.get("items").cloned().unwrap_or_else(|| json!([])),
+    "sourceSnippets": pack.get("sourceSnippets").cloned().unwrap_or_else(|| json!([])),
+    "warnings": pack.get("warnings").cloned().unwrap_or_else(|| json!([])),
+    "excludedItems": pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
+    "confirmationStatus": str_field(pack, "confirmationStatus")
+  })
 }
 
 fn rank_context_facts_in_connection(
@@ -2418,16 +2525,9 @@ fn create_native_context_pack_request(
   sensitivity_ceiling: Option<String>,
   approval_mode: Option<String>,
 ) -> Result<NativeContextPackBuildResult, String> {
-  let mut connection = open_vault_db(&app)?;
-  let snapshot = load_vault_state_snapshot_from_connection(&connection)?;
-  let mut vault = snapshot
-    .payload
-    .as_deref()
-    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
-    .unwrap_or_else(empty_vault_json);
-  let (request_id, pack_id) = create_native_context_pack_request_in_connection(
-    &connection,
-    &mut vault,
+  let path = vault_db_path(&app)?;
+  let result = create_context_pack_request_at_path(
+    &path,
     &client_id,
     &client_name,
     &task_text,
@@ -2435,14 +2535,11 @@ fn create_native_context_pack_request(
     sensitivity_ceiling.as_deref(),
     approval_mode.as_deref(),
   )?;
-  let payload = vault.to_string();
-  let save_result = save_vault_state_payload(&mut connection, &payload, None)?;
-  let saved_snapshot = load_vault_state_snapshot_from_connection(&connection)?;
   Ok(NativeContextPackBuildResult {
-    payload: saved_snapshot.payload.unwrap_or(payload),
-    updated_at: save_result.updated_at,
-    request_id,
-    pack_id: Some(pack_id),
+    payload: result.payload,
+    updated_at: result.updated_at,
+    request_id: result.request_id,
+    pack_id: Some(result.pack_id),
     generated_by: "native_vault_core".to_string(),
   })
 }

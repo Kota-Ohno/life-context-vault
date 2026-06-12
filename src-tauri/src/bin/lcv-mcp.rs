@@ -3,10 +3,11 @@ use serde_json::{json, Value};
 use std::{
   env,
   io::{self, BufRead, Write},
-  path::PathBuf,
+  path::{Path, PathBuf},
   time::{SystemTime, UNIX_EPOCH},
 };
 use chrono::{SecondsFormat, Utc};
+use life_context_vault_lib::create_context_pack_request_at_path;
 
 #[path = "../vault_crypto.rs"]
 mod vault_crypto;
@@ -172,7 +173,7 @@ fn tools() -> Value {
 fn call_tool(name: &str, arguments: &Value) -> Result<Value, (i64, String)> {
   let mut vault = load_vault().map_err(|error| (-32000, error))?;
   let result = match name {
-    "life_context.request_context_pack" => request_context_pack(&mut vault, arguments),
+    "life_context.request_context_pack" => request_context_pack(arguments),
     "life_context.propose_memory" => propose_memory(&mut vault, arguments),
     "life_context.get_policy_summary" => get_policy_summary(&vault),
     "life_context.get_request_status" => get_request_status(&vault, arguments),
@@ -186,118 +187,42 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, (i64, String)> {
   Ok(tool_result(result))
 }
 
-fn request_context_pack(vault: &mut Value, arguments: &Value) -> Result<Value, (i64, String)> {
+fn request_context_pack(arguments: &Value) -> Result<Value, (i64, String)> {
+  let path = vault_db_path().map_err(|error| (-32000, error))?;
+  request_context_pack_at_path(&path, arguments)
+}
+
+fn request_context_pack_at_path(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
   let task_text = required_str(arguments, "taskText")?;
   let client_name = optional_str(arguments, "clientName").unwrap_or("Local MCP Client");
   let ceiling = optional_str(arguments, "sensitivityCeiling").unwrap_or("private_consequential");
-  let now = now_iso();
-  let expires_at = minutes_from_now(10);
-  let request_id = new_id("req");
-  let pack_id = new_id("pack");
-  let task_domain = classify_domain(task_text);
-  let facts = relevant_facts(vault, task_text, ceiling);
-  let max_sensitivity = facts
-    .iter()
-    .map(|fact| get_str(fact, "sensitivity"))
-    .max_by_key(|sensitivity| sensitivity_rank(sensitivity))
-    .unwrap_or("public");
-  let requires_confirmation = sensitivity_rank(max_sensitivity) >= sensitivity_rank("private_consequential");
-  let items: Vec<Value> = facts
-    .iter()
-    .map(|fact| {
-      json!({
-        "id": new_id("ctxitem"),
-        "factId": get_str(fact, "id"),
-        "itemText": get_str(fact, "factText"),
-        "reasonIncluded": if get_str(fact, "domain") == task_domain {
-          "質問の領域と一致しています。"
-        } else {
-          "本人の背景情報として回答を調整できます。"
-        },
-        "sensitivity": get_str(fact, "sensitivity"),
-        "sourceTitles": source_titles(vault, fact),
-        "confidence": get_str(fact, "confidence")
-      })
-    })
-    .collect();
-  let warnings = if requires_confirmation {
-    vec![json!({
-      "kind": "sensitive_context",
-      "message": "このContext Packには重要な私的情報が含まれるため、Life Context Vaultアプリで確認が必要です。",
-      "relatedIds": facts.iter().map(|fact| Value::String(get_str(fact, "id").to_string())).collect::<Vec<Value>>()
-    })]
-  } else {
-    vec![]
-  };
-  let confirmation_status = if requires_confirmation {
-    "pending_user_confirmation"
-  } else {
-    "not_required"
-  };
-  let request = json!({
-    "id": request_id,
-    "clientId": "conn_local_mcp",
-    "clientName": client_name,
-    "taskText": task_text,
-    "purpose": "MCP client requested life context",
-    "requestedDomains": [task_domain],
-    "sensitivityCeiling": ceiling,
-    "approvalMode": "explicit_sensitive",
-    "createdAt": now,
-    "expiresAt": expires_at,
-    "status": if requires_confirmation { "pending_user_confirmation" } else { "fulfilled" }
-  });
-  let pack = json!({
-    "id": pack_id,
-    "requestId": request_id,
-    "taskText": task_text,
-    "taskDomain": task_domain,
-    "riskLevel": classify_risk(task_text),
-    "generatedAt": now,
-    "expiresAt": expires_at,
-    "maxSensitivityIncluded": max_sensitivity,
-    "items": items,
-    "sourceSnippets": [],
-    "excludedItems": [],
-    "warnings": warnings,
-    "confirmationStatus": confirmation_status
-  });
+  let result = create_context_pack_request_at_path(
+    path,
+    "conn_local_mcp",
+    client_name,
+    task_text,
+    Some("MCP client requested life context"),
+    Some(ceiling),
+    Some("explicit_sensitive"),
+  )
+  .map_err(|error| (-32000, error))?;
 
-  push_array(vault, "contextPackRequests", request);
-  push_array(vault, "contextPacks", pack.clone());
-  audit(
-    vault,
-    "context_pack_requested",
-    "context_pack_request",
-    &request_id,
-    ceiling,
-    json!({ "clientName": client_name, "transport": "local_mcp" }),
-  );
-  audit(
-    vault,
-    "context_pack_generated",
-    "context_pack",
-    &pack_id,
-    max_sensitivity,
-    json!({ "requestId": request_id, "itemCount": facts.len() }),
-  );
-
-  if requires_confirmation {
+  if result.context_pack.is_none() {
     Ok(json!({
-      "mutated": true,
-      "status": "pending_user_confirmation",
-      "requestId": request_id,
-      "expiresAt": expires_at,
-      "maxSensitivityIncluded": max_sensitivity,
+      "mutated": false,
+      "status": result.request_status,
+      "requestId": result.request_id,
+      "expiresAt": result.expires_at,
+      "maxSensitivityIncluded": result.max_sensitivity_included,
       "message": "Context Pack was created but not returned because it requires user confirmation in Life Context Vault.",
       "nextAction": "Open Life Context Vault > Context Requests, confirm or deny the request, then call life_context.get_request_status."
     }))
   } else {
     Ok(json!({
-      "mutated": true,
-      "status": "fulfilled",
-      "requestId": request_id,
-      "contextPack": safe_pack_for_client(&pack),
+      "mutated": false,
+      "status": result.request_status,
+      "requestId": result.request_id,
+      "contextPack": result.context_pack,
       "message": "Context Pack is low sensitivity and can be used for this answer."
     }))
   }
@@ -567,45 +492,6 @@ fn empty_vault() -> Value {
   })
 }
 
-fn relevant_facts(vault: &Value, task_text: &str, ceiling: &str) -> Vec<Value> {
-  let task_domain = classify_domain(task_text);
-  let lower_task = task_text.to_lowercase();
-  let tokens: Vec<String> = lower_task
-    .split_whitespace()
-    .map(|token| token.trim_matches(|character: char| !character.is_alphanumeric()).to_string())
-    .filter(|token| !token.is_empty())
-    .collect();
-
-  let mut scored: Vec<(i64, Value)> = array(vault, "facts")
-    .into_iter()
-    .filter(|fact| get_str(fact, "status") == "active")
-    .filter(|fact| get_str(fact, "sensitivity") != "secret_never_send")
-    .filter(|fact| sensitivity_rank(get_str(fact, "sensitivity")) <= sensitivity_rank(ceiling))
-    .map(|fact| {
-      let haystack = format!(
-        "{} {}",
-        get_str(&fact, "factText").to_lowercase(),
-        get_str(&fact, "domain").to_lowercase()
-      );
-      let token_score = tokens
-        .iter()
-        .filter(|token| haystack.contains(token.as_str()))
-        .count() as i64
-        * 3;
-      let domain_score = if get_str(&fact, "domain") == task_domain {
-        4
-      } else {
-        cross_domain_bridge_score(&lower_task, get_str(&fact, "domain"))
-      };
-      (token_score + domain_score, fact)
-    })
-    .filter(|(score, _)| *score > 0)
-    .collect();
-
-  scored.sort_by(|a, b| b.0.cmp(&a.0));
-  scored.into_iter().take(8).map(|(_, fact)| fact).collect()
-}
-
 fn safe_pack_for_client(pack: &Value) -> Value {
   json!({
     "trustBoundary": "ContextPack only",
@@ -682,28 +568,6 @@ fn optional_value(value: &Value, key: &str) -> Value {
   value.get(key).cloned().unwrap_or(Value::Null)
 }
 
-fn source_titles(vault: &Value, fact: &Value) -> Vec<Value> {
-  let sources = array(vault, "sources");
-  fact
-    .get("sourceIds")
-    .and_then(Value::as_array)
-    .map(|ids| {
-      ids.iter()
-        .filter_map(Value::as_str)
-        .map(|source_id| {
-          sources
-            .iter()
-            .find(|source| get_str(source, "id") == source_id)
-            .map(|source| get_str(source, "title"))
-            .unwrap_or("Unknown source")
-            .to_string()
-        })
-        .map(Value::String)
-        .collect()
-    })
-    .unwrap_or_default()
-}
-
 fn classify_domain(text: &str) -> &'static str {
   let lower = text.to_lowercase();
   if contains_any(&lower, &["health", "medical", "doctor", "disability", "care", "病院", "健康", "障害", "介護"]) {
@@ -728,22 +592,6 @@ fn classify_domain(text: &str) -> &'static str {
     "life_events_and_plans"
   } else {
     "documents_and_evidence"
-  }
-}
-
-fn classify_risk(text: &str) -> &'static str {
-  let sensitivity = detect_sensitivity(text);
-  if sensitivity == "sensitive" || sensitivity == "secret_never_send" {
-    "high"
-  } else if sensitivity == "private_consequential"
-    || contains_any(
-      &text.to_lowercase(),
-      &["contract", "deadline", "benefit", "health", "legal", "money", "契約", "期限", "給付", "健康", "法務", "お金"],
-    )
-  {
-    "medium"
-  } else {
-    "low"
   }
 }
 
@@ -776,31 +624,6 @@ fn candidate_type(text: &str) -> &'static str {
     "life_event"
   } else {
     "note"
-  }
-}
-
-fn cross_domain_bridge_score(task: &str, domain: &str) -> i64 {
-  if contains_any(task, &["job", "work", "employer", "転職", "勤務先", "仕事"]) {
-    if ["contracts_and_policies", "procedures_and_obligations", "finance_and_benefits"].contains(&domain) {
-      return 2;
-    }
-  }
-  if contains_any(task, &["move", "moving", "address", "引っ越", "住所"]) {
-    if ["home_and_places", "contracts_and_policies", "procedures_and_obligations", "documents_and_evidence"].contains(&domain) {
-      return 2;
-    }
-  }
-  0
-}
-
-fn sensitivity_rank(sensitivity: &str) -> i64 {
-  match sensitivity {
-    "public" => 0,
-    "personal" => 1,
-    "private_consequential" => 2,
-    "sensitive" => 3,
-    "secret_never_send" => 4,
-    _ => 4,
   }
 }
 
@@ -844,17 +667,39 @@ fn now_iso() -> String {
   Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn minutes_from_now(minutes: i64) -> String {
-  (Utc::now() + chrono::Duration::minutes(minutes))
-    .to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
 
+  fn test_vault_path(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|duration| duration.as_nanos())
+      .unwrap_or_default();
+    env::temp_dir().join(format!("life-context-vault-{name}-{nanos}.sqlite3"))
+  }
+
+  fn write_test_vault(path: &Path, vault: &Value) {
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent).expect("test vault directory");
+    }
+    let connection = vault_crypto::open_encrypted_vault_connection(path).expect("encrypted test vault");
+    ensure_vault_state_table(&connection).expect("vault_state table");
+    connection
+      .execute(
+        "INSERT INTO vault_state (key, payload, updated_at)
+         VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         ON CONFLICT(key) DO UPDATE SET
+           payload = excluded.payload,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        params![VAULT_STATE_KEY, vault.to_string()],
+      )
+      .expect("write test vault");
+  }
+
   #[test]
   fn sensitive_context_pack_is_queued_without_returning_items_directly() {
+    let path = test_vault_path("sensitive-context-pack");
     let mut vault = empty_vault();
     push_array(
       &mut vault,
@@ -868,12 +713,15 @@ mod tests {
         "sensitivity": "private_consequential",
         "confidence": "source_backed",
         "status": "active",
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "approvedAt": "2026-06-12T00:00:00.000Z",
         "updatedAt": "2026-06-12T00:00:00.000Z"
       }),
     );
+    write_test_vault(&path, &vault);
 
-    let result = request_context_pack(
-      &mut vault,
+    let result = request_context_pack_at_path(
+      &path,
       &json!({
         "taskText": "What should I check before changing jobs?",
         "clientName": "Claude Desktop"
@@ -883,8 +731,95 @@ mod tests {
 
     assert_eq!(result.get("status").and_then(Value::as_str), Some("pending_user_confirmation"));
     assert!(result.get("contextPack").is_none());
-    assert_eq!(array(&vault, "contextPackRequests").len(), 1);
-    assert_eq!(array(&vault, "contextPacks").len(), 1);
+    let saved = {
+      let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open saved vault");
+      ensure_vault_state_table(&connection).expect("vault_state table");
+      let payload: String = connection
+        .query_row(
+          "SELECT payload FROM vault_state WHERE key = ?1",
+          params![VAULT_STATE_KEY],
+          |row| row.get(0),
+        )
+        .expect("saved payload");
+      serde_json::from_str::<Value>(&payload).expect("saved json")
+    };
+    assert_eq!(array(&saved, "contextPackRequests").len(), 1);
+    assert_eq!(array(&saved, "contextPacks").len(), 1);
+    let _ = std::fs::remove_file(path);
+  }
+
+  #[test]
+  fn low_risk_context_pack_returns_core_pack_without_raw_source_body() {
+    let path = test_vault_path("low-risk-context-pack");
+    let mut vault = empty_vault();
+    push_array(
+      &mut vault,
+      "sources",
+      json!({
+        "id": "src_tone",
+        "kind": "manual_note",
+        "title": "Tone note",
+        "origin": "manual_entry",
+        "body": "RAW_SOURCE_BODY should stay local.",
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "capturedAt": "2026-06-12T00:00:00.000Z",
+        "defaultSensitivity": "personal",
+        "processingStatus": "ready",
+        "deletionState": "active"
+      }),
+    );
+    push_array(
+      &mut vault,
+      "facts",
+      json!({
+        "id": "fact_tone",
+        "factText": "Tone preference is concise and calm.",
+        "domain": "values_goals_and_preferences",
+        "factType": "preference",
+        "sourceIds": ["src_tone"],
+        "sensitivity": "personal",
+        "confidence": "source_backed",
+        "status": "active",
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "approvedAt": "2026-06-12T00:00:00.000Z",
+        "updatedAt": "2026-06-12T00:00:00.000Z"
+      }),
+    );
+    write_test_vault(&path, &vault);
+
+    let result = request_context_pack_at_path(
+      &path,
+      &json!({
+        "taskText": "Draft this message in my preferred tone.",
+        "clientName": "Claude Desktop",
+        "sensitivityCeiling": "personal"
+      }),
+    )
+    .expect("request context pack");
+
+    assert_eq!(result.get("status").and_then(Value::as_str), Some("fulfilled"));
+    let pack = result.get("contextPack").expect("returned pack");
+    assert_eq!(
+      pack.get("trustBoundary").and_then(Value::as_str),
+      Some("ContextPack only")
+    );
+    let snippets = pack
+      .get("sourceSnippets")
+      .and_then(Value::as_array)
+      .expect("source snippets");
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(
+      snippets[0].get("text").and_then(Value::as_str),
+      Some("Tone preference is concise and calm.")
+    );
+    assert!(
+      !snippets[0]
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .contains("RAW_SOURCE_BODY")
+    );
+    let _ = std::fs::remove_file(path);
   }
 
   #[test]

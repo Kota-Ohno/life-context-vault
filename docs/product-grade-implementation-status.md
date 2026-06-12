@@ -51,6 +51,7 @@ Last updated: 2026-06-12
 - Added Rust-owned Context Pack generation path for the Tauri Control Center:
   - `create_native_context_pack_request` creates the ContextPackRequest, ranks approved Facts from normalized SQLite, applies sensitivity ceilings, writes the short-lived Context Pack, and returns the updated Vault snapshot
   - Tauri Requests uses the native Vault Core path when available and keeps the existing browser-only JS path as fallback
+  - Local MCP `life_context.request_context_pack` now calls the same Vault Core path instead of maintaining a separate JSON-snapshot Pack builder
   - native generation includes source snippets only as approved Fact text, never Raw Source body text
   - native generation records policy-limited, sensitive-context, stale, low-confidence, and source-deleted warnings where applicable
 - Added SQLCipher-backed local database encryption:
@@ -152,6 +153,7 @@ Last updated: 2026-06-12
 - `npm run agent:build`
 - `npm run sidecars:prepare`
 - MCP sidecar smoke test for external `request_context_pack` persistence and `get_request_status` lookup against the same encrypted Vault
+- stdio MCP binary smoke test for shared-core `life_context.request_context_pack` returning a `ContextPack only` payload
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
@@ -162,6 +164,7 @@ Last updated: 2026-06-12
 - Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
+- MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
@@ -196,8 +199,8 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, and Tauri-native Context Pack generation are present, while most write-side CRUD and the local MCP sidecar still use the JSON snapshot projected into tables.
-- Context Pack Core: Tauri Requests now uses Rust-owned generation from normalized SQLite; local MCP sidecar still has its own JSON-snapshot implementation until the next shared-core extraction.
+- Technical design: normalized SQLite tables, native FTS search, and shared Rust-owned Context Pack generation are present, while most write-side CRUD still uses the JSON snapshot projected into tables.
+- Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
 - Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
@@ -265,7 +268,14 @@ Last updated: 2026-06-12
 - Security/privacy: native tests cover ApprovedFact-only inclusion, unapproved Candidate exclusion, Raw Source body exclusion from snippets, and sensitivity-ceiling exclusions.
 - Technical design: ranking now reads normalized SQLite facts and sources, then writes the request and pack back through the encrypted Vault save path so projection state remains current.
 - Review disposition: a DB-read error in source-deleted warning generation was initially swallowed; fixed to propagate the error instead of silently omitting the warning.
-- Remaining risk: the local MCP sidecar still has a separate JSON-snapshot Context Pack implementation; next shared-core work should remove that duplication.
+- Follow-up: local MCP should continue moving `propose_memory` and status helpers toward shared Vault Core CRUD, but Pack generation itself is now shared.
+
+### Shared MCP Context Pack Core Slice
+
+- Product fit: Claude Desktop-style local MCP requests now use the same Context Pack Engine as the Control Center, reducing surprise between in-app testing and everyday AI usage.
+- Security/privacy: sidecar tests cover both sensitive Pack queuing without returning items and low-risk Pack return without Raw Source body leakage.
+- Technical design: `create_context_pack_request_at_path` is the path-based Vault Core API used by both Tauri commands and the stdio MCP sidecar.
+- Review disposition: old sidecar-only ranking and Pack assembly helpers were removed after the shared path landed, leaving one generation source of truth for request_context_pack.
 
 ## Independent Review Passes
 
