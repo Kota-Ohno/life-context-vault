@@ -94,6 +94,7 @@ Remote clients should use OAuth discovery instead of the static token.
 - `GET /pairing/status`
 - `GET /agent/status`
 - `GET /relay/state`
+- `POST /relay/handoff`
 - `GET /agent/ws?...` for the local Agent WebSocket
 - `POST /mcp`
 - `OPTIONS /mcp`
@@ -101,6 +102,8 @@ Remote clients should use OAuth discovery instead of the static token.
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
 `GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires loopback access or `LCV_RELAY_ADMIN_TOKEN`.
+
+`POST /relay/handoff` stores a short-lived, memory-only MCP response for an already confirmed Context Pack. It requires loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 
 ## Relay State Store
 
@@ -118,6 +121,7 @@ Request metadata is pruned by both count and time:
 - OAuth client registrations remain durable by default.
 - `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS` can expire old OAuth client registrations when a hosted or shared relay needs stricter rotation.
 - `LCV_RELAY_STATE_BACKUP_COUNT` keeps compact metadata-only state backups next to the state file. Default is `3`; `0` disables backups.
+- `LCV_RELAY_HANDOFF_TTL_SECONDS` controls memory-only Context Pack handoff lifetime. Default is `600`.
 
 Tenant isolation is explicit:
 
@@ -140,6 +144,21 @@ If `LCV_RELAY_STATE_PATH` is not set, the relay stores this metadata at the plat
 - Windows: `%APPDATA%/dev.life-context-vault.poc/relay-state.json`
 - Linux: `$XDG_DATA_HOME/dev.life-context-vault.poc/relay-state.json` or `$HOME/.local/share/dev.life-context-vault.poc/relay-state.json`
 
+## Short-Lived Context Pack Handoff
+
+Hosted Remote MCP flows sometimes need the desktop Agent to complete approval after the relay has already accepted the external AI request. For that handoff, `lcv-relay` keeps a memory-only cache of confirmed MCP responses:
+
+- The endpoint is `POST /relay/handoff`.
+- The caller must be loopback or provide `LCV_RELAY_ADMIN_TOKEN`.
+- The body can be the MCP JSON-RPC response directly, or `{ "clientId": "...", "mcpResponse": { ... } }`.
+- The MCP response is accepted only when `structuredContent.status` is `fulfilled` and `structuredContent.contextPack.trustBoundary` is exactly `ContextPack only`.
+- The default TTL is 10 minutes.
+- `LCV_RELAY_HANDOFF_TTL_SECONDS` can override the TTL; `LCV_RELAY_HANDOFF_TTL_DAYS` is also accepted for deployment tests.
+- Handoff bodies are never written to the relay state store or backup files.
+- `/relay/state` exposes only handoff count, request id, client id, creation time, expiry time, and retention settings.
+
+When the Agent path is offline, `life_context.get_request_status` can return a still-valid handoff response from this cache. Live Agent/Vault reads remain canonical whenever a paired Agent is online.
+
 ## Safety Boundary
 
 - Default bind is `127.0.0.1:8765`.
@@ -153,6 +172,7 @@ If `LCV_RELAY_STATE_PATH` is not set, the relay stores this metadata at the plat
   - `life_context.get_request_status` -> `request.status`
 - The relay does not implement its own Vault reads. It forwards through `lcv-agent` to `lcv-mcp`, or through direct sidecar fallback only when explicitly allowed for local development.
 - The relay does not store Context Pack bodies or MCP request bodies.
+- Confirmed Context Pack handoff bodies are memory-only, TTL-bound, admin-gated, and excluded from relay state persistence and backups.
 - Sensitive Context Packs remain queued for first-party app confirmation.
 - Memory proposals remain unapproved `MemoryCandidate` records.
 
@@ -208,4 +228,3 @@ Remaining production work:
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
 - Hosted relay deployment-specific rotation runbooks and incident procedures for the same metadata-only state model.
-- Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.

@@ -105,6 +105,13 @@ Last updated: 2026-06-12
   - persisted relay state stores the tenant id and refuses to load if configured for a different tenant
   - legacy tenantless local relay state migrates to the configured tenant on load
   - `/health` and `/relay/state` expose tenant id as operational metadata without exposing Vault or Context Pack bodies
+- Added short-lived Relay Context Pack handoff cache:
+  - `POST /relay/handoff` accepts already confirmed MCP responses for approved Context Packs
+  - handoff responses are memory-only, TTL-bound, and default to 10 minutes
+  - the Relay accepts only fulfilled `ContextPack only` MCP responses
+  - `life_context.get_request_status` can return a cached handoff response when the local Agent path is temporarily offline
+  - `/relay/state` exposes only handoff metadata and retention settings, never Pack body text
+  - relay state persistence and metadata backups still exclude Context Pack bodies
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
 - Added app-managed AI Access Service in the Tauri Control Center:
   - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
@@ -230,7 +237,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, and backup controls.
+- Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, backup, and short-lived handoff controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - CI-hosted or scheduled retrieval performance tracking; local release qualification now has an explicit product check wrapper, while the 100k Fact / 500k SourceChunk benchmark remains opt-in because of dataset size.
@@ -254,6 +261,7 @@ Last updated: 2026-06-12
 - Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
 - Relay state backup tests proving metadata-only backup generations are rotated without storing Context Pack bodies
 - Relay tenant tests proving non-loopback binds require tenant id, mismatched tenant state is refused, and legacy tenantless metadata migrates to the configured tenant
+- Relay handoff tests proving only fulfilled `ContextPack only` responses are accepted, `/relay/state` omits Pack body text, and offline `get_request_status` can return a still-valid cached handoff
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
 - Background lifecycle unit tests proving window close hides to tray without stopping managed AI Access, while window destruction/quit still stops managed Relay and Agent
@@ -491,6 +499,15 @@ Last updated: 2026-06-12
 - Security/privacy: accepted; backups contain the same metadata-only state as the primary relay state file and still exclude MCP bodies, Raw Sources, Vault content, Context Pack bodies, access tokens, and authorization codes.
 - Durability: accepted; the previous state file is copied to `.bak1` before replacement, older backups rotate up to the configured generation count, and `LCV_RELAY_STATE_BACKUP_COUNT=0` can disable the behavior.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `npm run tauri:build`, and `git diff --check` passed.
+
+### Relay Handoff Slice
+
+- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate product, security/privacy, technical, and operations passes.
+- Product fit: accepted; a hosted Remote MCP request can now be fulfilled after local approval without asking the Relay to read or persist the Vault.
+- Security/privacy: accepted; handoff bodies are admin-gated, memory-only, TTL-bound, validated as fulfilled `ContextPack only` responses, and excluded from relay state persistence plus backups.
+- Technical design: accepted; Agent/Vault remains canonical when online, while offline `get_request_status` can use the cached response for the matching request id.
+- Operations: accepted; `/relay/state` exposes handoff count, request id, client id, creation time, expiry time, and TTL settings for debugging without exposing Pack body text.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay` passed.
 
 ### First-Run AI Access UX Slice
 

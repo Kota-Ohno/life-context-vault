@@ -31,6 +31,7 @@ const MAX_RELAY_REQUEST_EVENTS: usize = 500;
 const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_RELAY_STATE_BACKUP_COUNT: usize = 3;
 const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
+const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
@@ -135,6 +136,7 @@ struct RelayRetentionPolicy {
   request_event_retention_seconds: u64,
   client_registration_retention_seconds: Option<u64>,
   state_backup_count: usize,
+  handoff_ttl_seconds: u64,
 }
 
 impl RelayRetentionPolicy {
@@ -154,6 +156,11 @@ impl RelayRetentionPolicy {
         DEFAULT_RELAY_STATE_BACKUP_COUNT,
         MAX_RELAY_STATE_BACKUP_COUNT,
       ),
+      handoff_ttl_seconds: env_duration_seconds(
+        "LCV_RELAY_HANDOFF_TTL_SECONDS",
+        "LCV_RELAY_HANDOFF_TTL_DAYS",
+        DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
+      ),
     }
   }
 }
@@ -164,6 +171,7 @@ impl Default for RelayRetentionPolicy {
       request_event_retention_seconds: DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
       client_registration_retention_seconds: None,
       state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
+      handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
     }
   }
 }
@@ -279,6 +287,7 @@ struct RelayState {
 struct RelayStateInner {
   registered_clients: HashMap<String, RegisteredClient>,
   request_events: Vec<RelayRequestEvent>,
+  handoffs: HashMap<String, RelayHandoff>,
   auth_codes: HashMap<String, AuthCode>,
   access_tokens: HashMap<String, AccessToken>,
   pairing_sessions: HashMap<String, PairingSession>,
@@ -327,6 +336,15 @@ struct RelayRequestEvent {
   status: String,
   transport: String,
   occurred_at: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RelayHandoff {
+  request_id: String,
+  client_id: Option<String>,
+  body: Value,
+  created_at: SystemTime,
+  expires_at: SystemTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -384,6 +402,10 @@ fn prune_request_events(
   if request_events.len() > MAX_RELAY_REQUEST_EVENTS {
     request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
   }
+}
+
+fn prune_handoffs(handoffs: &mut HashMap<String, RelayHandoff>, now: SystemTime) {
+  handoffs.retain(|_, handoff| now <= handoff.expires_at);
 }
 
 fn normalize_persisted_relay_state_tenant(
@@ -518,6 +540,7 @@ impl RelayState {
       inner: Arc::new(Mutex::new(RelayStateInner {
         registered_clients,
         request_events: persisted.request_events,
+        handoffs: HashMap::new(),
         auth_codes: HashMap::new(),
         access_tokens: HashMap::new(),
         pairing_sessions: HashMap::new(),
@@ -600,9 +623,35 @@ impl RelayState {
     self.persist()
   }
 
+  fn store_handoff(
+    &self,
+    request_id: String,
+    client_id: Option<String>,
+    body: Value,
+  ) -> RelayHandoff {
+    let handoff = RelayHandoff {
+      request_id: request_id.clone(),
+      client_id,
+      body,
+      created_at: SystemTime::now(),
+      expires_at: seconds_from_now(self.retention.handoff_ttl_seconds),
+    };
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_handoffs(&mut inner.handoffs, SystemTime::now());
+    inner.handoffs.insert(request_id, handoff.clone());
+    handoff
+  }
+
+  fn handoff_response(&self, request_id: &str) -> Option<Value> {
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_handoffs(&mut inner.handoffs, SystemTime::now());
+    inner.handoffs.get(request_id).map(|handoff| handoff.body.clone())
+  }
+
   fn store_status(&self) -> Value {
     let mut inner = self.inner.lock().expect("relay state");
     let now_seconds = system_time_seconds(SystemTime::now());
+    prune_handoffs(&mut inner.handoffs, SystemTime::now());
     prune_request_events(
       &mut inner.request_events,
       self.retention.request_event_retention_seconds,
@@ -632,18 +681,34 @@ impl RelayState {
         })
       })
       .collect();
+    let recent_handoffs: Vec<Value> = inner
+      .handoffs
+      .values()
+      .take(20)
+      .map(|handoff| {
+        json!({
+          "requestId": handoff.request_id,
+          "clientId": handoff.client_id,
+          "createdAt": system_time_seconds(handoff.created_at),
+          "expiresAt": system_time_seconds(handoff.expires_at)
+        })
+      })
+      .collect();
     json!({
       "tenantId": self.tenant_id,
       "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
       "registeredClientCount": inner.registered_clients.len(),
       "requestEventCount": inner.request_events.len(),
+      "handoffCount": inner.handoffs.len(),
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
         "stateBackupCount": self.retention.state_backup_count,
+        "handoffTtlSeconds": self.retention.handoff_ttl_seconds,
         "maxRequestEvents": MAX_RELAY_REQUEST_EVENTS
       },
-      "recentRequestEvents": recent_events
+      "recentRequestEvents": recent_events,
+      "recentHandoffs": recent_handoffs
     })
   }
 
@@ -868,6 +933,8 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/pairing/status") => pairing_status(request, state),
     ("GET", "/agent/status") => json_response(200, state.agent_status()),
     ("GET", "/relay/state") => relay_state_status(request, config, state),
+    ("OPTIONS", "/relay/handoff") => HttpResponse::empty(204).with_cors(),
+    ("POST", "/relay/handoff") => relay_handoff(request, config, state),
     ("OPTIONS", "/mcp") => HttpResponse::empty(204).with_cors(),
     ("POST", "/mcp") => handle_mcp_request(request, config, state),
     _ => json_response(404, json!({
@@ -950,6 +1017,50 @@ fn relay_state_status(request: &HttpRequest, config: &RelayConfig, state: &Relay
     .with_header("WWW-Authenticate", "Bearer");
   }
   json_response(200, state.store_status())
+}
+
+fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  if !admin_authorized(request, config) {
+    return json_response(401, json!({
+      "error": "unauthorized",
+      "message": "Relay handoff requires loopback access or LCV_RELAY_ADMIN_TOKEN."
+    }))
+    .with_header("WWW-Authenticate", "Bearer");
+  }
+  let body = match serde_json::from_str::<Value>(&request.body) {
+    Ok(value) => value,
+    Err(error) => {
+      return json_response(400, json!({
+        "error": "invalid_json",
+        "message": format!("handoff body must be JSON: {error}")
+      }));
+    }
+  };
+  let mcp_response = body
+    .get("mcpResponse")
+    .cloned()
+    .unwrap_or_else(|| body.clone());
+  let request_id = match validate_handoff_mcp_response(&mcp_response) {
+    Ok(request_id) => request_id,
+    Err(error) => {
+      return json_response(400, json!({
+        "error": "invalid_handoff",
+        "message": error
+      }));
+    }
+  };
+  let client_id = body
+    .get("clientId")
+    .and_then(Value::as_str)
+    .filter(|value| !value.trim().is_empty())
+    .map(str::to_string);
+  let handoff = state.store_handoff(request_id.clone(), client_id, mcp_response);
+  json_response(200, json!({
+    "status": "stored",
+    "requestId": request_id,
+    "expiresAt": system_time_seconds(handoff.expires_at),
+    "ttlSeconds": state.retention.handoff_ttl_seconds
+  }))
 }
 
 fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
@@ -1205,6 +1316,18 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     }
     Err(agent_error) => {
       if !config.allow_direct_sidecar {
+        if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body) {
+          record_relay_event(
+            state,
+            Some(client_id),
+            required_scope,
+            &method,
+            tool_name.as_deref(),
+            "fulfilled_handoff_cache",
+            "relay_handoff_cache",
+          );
+          return HttpResponse::json(200, handoff_body).with_cors();
+        }
         record_relay_event(
           state,
           Some(client_id),
@@ -1253,6 +1376,18 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       HttpResponse::empty(202).with_cors()
     }
     Err(error) => {
+      if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body) {
+        record_relay_event(
+          state,
+          Some(client_id),
+          required_scope,
+          &method,
+          tool_name.as_deref(),
+          "fulfilled_handoff_cache",
+          "relay_handoff_cache",
+        );
+        return HttpResponse::json(200, handoff_body).with_cors();
+      }
       record_relay_event(
         state,
         Some(client_id),
@@ -1305,6 +1440,52 @@ fn mcp_request_summary(body: &str) -> (String, Option<String>) {
     .and_then(Value::as_str)
     .map(str::to_string);
   (method, tool_name)
+}
+
+fn request_status_request_id_from_mcp_body(body: &str) -> Option<String> {
+  let value = serde_json::from_str::<Value>(body).ok()?;
+  if value.get("method").and_then(Value::as_str) != Some("tools/call") {
+    return None;
+  }
+  let params = value.get("params")?;
+  if params.get("name").and_then(Value::as_str) != Some("life_context.get_request_status") {
+    return None;
+  }
+  params
+    .get("arguments")
+    .and_then(|arguments| arguments.get("requestId"))
+    .and_then(Value::as_str)
+    .filter(|request_id| !request_id.trim().is_empty())
+    .map(str::to_string)
+}
+
+fn handoff_response_for_mcp_request(state: &RelayState, body: &str) -> Option<Value> {
+  let request_id = request_status_request_id_from_mcp_body(body)?;
+  state.handoff_response(&request_id)
+}
+
+fn validate_handoff_mcp_response(response: &Value) -> Result<String, String> {
+  let structured = response
+    .get("result")
+    .and_then(|result| result.get("structuredContent"))
+    .or_else(|| response.get("structuredContent"))
+    .ok_or_else(|| "handoff must contain MCP structuredContent".to_string())?;
+  if structured.get("status").and_then(Value::as_str) != Some("fulfilled") {
+    return Err("handoff structuredContent must be fulfilled".to_string());
+  }
+  let request_id = structured
+    .get("requestId")
+    .and_then(Value::as_str)
+    .filter(|request_id| !request_id.trim().is_empty())
+    .ok_or_else(|| "handoff structuredContent must include requestId".to_string())?;
+  let trust_boundary = structured
+    .get("contextPack")
+    .and_then(|context_pack| context_pack.get("trustBoundary"))
+    .and_then(Value::as_str);
+  if trust_boundary != Some("ContextPack only") {
+    return Err("handoff contextPack must declare trustBoundary: ContextPack only".to_string());
+  }
+  Ok(request_id.to_string())
 }
 
 fn record_relay_event(
@@ -1916,6 +2097,129 @@ mod tests {
     let _ = fs::remove_dir_all(dir);
   }
 
+  fn test_handoff_response(request_id: &str) -> Value {
+    json!({
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "content": [{
+          "type": "text",
+          "text": "The Context Pack has been confirmed and can be used for this answer."
+        }],
+        "structuredContent": {
+          "mutated": false,
+          "status": "fulfilled",
+          "requestId": request_id,
+          "contextPack": {
+            "trustBoundary": "ContextPack only",
+            "id": "pack_handoff",
+            "requestId": request_id,
+            "items": [{
+              "factId": "fact_1",
+              "itemText": "Approved handoff context"
+            }],
+            "sourceSnippets": [],
+            "warnings": [],
+            "excludedItems": [],
+            "maxSensitivityIncluded": "personal",
+            "confirmationStatus": "confirmed"
+          },
+          "message": "The Context Pack has been confirmed and can be used for this answer."
+        },
+        "isError": false
+      }
+    })
+  }
+
+  #[test]
+  fn relay_handoff_accepts_only_context_pack_only_responses() {
+    let state = RelayState::new();
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/relay/handoff".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: json!({
+        "clientId": "client_chatgpt",
+        "mcpResponse": test_handoff_response("req_handoff")
+      })
+      .to_string(),
+    };
+    let response = relay_handoff(&request, &test_config(), &state);
+    assert_eq!(response.status, 200);
+    let body: Value = serde_json::from_slice(&response.body).expect("handoff response");
+    assert_eq!(body.get("status").and_then(Value::as_str), Some("stored"));
+    assert_eq!(body.get("requestId").and_then(Value::as_str), Some("req_handoff"));
+
+    let status = state.store_status();
+    assert_eq!(status.get("handoffCount").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+      status
+        .get("retention")
+        .and_then(|retention| retention.get("handoffTtlSeconds"))
+        .and_then(Value::as_u64),
+      Some(DEFAULT_RELAY_HANDOFF_TTL_SECONDS)
+    );
+    let status_text = status.to_string();
+    assert!(status_text.contains("req_handoff"));
+    assert!(!status_text.contains("Approved handoff context"));
+
+    let invalid_request = HttpRequest {
+      body: json!({
+        "structuredContent": {
+          "status": "fulfilled",
+          "requestId": "req_bad",
+          "contextPack": {
+            "trustBoundary": "Raw Vault"
+          }
+        }
+      })
+      .to_string(),
+      ..request
+    };
+    let invalid_response = relay_handoff(&invalid_request, &test_config(), &state);
+    assert_eq!(invalid_response.status, 400);
+  }
+
+  #[test]
+  fn relay_handoff_returns_cached_status_when_agent_offline() {
+    let state = RelayState::new();
+    state.store_handoff(
+      "req_cached".to_string(),
+      Some("client_chatgpt".to_string()),
+      test_handoff_response("req_cached"),
+    );
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![("Authorization".to_string(), "Bearer test-token".to_string())],
+      body: r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"life_context.get_request_status","arguments":{"requestId":"req_cached"}}}"#.to_string(),
+    };
+    let response = handle_mcp_request(
+      &request,
+      &RelayConfig {
+        allow_direct_sidecar: false,
+        ..test_config()
+      },
+      &state,
+    );
+    assert_eq!(response.status, 200);
+    let body_text = String::from_utf8(response.body).expect("cached body");
+    assert!(body_text.contains("Approved handoff context"));
+
+    let status = state.store_status();
+    assert_eq!(
+      status
+        .get("recentRequestEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("status"))
+        .and_then(Value::as_str),
+      Some("fulfilled_handoff_cache")
+    );
+  }
+
   #[test]
   fn relay_state_persist_rotates_metadata_backups() {
     let dir = env::temp_dir().join(format!(
@@ -1933,6 +2237,7 @@ mod tests {
         request_event_retention_seconds: DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
         client_registration_retention_seconds: None,
         state_backup_count: 2,
+        handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     )
@@ -2046,6 +2351,7 @@ mod tests {
         request_event_retention_seconds: u64::MAX,
         client_registration_retention_seconds: None,
         state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
+        handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
       },
       "tenant-migrated".to_string(),
     )
@@ -2106,6 +2412,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
         state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
+        handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
@@ -2157,6 +2464,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
         state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
+        handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
@@ -2169,6 +2477,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: Some(60),
         state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
+        handoff_ttl_seconds: DEFAULT_RELAY_HANDOFF_TTL_SECONDS,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
