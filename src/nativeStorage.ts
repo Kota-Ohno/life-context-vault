@@ -105,6 +105,16 @@ export interface BrowserCaptureHostInstallResult {
   alreadyConfigured: boolean;
 }
 
+export interface LoginItemStatus {
+  supported: boolean;
+  enabled: boolean;
+  plistPath: string | null;
+  programPath: string | null;
+  label: string;
+  backupPath: string | null;
+  lastError: string | null;
+}
+
 export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -143,4 +153,22 @@ export async function installChromeCaptureHostManifest(
   return invoke<BrowserCaptureHostInstallResult>("install_chrome_capture_host_manifest", {
     extensionId
   });
+}
+
+export async function getLoginItemStatus(): Promise<LoginItemStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LoginItemStatus>("login_item_status");
+}
+
+export async function installLoginItem(): Promise<LoginItemStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LoginItemStatus>("install_login_item");
+}
+
+export async function uninstallLoginItem(): Promise<LoginItemStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LoginItemStatus>("uninstall_login_item");
 }

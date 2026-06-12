@@ -23,6 +23,7 @@ const VAULT_STATE_KEY: &str = "vault_state";
 const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
 const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
 const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
+const LOGIN_ITEM_LABEL: &str = "dev.life-context-vault.ai-access";
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
@@ -93,6 +94,18 @@ struct BrowserCaptureHostInstallResult {
   host_path: String,
   extension_id: String,
   already_configured: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginItemStatus {
+  supported: bool,
+  enabled: bool,
+  plist_path: Option<String>,
+  program_path: Option<String>,
+  label: String,
+  backup_path: Option<String>,
+  last_error: Option<String>,
 }
 
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -997,6 +1010,138 @@ fn capture_host_manifest_for_paths(extension_id: &str, host_path: PathBuf) -> Va
   })
 }
 
+fn xml_escape(value: &str) -> String {
+  value
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;")
+    .replace('"', "&quot;")
+    .replace('\'', "&apos;")
+}
+
+fn login_item_plist_for_path(label: &str, program_path: &PathBuf) -> String {
+  let label = xml_escape(label);
+  let program_path = xml_escape(&program_path.display().to_string());
+  format!(
+    r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{program_path}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>
+"#
+  )
+}
+
+fn login_item_plist_path() -> Result<PathBuf, String> {
+  #[cfg(target_os = "macos")]
+  {
+    let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    return Ok(PathBuf::from(home)
+      .join("Library")
+      .join("LaunchAgents")
+      .join(format!("{LOGIN_ITEM_LABEL}.plist")));
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    Err("Login item installation is currently implemented for macOS only.".to_string())
+  }
+}
+
+fn current_executable_path() -> Result<PathBuf, String> {
+  env::current_exe()
+    .map_err(|error| format!("failed to resolve current app executable: {error}"))
+}
+
+fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatus {
+  #[cfg(target_os = "macos")]
+  {
+    let plist_path = match login_item_plist_path() {
+      Ok(path) => path,
+      Err(error) => {
+        return LoginItemStatus {
+          supported: false,
+          enabled: false,
+          plist_path: None,
+          program_path: None,
+          label: LOGIN_ITEM_LABEL.to_string(),
+          backup_path: backup_path.map(|path| path.display().to_string()),
+          last_error: Some(error),
+        };
+      }
+    };
+    let program_path = match current_executable_path() {
+      Ok(path) => path,
+      Err(error) => {
+        return LoginItemStatus {
+          supported: true,
+          enabled: plist_path.exists(),
+          plist_path: Some(plist_path.display().to_string()),
+          program_path: None,
+          label: LOGIN_ITEM_LABEL.to_string(),
+          backup_path: backup_path.map(|path| path.display().to_string()),
+          last_error: Some(error),
+        };
+      }
+    };
+    let mut last_error = None;
+    let enabled = plist_path.exists();
+    if enabled {
+      match fs::read_to_string(&plist_path) {
+        Ok(raw) => {
+          let expected_program = xml_escape(&program_path.display().to_string());
+          if !raw.contains(LOGIN_ITEM_LABEL) || !raw.contains(&expected_program) {
+            last_error = Some(
+              "Login item exists but points to a different app build; reinstall to update it."
+                .to_string(),
+            );
+          }
+        }
+        Err(error) => {
+          last_error = Some(format!("failed to inspect login item plist: {error}"));
+        }
+      }
+    }
+    return LoginItemStatus {
+      supported: true,
+      enabled,
+      plist_path: Some(plist_path.display().to_string()),
+      program_path: Some(program_path.display().to_string()),
+      label: LOGIN_ITEM_LABEL.to_string(),
+      backup_path: backup_path.map(|path| path.display().to_string()),
+      last_error,
+    };
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    LoginItemStatus {
+      supported: false,
+      enabled: false,
+      plist_path: None,
+      program_path: current_executable_path()
+        .ok()
+        .map(|path| path.display().to_string()),
+      label: LOGIN_ITEM_LABEL.to_string(),
+      backup_path: backup_path.map(|path| path.display().to_string()),
+      last_error: Some(
+        "Login item installation is currently implemented for macOS only.".to_string(),
+      ),
+    }
+  }
+}
+
 #[tauri::command]
 fn install_chrome_capture_host_manifest(
   extension_id: String,
@@ -1065,6 +1210,60 @@ fn install_chrome_capture_host_manifest(
     extension_id,
     already_configured: false,
   })
+}
+
+#[tauri::command]
+fn login_item_status() -> Result<LoginItemStatus, String> {
+  Ok(login_item_status_with_backup(None))
+}
+
+#[tauri::command]
+fn install_login_item() -> Result<LoginItemStatus, String> {
+  let plist_path = login_item_plist_path()?;
+  let program_path = current_executable_path()?;
+  let plist = login_item_plist_for_path(LOGIN_ITEM_LABEL, &program_path);
+
+  if plist_path.exists() {
+    let existing = fs::read_to_string(&plist_path)
+      .map_err(|error| format!("failed to read login item plist: {error}"))?;
+    if existing == plist {
+      return Ok(login_item_status_with_backup(None));
+    }
+  }
+
+  if let Some(parent) = plist_path.parent() {
+    fs::create_dir_all(parent)
+      .map_err(|error| format!("failed to create LaunchAgents directory: {error}"))?;
+  }
+
+  let backup_path = if plist_path.exists() {
+    let backup = plist_path.with_file_name(format!(
+      "{LOGIN_ITEM_LABEL}.lcv-backup-{}.plist",
+      system_time_seconds(SystemTime::now())
+    ));
+    fs::copy(&plist_path, &backup)
+      .map_err(|error| format!("failed to back up login item plist: {error}"))?;
+    Some(backup)
+  } else {
+    None
+  };
+
+  let temp_path = plist_path.with_file_name(format!("{LOGIN_ITEM_LABEL}.plist.lcv.tmp"));
+  fs::write(&temp_path, plist)
+    .map_err(|error| format!("failed to write login item temp file: {error}"))?;
+  fs::rename(&temp_path, &plist_path)
+    .map_err(|error| format!("failed to install login item plist: {error}"))?;
+  Ok(login_item_status_with_backup(backup_path))
+}
+
+#[tauri::command]
+fn uninstall_login_item() -> Result<LoginItemStatus, String> {
+  let plist_path = login_item_plist_path()?;
+  if plist_path.exists() {
+    fs::remove_file(&plist_path)
+      .map_err(|error| format!("failed to remove login item plist: {error}"))?;
+  }
+  Ok(login_item_status_with_backup(None))
 }
 
 #[tauri::command]
@@ -1287,7 +1486,10 @@ pub fn run() {
       stop_ai_access_services,
       install_claude_desktop_config,
       claude_desktop_config_template,
-      install_chrome_capture_host_manifest
+      install_chrome_capture_host_manifest,
+      login_item_status,
+      install_login_item,
+      uninstall_login_item
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -1565,5 +1767,35 @@ mod tests {
       .and_then(Value::as_str)
       .unwrap_or_default()
       .ends_with("lcv-capture-host"));
+  }
+
+  #[test]
+  fn login_item_plist_runs_only_the_current_app_binary() {
+    let plist = login_item_plist_for_path(
+      LOGIN_ITEM_LABEL,
+      &PathBuf::from("/Applications/Life Context Vault.app/Contents/MacOS/life-context-vault"),
+    );
+
+    assert!(plist.contains(LOGIN_ITEM_LABEL));
+    assert!(plist.contains("<key>ProgramArguments</key>"));
+    assert!(plist.contains(
+      "/Applications/Life Context Vault.app/Contents/MacOS/life-context-vault"
+    ));
+    assert!(plist.contains("<key>RunAtLoad</key>"));
+    assert!(plist.contains("<true/>"));
+    assert!(plist.contains("<key>KeepAlive</key>"));
+    assert!(plist.contains("<false/>"));
+    assert!(!plist.contains("LCV_VAULT_DB_KEY"));
+    assert!(!plist.contains("ContextPack"));
+  }
+
+  #[test]
+  fn login_item_plist_escapes_xml_values() {
+    let plist = login_item_plist_for_path(
+      "dev.life-context-vault.ai-access",
+      &PathBuf::from("/Applications/Life & Context <Vault>.app/Contents/MacOS/life-context-vault"),
+    );
+
+    assert!(plist.contains("Life &amp; Context &lt;Vault&gt;.app"));
   }
 }

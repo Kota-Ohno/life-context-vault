@@ -32,16 +32,25 @@ import {
   AiAccessServiceStatus,
   BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
+  LoginItemStatus,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
+  getLoginItemStatus,
   getNativeVaultPath,
   installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
+  installLoginItem,
   loadNativeVaultSnapshot,
   saveNativeVault,
   startAiAccessServices,
-  stopAiAccessServices
+  stopAiAccessServices,
+  uninstallLoginItem
 } from "./nativeStorage";
+import {
+  RuntimePreferences,
+  loadRuntimePreferences,
+  saveRuntimePreferences
+} from "./runtimePreferences";
 import {
   addSourceWithCandidates,
   addPassiveCaptureEvent,
@@ -169,16 +178,26 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
+  const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(() =>
+    loadRuntimePreferences()
+  );
+  const [loginItemStatus, setLoginItemStatus] = useState<LoginItemStatus | null>(null);
+  const [loginItemBusy, setLoginItemBusy] = useState(false);
   const [nativeRevision, setNativeRevision] = useState<string | null>(null);
   const [claudeInstallBusy, setClaudeInstallBusy] = useState(false);
   const [claudeInstallResult, setClaudeInstallResult] =
     useState<ClaudeDesktopConfigInstallResult | null>(null);
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
+  const autoStartAttemptedRef = useRef(false);
 
   useEffect(() => {
     nativeRevisionRef.current = nativeRevision;
   }, [nativeRevision]);
+
+  useEffect(() => {
+    saveRuntimePreferences(runtimePreferences);
+  }, [runtimePreferences]);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,6 +225,75 @@ export function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    let cancelled = false;
+    async function refreshLoginStatus() {
+      try {
+        const status = await getLoginItemStatus();
+        if (!cancelled) setLoginItemStatus(status);
+      } catch (error) {
+        if (!cancelled) {
+          setLoginItemStatus((current) =>
+            current
+              ? {
+                  ...current,
+                  lastError: error instanceof Error ? error.message : "Login item status failed"
+                }
+              : current
+          );
+        }
+      }
+    }
+    void refreshLoginStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (
+      !storageReady ||
+      !nativePath ||
+      !runtimePreferences.autoStartAiAccess ||
+      autoStartAttemptedRef.current
+    ) {
+      return;
+    }
+    autoStartAttemptedRef.current = true;
+    let cancelled = false;
+    async function autoStartAiAccess() {
+      try {
+        const current = await getAiAccessServiceStatus();
+        if (cancelled) return;
+        if (current?.agentConnected) {
+          setAiServiceStatus(current);
+          return;
+        }
+        setAiServiceBusy(true);
+        const status = await startAiAccessServices();
+        if (cancelled) return;
+        setAiServiceStatus(status);
+        setNotice(
+          status?.agentConnected
+            ? "設定に従ってAI Access Serviceを自動起動しました。"
+            : "AI Access Serviceの自動起動を開始しました。"
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setNotice(error instanceof Error ? error.message : "AI Access Serviceの自動起動に失敗しました。");
+          void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+        }
+      } finally {
+        if (!cancelled) setAiServiceBusy(false);
+      }
+    }
+    void autoStartAiAccess();
+    return () => {
+      cancelled = true;
+    };
+  }, [nativePath, runtimePreferences.autoStartAiAccess, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -578,6 +666,59 @@ export function App() {
     }
   }
 
+  function updateRuntimePreference(next: Partial<RuntimePreferences>) {
+    setRuntimePreferences((current) => {
+      const updated = {
+        ...current,
+        ...next
+      };
+      saveRuntimePreferences(updated);
+      return updated;
+    });
+  }
+
+  async function refreshLoginItem() {
+    try {
+      const status = await getLoginItemStatus();
+      setLoginItemStatus(status);
+      setNotice(status ? "Login Itemの状態を更新しました。" : "Desktop appでのみLogin Itemを管理できます。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Login Itemの状態確認に失敗しました。");
+    }
+  }
+
+  async function enableLoginItem() {
+    setLoginItemBusy(true);
+    try {
+      const status = await installLoginItem();
+      setLoginItemStatus(status);
+      setNotice(
+        status?.enabled
+          ? "ログイン時にLife Context Vaultが起動するようにしました。"
+          : "Login Itemを有効にできませんでした。"
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Login Itemの有効化に失敗しました。");
+      void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
+    } finally {
+      setLoginItemBusy(false);
+    }
+  }
+
+  async function disableLoginItem() {
+    setLoginItemBusy(true);
+    try {
+      const status = await uninstallLoginItem();
+      setLoginItemStatus(status);
+      setNotice("Login Itemを無効にしました。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Login Itemの無効化に失敗しました。");
+      void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
+    } finally {
+      setLoginItemBusy(false);
+    }
+  }
+
   async function installClaudeConfig() {
     setClaudeInstallBusy(true);
     setClaudeInstallResult(null);
@@ -732,12 +873,19 @@ export function App() {
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
+            runtimePreferences={runtimePreferences}
+            updateRuntimePreference={updateRuntimePreference}
+            loginItemStatus={loginItemStatus}
+            loginItemBusy={loginItemBusy}
             claudeInstallBusy={claudeInstallBusy}
             claudeInstallResult={claudeInstallResult}
             claudeConfig={claudeConfig}
             startAiAccess={startAiAccess}
             stopAiAccess={stopAiAccess}
             refreshAiAccess={refreshAiAccess}
+            refreshLoginItem={refreshLoginItem}
+            enableLoginItem={enableLoginItem}
+            disableLoginItem={disableLoginItem}
             installClaudeConfig={installClaudeConfig}
             copyText={copyText}
             captureClient={captureClient}
@@ -1246,12 +1394,19 @@ function ConnectionsView({
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
+  runtimePreferences,
+  updateRuntimePreference,
+  loginItemStatus,
+  loginItemBusy,
   claudeInstallBusy,
   claudeInstallResult,
   claudeConfig,
   startAiAccess,
   stopAiAccess,
   refreshAiAccess,
+  refreshLoginItem,
+  enableLoginItem,
+  disableLoginItem,
   installClaudeConfig,
   copyText,
   captureClient,
@@ -1277,12 +1432,19 @@ function ConnectionsView({
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
+  runtimePreferences: RuntimePreferences;
+  updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
+  loginItemStatus: LoginItemStatus | null;
+  loginItemBusy: boolean;
   claudeInstallBusy: boolean;
   claudeInstallResult: ClaudeDesktopConfigInstallResult | null;
   claudeConfig: string;
   startAiAccess: () => void;
   stopAiAccess: () => void;
   refreshAiAccess: () => void;
+  refreshLoginItem: () => void;
+  enableLoginItem: () => void;
+  disableLoginItem: () => void;
   installClaudeConfig: () => void;
   copyText: (value: string, message: string) => void;
   captureClient: ConnectorKind;
@@ -1407,6 +1569,81 @@ function ConnectionsView({
               <PauseCircle size={16} />
               Stop managed
             </button>
+          </div>
+          <div className="automation-grid">
+            <div className="automation-card">
+              <div className="automation-card-heading">
+                <div>
+                  <strong>ログイン時にアプリを起動</strong>
+                  <p>再起動後もControl Centerが立ち上がり、AI Accessを戻せる状態にします。</p>
+                </div>
+                <Badge>
+                  {loginItemStatus?.supported === false
+                    ? "unsupported"
+                    : loginItemStatus?.enabled
+                      ? "enabled"
+                      : "off"}
+                </Badge>
+              </div>
+              <div className="service-actions">
+                <button
+                  className="primary-button"
+                  disabled={!nativePath || loginItemBusy || loginItemStatus?.supported === false}
+                  onClick={enableLoginItem}
+                  type="button"
+                >
+                  <PlayCircle size={16} />
+                  Enable login
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={!nativePath || loginItemBusy || !loginItemStatus?.enabled}
+                  onClick={disableLoginItem}
+                  type="button"
+                >
+                  <PauseCircle size={16} />
+                  Disable
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={!nativePath || loginItemBusy}
+                  onClick={refreshLoginItem}
+                  type="button"
+                >
+                  <RefreshCw size={16} />
+                  Check
+                </button>
+              </div>
+              {loginItemStatus?.plistPath && <span>{loginItemStatus.plistPath}</span>}
+              {loginItemStatus?.backupPath && <span>Backup: {loginItemStatus.backupPath}</span>}
+              {loginItemStatus?.lastError && <span>{loginItemStatus.lastError}</span>}
+            </div>
+            <div className="automation-card">
+              <div className="automation-card-heading">
+                <div>
+                  <strong>起動時にAI Accessを自動開始</strong>
+                  <p>アプリが開いたらRelayとAgentを起動します。Context Packの承認は引き続き手元で行います。</p>
+                </div>
+                <Badge>{runtimePreferences.autoStartAiAccess ? "on" : "off"}</Badge>
+              </div>
+              <button
+                className={runtimePreferences.autoStartAiAccess ? "danger-button" : "primary-button"}
+                onClick={() =>
+                  updateRuntimePreference({
+                    autoStartAiAccess: !runtimePreferences.autoStartAiAccess
+                  })
+                }
+                type="button"
+              >
+                {runtimePreferences.autoStartAiAccess ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
+                {runtimePreferences.autoStartAiAccess ? "Turn off" : "Turn on"}
+              </button>
+              <span>
+                {runtimePreferences.autoStartAiAccess
+                  ? "次回起動時にAI Accessを自動で戻します。"
+                  : "必要なときだけ手動でStartします。"}
+              </span>
+            </div>
           </div>
           {aiServiceStatus?.lastError && <p className="warning-text">{aiServiceStatus.lastError}</p>}
           {!nativePath && <p className="muted">Desktop appで起動すると、ここからRelayとAgentを管理できます。</p>}

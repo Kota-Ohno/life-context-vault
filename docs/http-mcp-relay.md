@@ -34,6 +34,8 @@ If another relay is already running on the same port, the app treats it as exter
 
 Closing the app window also stops app-managed Relay and Agent processes.
 
+For day-to-day use, the same **Connections** screen can install a macOS LaunchAgent login item and toggle **起動時にAI Accessを自動開始**. The login item only starts the app binary at user login; Relay and Agent still start from the local app process, and external AI still receives Context Packs only after the normal local approval path.
+
 ## Run Locally
 
 ```bash
@@ -186,6 +188,6 @@ Remaining production work:
 
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
-- OS login item / background service integration for automatic Agent launch after reboot.
+- Windows/Linux startup helpers and a true headless/menu-bar background mode.
 - Hosted relay storage operations, rotation, and tenant isolation for the same metadata-only state model.
 - Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.

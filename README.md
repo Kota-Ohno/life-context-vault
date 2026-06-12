@@ -95,6 +95,8 @@ Then open **Connections** and copy the relay, pairing, and local Agent commands.
 
 In the Tauri desktop app, open **Connections** and use **Start AI Access** to launch the bundled Relay and Agent. The manual relay, pairing, and Agent commands remain as a fallback.
 
+For day-to-day use, **Connections** also includes operations controls to launch the app at macOS login and to auto-start AI Access when the app opens. This keeps the Agent available after reboot while preserving the same Context Pack confirmation boundary.
+
 The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, persists OAuth client registrations plus request metadata only, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
 
 ## Run Browser Capture Extension

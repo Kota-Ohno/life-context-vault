@@ -672,6 +672,55 @@ button:focus-visible {
   gap: 8px;
 }
 
+.automation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.automation-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.automation-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.automation-card-heading div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.automation-card strong,
+.automation-card p,
+.automation-card span {
+  overflow-wrap: anywhere;
+}
+
+.automation-card p {
+  margin: 0;
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.automation-card span {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .warning-text {
   margin: 0;
   color: #8b2f1d;
@@ -1082,6 +1131,7 @@ button:focus-visible {
   .policy-grid,
   .readiness-panel,
   .service-status-grid,
+  .automation-grid,
   .setup-grid,
   .setup-grid.remote-relay-setup,
   .search-controls {
@@ -1097,6 +1147,7 @@ button:focus-visible {
   .topbar,
   .topbar-actions,
   .panel-heading,
+  .automation-card-heading,
   .fact-row,
   .table-row,
   .connection-row,

@@ -80,6 +80,11 @@ Last updated: 2026-06-12
   - `Stop managed` only stops processes started by the app
   - closing the app window also stops app-managed Relay and Agent processes
   - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
+- Added always-available AI Access operations:
+  - Connections can install/remove a macOS LaunchAgent login item for Life Context Vault
+  - the login item starts only the app binary and does not persist Vault, MCP, or Context Pack bodies
+  - a separate local runtime preference can auto-start Relay and Agent when the app opens
+  - the UI makes login launch and AI Access auto-start distinct from Context Pack approval
 - Added first-run AI access launchpad UX:
   - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
@@ -116,7 +121,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- OS login item / background service integration for automatic Agent launch after reboot.
+- Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
@@ -137,6 +142,7 @@ Last updated: 2026-06-12
 - `npm run sidecars:prepare`
 - MCP sidecar smoke test for external `request_context_pack` persistence and `get_request_status` lookup against the same encrypted Vault
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
+- macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
 - Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
@@ -155,6 +161,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
   - desktop `1280x720`: Browser Capture host installer card accepts an extension id without page-level horizontal overflow
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
+  - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
+  - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Home first-run launchpad and Connections readiness panel have no page-level horizontal overflow
   - mobile `390x844`: Home first-run launchpad and Connections readiness panel stack to one column without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow
