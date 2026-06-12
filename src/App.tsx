@@ -142,6 +142,7 @@ import {
   FactMetadataUpdate,
   LifeContextDomain,
   MemoryCandidate,
+  PassiveCaptureEvent,
   PassiveCaptureSettings,
   SensitivityTier,
   SourceBodyUpdate,
@@ -177,6 +178,20 @@ type UploadFeedback = {
   tone: "ready" | "attention";
   title: string;
   body: string;
+};
+
+type RestorePreview = {
+  generatedAt: string;
+  counts: {
+    sources: number;
+    candidates: number;
+    facts: number;
+    requests: number;
+    packs: number;
+    captureEvents: number;
+  };
+  sensitivitySummary: string;
+  newestSourceAt?: string;
 };
 
 const domainOptions: Array<LifeContextDomain | "all"> = [
@@ -260,6 +275,9 @@ export function App() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupText, setBackupText] = useState("");
+  const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(null);
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
+  const [clearConfirmText, setClearConfirmText] = useState("");
   const [notice, setNotice] = useState("");
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
@@ -438,6 +456,11 @@ export function App() {
     if (!storageReady) return;
     setState((current) => purgeExpiredPassiveCaptures(current));
   }, [storageReady]);
+
+  useEffect(() => {
+    setRestorePreview(null);
+    setRestoreConfirmText("");
+  }, [backupPassphrase, backupText]);
 
   useEffect(() => {
     if (!storageReady || !nativePath) return;
@@ -824,6 +847,60 @@ export function App() {
       updateSourceLifecycle(state, sourceId, action),
       sourceLifecycleNotice(action, linkedFactCount(state, sourceId), 0)
     );
+  }
+
+  async function purgePassiveCaptureEvent(eventId: string) {
+    const event = state.passiveCaptureEvents.find((item) => item.id === eventId);
+    const sourceId = event ? passiveCaptureSourceId(event) : null;
+    const source = sourceId ? state.sources.find((item) => item.id === sourceId) : null;
+    if (!event || !source) {
+      setNotice("Capture履歴に紐づくSourceが見つかりませんでした。");
+      return;
+    }
+    if (source.deletionState === "purged") {
+      setNotice("このCapture本文はすでに消去済みです。");
+      return;
+    }
+    await changeSourceLifecycle(source.id, "purge_body");
+  }
+
+  async function purgeAllPassiveCaptures() {
+    const sourceIds = passiveCaptureSourceIds(state)
+      .filter((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "purged");
+    if (sourceIds.length === 0) {
+      setNotice("消去できるCapture本文はありません。");
+      return;
+    }
+
+    if (nativePath) {
+      try {
+        let latestState: VaultState | null = null;
+        let latestRevision: string | null = null;
+        for (const sourceId of sourceIds) {
+          const updated = await updateNativeSourceLifecycle({ sourceId, action: "purge_body" });
+          if (updated) {
+            latestState = updated.state;
+            latestRevision = updated.updatedAt;
+          }
+        }
+        if (latestState && latestRevision) {
+          nativeRevisionRef.current = latestRevision;
+          setNativeRevision(latestRevision);
+          setState(latestState);
+          setNotice(`${sourceIds.length}件のCapture本文を消去しました。`);
+        }
+        return;
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでCapture本文を消去できませんでした。");
+        return;
+      }
+    }
+
+    const next = sourceIds.reduce(
+      (current, sourceId) => updateSourceLifecycle(current, sourceId, "purge_body"),
+      state
+    );
+    apply(next, `${sourceIds.length}件のCapture本文を消去しました。`);
   }
 
   async function editSourceMetadata(sourceId: string, input: SourceMetadataUpdate): Promise<boolean> {
@@ -1441,10 +1518,35 @@ export function App() {
     }
   }
 
+  async function previewRestoreBackup() {
+    try {
+      const restored = await importEncryptedBackup(backupText, backupPassphrase);
+      setRestorePreview(makeRestorePreview(restored));
+      setRestoreConfirmText("");
+      setNotice("バックアップを読み取りました。件数を確認し、復元する場合はRESTOREと入力してください。");
+    } catch (error) {
+      setRestorePreview(null);
+      setRestoreConfirmText("");
+      setNotice(error instanceof Error ? error.message : "バックアップの読み取りに失敗しました。");
+    }
+  }
+
   async function restoreBackup() {
+    if (!restorePreview) {
+      setNotice("まず復元プレビューを作成してください。");
+      return;
+    }
+    if (restoreConfirmText !== "RESTORE") {
+      setNotice("復元するには確認欄へRESTOREと入力してください。");
+      return;
+    }
     try {
       const restored = await importEncryptedBackup(backupText, backupPassphrase);
       apply(restored, "バックアップを復元しました。");
+      setActivePackId(null);
+      setActiveRequestId(null);
+      setRestorePreview(null);
+      setRestoreConfirmText("");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "復元に失敗しました。");
     }
@@ -1598,8 +1700,14 @@ export function App() {
   }
 
   function clearVault() {
+    if (clearConfirmText !== "CLEAR") {
+      setNotice("Vaultをクリアするには確認欄へCLEARと入力してください。");
+      return;
+    }
     apply(createEmptyVault(), "Vaultをクリアしました。");
     setActivePackId(null);
+    setActiveRequestId(null);
+    setClearConfirmText("");
   }
 
   function seedDemo() {
@@ -1614,7 +1722,7 @@ export function App() {
           <div className="brand-mark">LC</div>
           <div>
             <h1>Life Context Vault</h1>
-            <p>Local PoC</p>
+            <p>Control Center</p>
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
@@ -1725,9 +1833,13 @@ export function App() {
           <ConnectionsView
             connectors={state.connectorSessions}
             policies={state.accessPolicies}
+            sources={state.sources}
+            passiveCaptureEvents={state.passiveCaptureEvents}
             captureSettings={state.passiveCaptureSettings}
             updateCapture={updateCapture}
             updatePolicy={updatePolicy}
+            purgePassiveCaptureEvent={purgePassiveCaptureEvent}
+            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
@@ -1812,8 +1924,14 @@ export function App() {
             backupText={backupText}
             setBackupText={setBackupText}
             exportBackup={exportBackup}
+            previewRestoreBackup={previewRestoreBackup}
             restoreBackup={restoreBackup}
+            restorePreview={restorePreview}
+            restoreConfirmText={restoreConfirmText}
+            setRestoreConfirmText={setRestoreConfirmText}
             clearVault={clearVault}
+            clearConfirmText={clearConfirmText}
+            setClearConfirmText={setClearConfirmText}
             seedDemo={seedDemo}
             nativePath={nativePath}
             nativeRevision={nativeRevision}
@@ -2665,9 +2783,13 @@ function SourceRow({
 function ConnectionsView({
   connectors,
   policies,
+  sources,
+  passiveCaptureEvents,
   captureSettings,
   updateCapture,
   updatePolicy,
+  purgePassiveCaptureEvent,
+  purgeAllPassiveCaptures,
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
@@ -2701,12 +2823,16 @@ function ConnectionsView({
 }: {
   connectors: ConnectorSession[];
   policies: VaultState["accessPolicies"];
+  sources: VaultState["sources"];
+  passiveCaptureEvents: PassiveCaptureEvent[];
   captureSettings: PassiveCaptureSettings;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   updatePolicy: (
     clientId: string,
     settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
   ) => void;
+  purgePassiveCaptureEvent: (eventId: string) => void;
+  purgeAllPassiveCaptures: () => void;
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
@@ -2741,7 +2867,12 @@ function ConnectionsView({
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
   const aiAccessChecklist = aiAccessChecklistItems(aiServiceStatus, nativePath);
   const mcpEndpoint = aiServiceStatus?.mcpServerUrl ?? localRelayUrl;
+  const relayUsesLocalhost = isLocalhostUrl(mcpEndpoint);
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
+  const recentCaptures = [...passiveCaptureEvents]
+    .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
+    .slice(0, 6);
+  const purgeableCaptureCount = passiveCaptureSourceIdsForEvents(passiveCaptureEvents, sources).length;
   const [allowedSitesDraft, setAllowedSitesDraft] = useState(captureSettings.allowedSites.join(", "));
 
   useEffect(() => {
@@ -2825,6 +2956,101 @@ function ConnectionsView({
             <PauseCircle size={16} />
             Stop managed
           </button>
+        </div>
+      </div>
+
+      <div className="panel wide ai-connection-guide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Connect Your AI</p>
+            <h3>普段使うAIからContext Packを呼ぶ</h3>
+          </div>
+          <Plug size={18} />
+        </div>
+        <div className="connection-wizard-grid">
+          <article className={relayUsesLocalhost ? "connection-wizard-card attention" : "connection-wizard-card ready"}>
+            <div className="wizard-card-heading">
+              <Radio size={18} />
+              <div>
+                <strong>ChatGPT / Claude Web</strong>
+                <span>{relayUsesLocalhost ? "Hosted HTTPS Relayが必要です" : "Remote MCPで接続できます"}</span>
+              </div>
+            </div>
+            <p>
+              Web上のAIはこのMacのlocalhostへ直接アクセスできません。公開HTTPSのRelayを用意し、このControl Centerで承認した短命Context Packだけを返します。
+            </p>
+            <div className="service-actions">
+              <button
+                className="secondary-button"
+                onClick={() => copyText(JSON.stringify(makeRemoteConnectorInfo(), null, 2), "Remote MCP connector情報をコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                接続情報をコピー
+              </button>
+            </div>
+          </article>
+          <article className={nativePath ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
+            <div className="wizard-card-heading">
+              <Plug size={18} />
+              <div>
+                <strong>Claude Desktop / local AI</strong>
+                <span>{nativePath ? "この端末のVaultへ接続できます" : "Desktop appで有効になります"}</span>
+              </div>
+            </div>
+            <p>同じ端末のAIにはLocal MCPを使います。Raw Sourceや未承認候補は公開せず、回答前にContext Packを確認できます。</p>
+            <div className="service-actions">
+              <button
+                className="primary-button"
+                disabled={!nativePath || claudeInstallBusy}
+                onClick={installClaudeConfig}
+                type="button"
+              >
+                <Plug size={16} />
+                Claude Desktopへ追加
+              </button>
+            </div>
+          </article>
+          <article className={captureSettings.enabled ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
+            <div className="wizard-card-heading">
+              {captureSettings.enabled ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
+              <div>
+                <strong>AI会話のCapture</strong>
+                <span>{captureSettings.enabled ? "許可サイトだけ候補化します" : "停止中です"}</span>
+              </div>
+            </div>
+            <p>ブラウザ拡張や手動入力から会話断片を取り込みます。保存されるのは未承認候補で、Fact化とAI送信は別の確認です。</p>
+            <div className="service-actions">
+              <button
+                className={captureSettings.enabled ? "danger-button" : "primary-button"}
+                onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
+                type="button"
+              >
+                {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
+                {captureSettings.enabled ? "Captureを一時停止" : "Captureを開始"}
+              </button>
+            </div>
+          </article>
+          <article className="connection-wizard-card ready">
+            <div className="wizard-card-heading">
+              <Clipboard size={18} />
+              <div>
+                <strong>コピーFallback</strong>
+                <span>どのAIでも使えます</span>
+              </div>
+            </div>
+            <p>RequestsでContext Packを確認してから本文をコピーします。MCP接続前でも、渡した内容をAuditで追える導線です。</p>
+            <div className="service-actions">
+              <button
+                className="secondary-button"
+                onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                現在の入口をコピー
+              </button>
+            </div>
+          </article>
         </div>
       </div>
 
@@ -3242,122 +3468,129 @@ function ConnectionsView({
       <div className="panel wide">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Remote MCP Relay</p>
-            <h3>ChatGPT / ClaudeからVault Agentへ接続する</h3>
+            <p className="eyebrow">Advanced Remote Relay</p>
+            <h3>Remote MCPの診断とself-host設定</h3>
           </div>
           <Radio size={18} />
         </div>
-        <div className="setup-grid remote-relay-setup">
-          <div className="setup-step">
-            <Badge>1</Badge>
-            <strong>RelayとAgentをビルド</strong>
-            <pre className="code-box">npm run relay:build{"\n"}npm run agent:build</pre>
-          </div>
-          <div className="setup-step">
-            <Badge>2</Badge>
-            <strong>OAuth Relayを起動</strong>
-            <pre className="code-box">{makeRelayCommand(nativePath)}</pre>
-            <button
-              className="secondary-button"
-              onClick={() => copyText(makeRelayCommand(nativePath), "Relay起動コマンドをコピーしました。")}
-              type="button"
-            >
-              <Clipboard size={16} />
-              Copy command
-            </button>
-          </div>
-          <div className="setup-step">
-            <Badge>3</Badge>
-            <strong>Pairing codeを発行</strong>
-            <pre className="code-box">{makePairingCommand()}</pre>
-            <button
-              className="secondary-button"
-              onClick={() => copyText(makePairingCommand(), "Agent pairingコマンドをコピーしました。")}
-              type="button"
-            >
-              <Clipboard size={16} />
-              Copy pairing
-            </button>
-          </div>
-          <div className="setup-step">
-            <Badge>4</Badge>
-            <strong>Local Agentを接続</strong>
-            <pre className="code-box">{makeAgentCommand(nativePath)}</pre>
-            <button
-              className="secondary-button"
-              onClick={() => copyText(makeAgentCommand(nativePath), "Local Agent起動コマンドをコピーしました。")}
-              type="button"
-            >
-              <Clipboard size={16} />
-              Copy agent
-            </button>
-          </div>
-          <div className="setup-step">
-            <Badge>OAuth</Badge>
-            <strong>ChatGPT / Claude connectorへ渡すURL</strong>
-            <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(), null, 2)}</pre>
-          </div>
-          <div className="setup-step">
-            <Badge>Check</Badge>
-            <strong>接続前のHTTP診断</strong>
-            <div className="scope-row">
-              <Badge>health: 200</Badge>
-              <Badge>mcp: 401 OAuth</Badge>
-              <Badge>sse: ready</Badge>
-              <Badge>headers: 406/415</Badge>
-            </div>
-            <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
-            <div className="service-actions">
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makeRelayHealthCheckCommand(), "Relay health checkをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Copy health
-              </button>
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makeRemoteMcpHeaderCheckCommand(), "Remote MCP診断コマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Copy MCP check
-              </button>
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Copy SSE check
-              </button>
-            </div>
-            <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
-            <pre className="code-box">{makeRemoteMcpSseCheckCommand()}</pre>
-          </div>
-          <div className="setup-step">
-            <Badge>Boundary</Badge>
-            <strong>Relayが保持しないもの</strong>
-            <div className="scope-row">
-              <Badge>Raw Vault</Badge>
-              <Badge>Raw Source</Badge>
-              <Badge>MCP body</Badge>
-              <Badge>Pack body</Badge>
-              <Badge>long-lived Pack</Badge>
-            </div>
-          </div>
-          <div className="setup-step">
-            <Badge>State</Badge>
-            <strong>Relayが監査用に保持するもの</strong>
-            <div className="scope-row">
-              <Badge>OAuth clients</Badge>
-              <Badge>request metadata</Badge>
-              <Badge>scope decision</Badge>
-            </div>
-            <pre className="code-box">{`${localRelayBaseUrl}/relay/state`}</pre>
-          </div>
+        <div className="trust-note">
+          <ShieldCheck size={16} />
+          <span>通常は上の接続ガイドだけで十分です。ここはHosted Relayの運用確認、ローカル検証、HTTP/MCP診断が必要なときに開きます。</span>
         </div>
+        <details className="advanced-panel">
+          <summary>コマンドとHTTP診断を表示</summary>
+          <div className="setup-grid remote-relay-setup">
+            <div className="setup-step">
+              <Badge>1</Badge>
+              <strong>RelayとAgentをビルド</strong>
+              <pre className="code-box">npm run relay:build{"\n"}npm run agent:build</pre>
+            </div>
+            <div className="setup-step">
+              <Badge>2</Badge>
+              <strong>OAuth Relayを起動</strong>
+              <pre className="code-box">{makeRelayCommand(nativePath)}</pre>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeRelayCommand(nativePath), "Relay起動コマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy command
+              </button>
+            </div>
+            <div className="setup-step">
+              <Badge>3</Badge>
+              <strong>Pairing codeを発行</strong>
+              <pre className="code-box">{makePairingCommand()}</pre>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makePairingCommand(), "Agent pairingコマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy pairing
+              </button>
+            </div>
+            <div className="setup-step">
+              <Badge>4</Badge>
+              <strong>Local Agentを接続</strong>
+              <pre className="code-box">{makeAgentCommand(nativePath)}</pre>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeAgentCommand(nativePath), "Local Agent起動コマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy agent
+              </button>
+            </div>
+            <div className="setup-step">
+              <Badge>OAuth</Badge>
+              <strong>ChatGPT / Claude connectorへ渡すURL</strong>
+              <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(), null, 2)}</pre>
+            </div>
+            <div className="setup-step">
+              <Badge>Check</Badge>
+              <strong>接続前のHTTP診断</strong>
+              <div className="scope-row">
+                <Badge>health: 200</Badge>
+                <Badge>mcp: 401 OAuth</Badge>
+                <Badge>sse: ready</Badge>
+                <Badge>headers: 406/415</Badge>
+              </div>
+              <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
+              <div className="service-actions">
+                <button
+                  className="secondary-button"
+                  onClick={() => copyText(makeRelayHealthCheckCommand(), "Relay health checkをコピーしました。")}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  Copy health
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => copyText(makeRemoteMcpHeaderCheckCommand(), "Remote MCP診断コマンドをコピーしました。")}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  Copy MCP check
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  Copy SSE check
+                </button>
+              </div>
+              <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
+              <pre className="code-box">{makeRemoteMcpSseCheckCommand()}</pre>
+            </div>
+            <div className="setup-step">
+              <Badge>Boundary</Badge>
+              <strong>Relayが保持しないもの</strong>
+              <div className="scope-row">
+                <Badge>Raw Vault</Badge>
+                <Badge>Raw Source</Badge>
+                <Badge>MCP body</Badge>
+                <Badge>Pack body</Badge>
+                <Badge>long-lived Pack</Badge>
+              </div>
+            </div>
+            <div className="setup-step">
+              <Badge>State</Badge>
+              <strong>Relayが監査用に保持するもの</strong>
+              <div className="scope-row">
+                <Badge>OAuth clients</Badge>
+                <Badge>request metadata</Badge>
+                <Badge>scope decision</Badge>
+              </div>
+              <pre className="code-box">{`${localRelayBaseUrl}/relay/state`}</pre>
+            </div>
+          </div>
+        </details>
         <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。RelayはOAuth client登録とリクエストの監査メタデータだけを永続化し、Vault本文・MCP本文・Context Pack本文は置きません。</p>
       </div>
 
@@ -3410,6 +3643,70 @@ function ConnectionsView({
             </button>
           </div>
           <p className="muted">Raw transcriptは初期設定で{captureSettings.retentionDays}日後に消えます。候補が承認されるまでFactにはなりません。</p>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Recent Captures</p>
+            <h3>直近で取り込んだ会話断片</h3>
+          </div>
+          <Badge>{purgeableCaptureCount} active</Badge>
+        </div>
+        <div className="capture-status-strip">
+          <div>
+            <strong>{captureSettings.enabled ? "Captureは有効" : "Captureは停止中"}</strong>
+            <span>
+              {captureSettings.enabled
+                ? `${captureSettings.allowedSites.join(", ")} の会話断片だけをローカルで候補化します。`
+                : "停止中はブラウザ拡張や手動Captureから書き込みません。"}
+            </span>
+          </div>
+          <button
+            className="danger-button"
+            disabled={purgeableCaptureCount === 0}
+            onClick={purgeAllPassiveCaptures}
+            type="button"
+          >
+            <Trash2 size={16} />
+            全本文を消去
+          </button>
+        </div>
+        <div className="capture-history-list">
+          {recentCaptures.map((event) => {
+            const sourceId = passiveCaptureSourceId(event);
+            const source = sourceId ? sources.find((item) => item.id === sourceId) : undefined;
+            const sourcePurged = source?.deletionState === "purged" || event.processingStatus === "purged";
+            return (
+              <div className="capture-history-row" key={event.id}>
+                <div>
+                  <div className="capture-history-heading">
+                    <strong>{connectorKindLabel(event.sourceClient)}</strong>
+                    <span>{formatDateTime(event.capturedAt)}</span>
+                  </div>
+                  <p>{capturePreviewText(source)}</p>
+                  <div className="scope-row">
+                    <Badge>{captureEventStatusLabel(event, source)}</Badge>
+                    <SensitivityBadge sensitivity={event.sensitivityGuess} />
+                    <Badge>{event.candidateIds.length}候補</Badge>
+                    <Badge>{event.urlHash}</Badge>
+                  </div>
+                  <span>保持期限: {formatDateTime(event.retentionUntil)}</span>
+                </div>
+                <button
+                  className="danger-button"
+                  disabled={!sourceId || sourcePurged}
+                  onClick={() => purgePassiveCaptureEvent(event.id)}
+                  type="button"
+                >
+                  <Trash2 size={16} />
+                  本文消去
+                </button>
+              </div>
+            );
+          })}
+          {recentCaptures.length === 0 && <p className="muted">まだCapture履歴はありません。</p>}
         </div>
       </div>
 
@@ -3582,7 +3879,7 @@ function ContextRequestsView({
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Incoming request</p>
-            <h3>AIからのContext要求を模擬</h3>
+            <h3>AIから届いたContext要求</h3>
           </div>
           <Send size={18} />
         </div>
@@ -3601,8 +3898,9 @@ function ContextRequestsView({
         <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
         <button className="primary-button" onClick={buildPack} type="button">
           <Sparkles size={16} />
-          Requestを受ける
+          Context Packを準備
         </button>
+        <p className="muted">MCP接続から届いた要求も、手動で試す要求も、AIへ返す前にここでContext Packを確認します。</p>
         <div className="request-list">
           {requests.slice(0, 8).map((request) => (
             <button
@@ -3902,8 +4200,14 @@ function SettingsView({
   backupText,
   setBackupText,
   exportBackup,
+  previewRestoreBackup,
   restoreBackup,
+  restorePreview,
+  restoreConfirmText,
+  setRestoreConfirmText,
   clearVault,
+  clearConfirmText,
+  setClearConfirmText,
   seedDemo,
   nativePath,
   nativeRevision,
@@ -3919,8 +4223,14 @@ function SettingsView({
   backupText: string;
   setBackupText: (value: string) => void;
   exportBackup: () => void;
+  previewRestoreBackup: () => void;
   restoreBackup: () => void;
+  restorePreview: RestorePreview | null;
+  restoreConfirmText: string;
+  setRestoreConfirmText: (value: string) => void;
   clearVault: () => void;
+  clearConfirmText: string;
+  setClearConfirmText: (value: string) => void;
   seedDemo: () => void;
   nativePath: string | null;
   nativeRevision: string | null;
@@ -3952,10 +4262,48 @@ function SettingsView({
             Export
           </button>
           <Textarea label="Backup JSON" value={backupText} onChange={setBackupText} placeholder="復元する場合はここに貼り付け" />
-          <button className="secondary-button" onClick={restoreBackup} type="button">
-            <Upload size={16} />
-            Restore
-          </button>
+          <div className="restore-actions">
+            <button className="secondary-button" onClick={previewRestoreBackup} type="button">
+              <Search size={16} />
+              復元プレビュー
+            </button>
+            <button
+              className="danger-button"
+              disabled={!restorePreview || restoreConfirmText !== "RESTORE"}
+              onClick={restoreBackup}
+              type="button"
+            >
+              <Upload size={16} />
+              現在のVaultを置き換える
+            </button>
+          </div>
+          {restorePreview ? (
+            <div className="restore-preview">
+              <div className="restore-preview-grid">
+                <Metric label="Sources" value={restorePreview.counts.sources} />
+                <Metric label="Facts" value={restorePreview.counts.facts} />
+                <Metric label="Inbox候補" value={restorePreview.counts.candidates} />
+                <Metric label="Context Packs" value={restorePreview.counts.packs} />
+                <Metric label="Requests" value={restorePreview.counts.requests} />
+                <Metric label="Captures" value={restorePreview.counts.captureEvents} />
+              </div>
+              <div className="trust-note attention-note">
+                <ShieldAlert size={16} />
+                <span>
+                  復元すると現在のVault全体をこのバックアップで置き換えます。内容の感度は{restorePreview.sensitivitySummary}です。
+                  {restorePreview.newestSourceAt ? ` 最新Source: ${formatDateTime(restorePreview.newestSourceAt)}。` : ""}
+                </span>
+              </div>
+              <Input
+                label="復元確認"
+                value={restoreConfirmText}
+                onChange={setRestoreConfirmText}
+                placeholder="RESTORE と入力"
+              />
+            </div>
+          ) : (
+            <p className="muted">復元前にBackup JSONを復号し、件数と感度を確認します。確認前に現在のVaultは変更されません。</p>
+          )}
         </div>
       </div>
       <div className="panel">
@@ -4248,10 +4596,27 @@ function SettingsView({
             <Sparkles size={16} />
             デモデータ投入
           </button>
-          <button className="danger-button" onClick={clearVault} type="button">
-            <X size={16} />
-            Vaultをクリア
-          </button>
+          <div className="danger-zone">
+            <div className="trust-note attention-note">
+              <ShieldAlert size={16} />
+              <span>Vaultをクリアすると、Sources、候補、Fact、Context Pack、接続監査が空になります。バックアップが必要なら先にExportしてください。</span>
+            </div>
+            <Input
+              label="クリア確認"
+              value={clearConfirmText}
+              onChange={setClearConfirmText}
+              placeholder="CLEAR と入力"
+            />
+            <button
+              className="danger-button"
+              disabled={clearConfirmText !== "CLEAR"}
+              onClick={clearVault}
+              type="button"
+            >
+              <X size={16} />
+              Vaultをクリア
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -4707,6 +5072,113 @@ function sourceLifecycleNotice(
     return `Source本文を消去しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
   }
   return `Sourceを使用停止しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
+function makeRestorePreview(restored: VaultState): RestorePreview {
+  const newestSourceAt = restored.sources
+    .map((source) => source.createdAt)
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+  const highestSensitivity = maxVaultSensitivity(restored);
+  return {
+    generatedAt: new Date().toISOString(),
+    counts: {
+      sources: restored.sources.length,
+      candidates: restored.candidates.length,
+      facts: restored.facts.length,
+      requests: restored.contextPackRequests.length,
+      packs: restored.contextPacks.length,
+      captureEvents: restored.passiveCaptureEvents.length
+    },
+    sensitivitySummary: highestSensitivity ? sensitivityLabel(highestSensitivity) : "空のVault",
+    newestSourceAt
+  };
+}
+
+function maxVaultSensitivity(state: VaultState): SensitivityTier | null {
+  const values: SensitivityTier[] = [
+    ...state.sources.map((source) => source.defaultSensitivity),
+    ...state.candidates.map((candidate) => candidate.detectedSensitivity),
+    ...state.facts.map((fact) => fact.sensitivity),
+    ...state.passiveCaptureEvents.map((event) => event.sensitivityGuess),
+    ...state.contextPacks.map((pack) => pack.maxSensitivityIncluded)
+  ];
+  if (values.length === 0) return null;
+  const order: SensitivityTier[] = [
+    "public",
+    "personal",
+    "private_consequential",
+    "sensitive",
+    "secret_never_send"
+  ];
+  return values.reduce((max, current) =>
+    order.indexOf(current) > order.indexOf(max) ? current : max
+  );
+}
+
+function isLocalhostUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return value.includes("localhost") || value.includes("127.0.0.1");
+  }
+}
+
+function passiveCaptureSourceId(event: PassiveCaptureEvent): string | null {
+  if (event.sourceId) return event.sourceId;
+  const [sourceId] = event.textFragmentRef.split(":");
+  return sourceId || null;
+}
+
+function passiveCaptureSourceIds(state: VaultState): string[] {
+  return passiveCaptureSourceIdsForEvents(state.passiveCaptureEvents, state.sources);
+}
+
+function passiveCaptureSourceIdsForEvents(
+  events: PassiveCaptureEvent[],
+  sources: VaultState["sources"]
+): string[] {
+  const sourceIds = new Set<string>();
+  for (const event of events) {
+    const sourceId = passiveCaptureSourceId(event);
+    const source = sourceId ? sources.find((item) => item.id === sourceId) : undefined;
+    if (source?.origin === "passive_browser" && source.deletionState !== "purged") {
+      sourceIds.add(source.id);
+    }
+  }
+  return [...sourceIds];
+}
+
+function connectorKindLabel(kind: ConnectorKind): string {
+  const labels: Record<ConnectorKind, string> = {
+    claude_desktop: "Claude Desktop",
+    chatgpt: "ChatGPT",
+    claude_remote: "Claude",
+    gemini: "Gemini",
+    codex: "Codex",
+    generic_mcp: "MCP client",
+    copy_fallback: "Copy fallback"
+  };
+  return labels[kind];
+}
+
+function capturePreviewText(source?: VaultState["sources"][number]): string {
+  if (!source) return "紐づくSourceが見つかりません。";
+  if (source.deletionState === "purged") return "本文は消去済みです。候補やFactは確認待ちになります。";
+  const text = source.body.replace(/\s+/g, " ").trim();
+  if (!text) return "本文は空です。";
+  return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+}
+
+function captureEventStatusLabel(
+  event: PassiveCaptureEvent,
+  source?: VaultState["sources"][number]
+): string {
+  if (source?.deletionState === "purged" || event.processingStatus === "purged") return "本文消去済み";
+  if (event.processingStatus === "candidate_generated") return "候補作成";
+  if (event.processingStatus === "captured") return "取得済み";
+  return "候補なし";
 }
 
 function sourceMetadataNotice(invalidatedPackCount: number): string {

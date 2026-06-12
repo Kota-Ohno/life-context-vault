@@ -1,6 +1,6 @@
 # Life Context Vault
 
-Local-first proof of concept for a personal life-context vault that can safely feed everyday AI clients through reviewed Context Packs.
+Local-first Control Center and AI Access Layer for a personal life-context vault. The product boundary is simple: everyday AI clients can request reviewed Context Packs, but they cannot read the whole Vault, Raw Sources, or unapproved memory candidates.
 
 ## Run
 
@@ -45,7 +45,7 @@ npm run tauri:build
 npm run tauri:bundle
 ```
 
-## PoC Scope
+## Current Product Slice
 
 - Life Context Home with Background Snapshot
 - Guided background setup
@@ -54,7 +54,7 @@ npm run tauri:bundle
 - Approved facts as canonical memory
 - AI Connections control surface
 - Context Request review before AI-bound context leaves the Vault
-- Passive Capture simulator that creates unapproved Inbox candidates only
+- Passive Capture controls, recent capture history, Raw transcript purge actions, and browser/manual capture paths that create unapproved Inbox candidates only
 - Audit trail for source, candidate, request, pack, and capture events
 - Search over approved facts, with Tauri using encrypted SQLite FTS
 - Encrypted JSON backup export and restore
@@ -64,6 +64,7 @@ npm run tauri:bundle
 - App-managed AI Access Service that starts/stops the bundled HTTP MCP relay and local Vault Agent
 - OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge, with metadata-only relay state persistence for Remote-MCP-style testing
 - Chrome browser capture extension and Native Messaging host
+- Restore preview and typed confirmation before encrypted backup restore or destructive Vault clear
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to an encrypted SQLCipher database in the app data directory, keyed by the OS secure credential store, and projected into normalized tables.
 
@@ -109,12 +110,12 @@ Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri des
 
 ## Try The Product-Grade Slice
 
-1. Open **Connections** and start Passive Capture.
-2. Paste an AI chat fragment into the Capture simulator.
-3. Review the generated candidate in **Inbox**.
-4. Save the candidate as an ApprovedFact.
-5. Open **Requests** and create a simulated ChatGPT or Claude Context Request.
-6. Confirm the Context Pack before generating the local answer.
-7. Open **Audit** to see what was captured, saved, requested, generated, or denied.
+1. Open **Home** and add a small piece of life background.
+2. Review the generated candidate in **Inbox** and save it as an ApprovedFact.
+3. Open **Connections** and choose an AI route: Claude Desktop/local MCP, ChatGPT or Claude Web via hosted HTTPS Relay, browser capture, or copy fallback.
+4. Start Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
+5. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task.
+6. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
+7. Open **Audit** to see what was captured, saved, requested, generated, copied, or denied.
 
-See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for the real MCP/Relay buildout.
+See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for hosted connector certification and full normalized-store migration.

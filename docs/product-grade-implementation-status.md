@@ -17,10 +17,10 @@ Last updated: 2026-06-13
 - Added Control Center UI surfaces:
   - AI Connections
   - Context Requests
-  - Passive Capture simulator
+  - Passive Capture controls and capture history
   - Audit trail
   - AI delivery receipts
-- Reworked the local Ask flow into a simulated external AI request flow:
+- Reworked the local Ask flow into an external-AI-style request flow:
   - create a `ContextPackRequest`
   - generate a short-lived `ContextPack`
   - confirm or deny before answer generation
@@ -897,6 +897,15 @@ Last updated: 2026-06-13
 - UX/design: the top panel keeps only one extra copy action so the first Connections card stays compact; detailed health and MCP check commands live in the existing Remote Relay setup grid.
 - Verification: `npm test -- --run`, `npm run build`, and `git diff --check` passed. Browser checks at desktop `1280x920` and mobile `390x844` confirmed no page-level horizontal overflow, no overflowing buttons, a compact top AI Access panel, and the lower Remote Relay diagnostic card present.
 - Review fallback: SubAgents were not used for this UI polish slice; the main thread ran separate product, security/privacy, visual QA, and maintainability passes.
+
+### General-User Control Center UX Hardening Slice
+
+- Product fit: Connections now starts with plain routes for ChatGPT/Claude Web, Claude Desktop/local MCP, browser Capture, and copy fallback. The UI explicitly says hosted web AIs need a public HTTPS Relay instead of localhost, while developer relay commands are moved under an advanced diagnostics disclosure.
+- Security/privacy: Recent Captures shows what was locally captured, the source AI, retention deadline, candidate count, and sensitivity guess. Users can purge a single captured transcript body or all active captured transcript bodies without deleting the audit trail; Source lifecycle safeguards still move linked Facts back to review and invalidate existing Context Packs.
+- Safety UX: Settings now requires encrypted backup restore preview before replacement. Restore needs a typed `RESTORE` confirmation, and destructive Vault clear needs typed `CLEAR`; both checks are enforced in the execution functions, not only in button disabled states.
+- Terminology: visible product copy now treats the app as a Control Center and AI Access Layer rather than a local PoC simulator. Requests copy describes preparing and confirming incoming Context requests instead of simulating them.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Playwright desktop `1440x1200` and mobile `390x1200` renders for Connections and Settings had no horizontal overflow. A manual Capture flow created a Recent Captures row with one active transcript, verified individual purge changed it to "本文消去済み", and confirmed delete-all controls were present without exposing Raw Source text outside the local UI.
+- SubAgent disposition: this slice addresses the product/UX review P1s for developer-heavy connection setup, risky restore/clear controls, and incomplete Passive Capture trust controls. Remaining hosted connector provisioning and bundled OCR polish stay outside this local UX slice.
 
 ## SubAgent Completion Review Disposition
 

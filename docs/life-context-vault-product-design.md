@@ -1,6 +1,10 @@
 # Life Context Vault Product Design
 
-Last updated: 2026-06-11
+Last updated: 2026-06-13
+
+## 2026-06-13 Implementation Note
+
+The original PoC framing below is now historical context. The current product-grade slice keeps the same product promise, but the first-party app is now a **Control Center** for Vault management, AI connections, Context Request approval, Passive Capture review, backup/restore, and audit. Everyday AI access is expected to happen through Local MCP, hosted Remote MCP Relay, browser/manual capture, or copy fallback; the first-party app remains the place where the user can see what is saved and what each AI may receive.
 
 ## Purpose
 

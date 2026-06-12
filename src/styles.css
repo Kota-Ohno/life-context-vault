@@ -204,6 +204,15 @@ button {
   color: #4f7c59;
 }
 
+.attention-note {
+  border-color: #e1c58f;
+  background: #fffaf0;
+}
+
+.attention-note svg {
+  color: #a8631a;
+}
+
 .view-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1067,6 +1076,94 @@ button:focus-visible {
   gap: 8px;
 }
 
+.restore-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.restore-preview,
+.danger-zone {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.restore-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-connection-guide {
+  display: grid;
+  gap: 14px;
+}
+
+.connection-wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.connection-wizard-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.connection-wizard-card.ready {
+  border-color: #bfd4bf;
+  background: #f6fbf4;
+}
+
+.connection-wizard-card.attention {
+  border-color: #e1c58f;
+  background: #fffaf0;
+}
+
+.wizard-card-heading {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.wizard-card-heading div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wizard-card-heading strong,
+.wizard-card-heading span,
+.connection-wizard-card p {
+  overflow-wrap: anywhere;
+}
+
+.wizard-card-heading span {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.connection-wizard-card p {
+  margin: 0;
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .automation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1136,6 +1233,28 @@ button:focus-visible {
 
 .setup-step strong {
   line-height: 1.35;
+}
+
+.advanced-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 8px 10px;
+  border: 1px solid #d8dfd5;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #26352b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.advanced-panel[open] summary {
+  margin-bottom: 12px;
 }
 
 .code-box {
@@ -1249,6 +1368,75 @@ button:focus-visible {
   overflow-wrap: anywhere;
   color: #667267;
   line-height: 1.35;
+}
+
+.capture-status-strip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.capture-status-strip div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.capture-status-strip span,
+.capture-history-row span {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.capture-status-strip > .danger-button,
+.capture-history-row > .danger-button {
+  flex: 0 0 auto;
+  min-width: 124px;
+  white-space: nowrap;
+}
+
+.capture-history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.capture-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.capture-history-row > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.capture-history-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.capture-history-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #445047;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .request-detail {
@@ -1855,11 +2043,13 @@ button:focus-visible {
   .policy-grid,
   .policy-controls,
   .policy-domain-list,
+  .connection-wizard-grid,
   .ai-access-quickstart,
   .ai-access-map-grid,
   .ai-access-checklist,
   .service-status-grid,
   .automation-grid,
+  .restore-preview-grid,
   .setup-grid,
   .setup-grid.remote-relay-setup,
   .search-controls {
@@ -1902,6 +2092,7 @@ button:focus-visible {
   .automation-card-heading,
   .search-mode-row,
   .policy-domain-heading,
+  .capture-status-strip,
   .fact-row,
   .table-row,
   .connection-row,
@@ -2032,9 +2223,16 @@ button:focus-visible {
   }
 
   .context-item-footer,
-  .excluded-context-item {
+  .excluded-context-item,
+  .capture-history-row {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .capture-status-strip > .danger-button,
+  .capture-history-row > .danger-button {
+    width: 100%;
+    min-width: 0;
   }
 
   .context-item-footer .secondary-button,

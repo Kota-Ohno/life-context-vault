@@ -2032,7 +2032,7 @@ export function generateLocalAnswer(pack: ContextPack): string {
   }
 
   return [
-    "ローカルPoCアシスタントの回答です。",
+    "ローカル回答です。",
     "",
     hasContext
       ? "今回使う背景情報:"
