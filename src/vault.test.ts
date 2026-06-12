@@ -80,6 +80,47 @@ describe("vault flow", () => {
     expect(searchFacts(state, "2027")[0].id).toBe(newFact.id);
   });
 
+  it("flags a new candidate that conflicts with an active fact", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Old policy note",
+      body: "Insurance policy renews on 2026-08-31."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const oldFactId = state.facts[0].id;
+
+    state = addSourceWithCandidates(state, {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "New policy note",
+      body: "Insurance policy renews on 2027-08-31."
+    });
+
+    expect(state.candidates[0].conflictWithFactIds).toEqual([oldFactId]);
+    expect(state.candidates[0].conflictReason).toContain("既存のActive Fact");
+    expect(state.candidates[0].status).toBe("new");
+    expect(state.facts[0].status).toBe("active");
+  });
+
+  it("does not self-conflict when a source body re-extracts an approved fact", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Policy note",
+      body: "Insurance policy renews on 2026-08-31."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const sourceId = state.sources[0].id;
+
+    state = updateSourceBody(state, sourceId, {
+      body: "Insurance policy renews on 2027-08-31."
+    });
+
+    expect(state.facts[0].status).toBe("needs_review");
+    expect(state.candidates[0].conflictWithFactIds).toEqual([]);
+  });
+
   it("redacts secret values from source text and generated candidates", () => {
     const state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",

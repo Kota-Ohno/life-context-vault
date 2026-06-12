@@ -497,7 +497,9 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         detected_sensitivity TEXT NOT NULL,
         confidence TEXT NOT NULL,
         status TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        conflict_with_fact_ids TEXT,
+        conflict_reason TEXT
       );
 
       CREATE TABLE IF NOT EXISTS facts (
@@ -622,6 +624,8 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
   ensure_column(connection, "facts", "approved_at", "TEXT")?;
   ensure_column(connection, "facts", "supersedes_fact_ids", "TEXT")?;
   ensure_column(connection, "facts", "superseded_by_fact_id", "TEXT")?;
+  ensure_column(connection, "memory_candidates", "conflict_with_fact_ids", "TEXT")?;
+  ensure_column(connection, "memory_candidates", "conflict_reason", "TEXT")?;
   connection
     .execute(
       "UPDATE facts
@@ -731,8 +735,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
       .execute(
         "INSERT INTO memory_candidates (
           id, source_ids, proposed_fact_text, domain, candidate_type,
-          detected_sensitivity, confidence, status, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+          detected_sensitivity, confidence, status, created_at, conflict_with_fact_ids,
+          conflict_reason
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
           candidate_id,
           json_field(candidate, "sourceIds"),
@@ -742,7 +747,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
           str_field(candidate, "detectedSensitivity"),
           str_field(candidate, "confidence"),
           str_field(candidate, "status"),
-          str_field(candidate, "createdAt")
+          str_field(candidate, "createdAt"),
+          json_field(candidate, "conflictWithFactIds"),
+          optional_str_field(candidate, "conflictReason")
         ],
       )
       .map_err(|error| format!("failed to sync candidate {candidate_id}: {error}"))?;
@@ -1554,7 +1561,7 @@ pub fn propose_memory_at_path(
   } else {
     "new"
   };
-  let candidate = json!({
+  let mut candidate = json!({
     "id": candidate_id,
     "sourceIds": [source_id],
     "sourceChunkIds": [],
@@ -1568,6 +1575,7 @@ pub fn propose_memory_at_path(
     "createdAt": now,
     "createsFactIds": []
   });
+  annotate_candidate_conflicts(&vault, &mut candidate);
 
   push_json_array(&mut vault, "sources", source);
   push_json_array(&mut vault, "candidates", candidate);
@@ -1638,7 +1646,8 @@ pub fn add_source_with_candidates_at_path(
     "processingStatus": "ready",
     "deletionState": "active"
   });
-  let candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  let mut candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  annotate_candidates_conflicts(&vault, &mut candidates);
   let candidate_ids = candidates
     .iter()
     .map(|candidate| str_field(candidate, "id"))
@@ -1785,7 +1794,8 @@ pub fn add_passive_capture_event_at_path(
   } else {
     "passive_browser"
   };
-  let candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  let mut candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  annotate_candidates_conflicts(&vault, &mut candidates);
   let candidate_ids = candidates
     .iter()
     .map(|candidate| str_field(candidate, "id"))
@@ -2246,7 +2256,8 @@ pub fn update_source_body_at_path(
     "stale_fact",
     "根拠Source本文が更新されたため、このContext Packは無効化されました。",
   );
-  let candidates = extract_memory_candidates_for_source(source_id, &sanitized, &now);
+  let mut candidates = extract_memory_candidates_for_source(source_id, &sanitized, &now);
+  annotate_candidates_conflicts(&vault, &mut candidates);
   let candidate_ids = candidates
     .iter()
     .map(|candidate| str_field(candidate, "id"))
@@ -4032,12 +4043,100 @@ fn memory_candidate(
     "reasonToRemember": reason,
     "status": status,
     "createdAt": created_at,
-    "createsFactIds": []
+    "createsFactIds": [],
+    "conflictWithFactIds": []
   });
   if let Some(due_date) = due_date {
     candidate["dueDate"] = Value::String(due_date);
   }
   candidate
+}
+
+fn annotate_candidates_conflicts(vault: &Value, candidates: &mut [Value]) {
+  for candidate in candidates {
+    annotate_candidate_conflicts(vault, candidate);
+  }
+}
+
+fn annotate_candidate_conflicts(vault: &Value, candidate: &mut Value) {
+  let conflict_ids = value_array(vault, "facts")
+    .into_iter()
+    .filter(|fact| str_field(fact, "status") == "active")
+    .filter(|fact| str_field(fact, "domain") == str_field(candidate, "domain"))
+    .filter(|fact| candidate_conflicts_with_fact(candidate, fact))
+    .take(4)
+    .map(|fact| str_field(fact, "id"))
+    .collect::<Vec<_>>();
+
+  if !conflict_ids.is_empty() {
+    candidate["conflictWithFactIds"] = json!(conflict_ids);
+    candidate["conflictReason"] = Value::String(
+      "既存のActive Factと日付または内容が異なる可能性があります。保存前に置き換えるか確認してください。".to_string(),
+    );
+  }
+}
+
+fn candidate_conflicts_with_fact(candidate: &Value, fact: &Value) -> bool {
+  let candidate_date = optional_str_field(candidate, "dueDate")
+    .or_else(|| extract_yyyy_mm_dd(&str_field(candidate, "proposedFactText")));
+  let fact_date = optional_str_field(fact, "dueDate")
+    .or_else(|| extract_yyyy_mm_dd(&str_field(fact, "factText")));
+  let (Some(candidate_date), Some(fact_date)) = (candidate_date, fact_date) else {
+    return false;
+  };
+  if candidate_date == fact_date {
+    return false;
+  }
+
+  let candidate_keywords = conflict_keywords(&str_field(candidate, "proposedFactText"));
+  let fact_keywords = conflict_keywords(&str_field(fact, "factText"));
+  candidate_keywords
+    .iter()
+    .filter(|keyword| fact_keywords.iter().any(|existing| existing == *keyword))
+    .count()
+    >= 2
+}
+
+fn conflict_keywords(text: &str) -> Vec<String> {
+  let stop_words = [
+    "the", "and", "for", "with", "before", "after", "need", "needs", "update", "updated",
+    "renew", "renews", "on", "by", "to", "of",
+  ];
+  let mut keywords = Vec::new();
+  let mut current = String::new();
+
+  for character in text.to_lowercase().chars() {
+    if character.is_alphanumeric()
+      || ('一'..='龠').contains(&character)
+      || ('ぁ'..='ん').contains(&character)
+      || ('ァ'..='ン').contains(&character)
+      || character == 'ー'
+    {
+      current.push(character);
+      continue;
+    }
+    push_conflict_keyword(&mut keywords, &current, &stop_words);
+    current.clear();
+  }
+  push_conflict_keyword(&mut keywords, &current, &stop_words);
+  keywords
+}
+
+fn push_conflict_keyword(keywords: &mut Vec<String>, token: &str, stop_words: &[&str]) {
+  let token = token.trim();
+  if token.len() < 3
+    || token
+      .chars()
+      .all(|character| character.is_ascii_digit() || character == '-')
+  {
+    return;
+  }
+  if stop_words.iter().any(|stop_word| stop_word == &token) {
+    return;
+  }
+  if !keywords.iter().any(|keyword| keyword == token) {
+    keywords.push(token.to_string());
+  }
 }
 
 fn looks_like_contact_point(text: &str) -> bool {
@@ -6288,7 +6387,7 @@ mod tests {
     let result = update_source_body_at_path(
       &path,
       &source_result.source_id,
-      "Need to update utility contract by 2027-02-01.",
+      "Need to renew lease by 2027-02-01.",
     )
     .expect("source body update");
     let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
@@ -6322,7 +6421,7 @@ mod tests {
     assert_eq!(result.invalidated_pack_count, 1);
     assert_eq!(
       source.get("body").and_then(Value::as_str),
-      Some("Need to update utility contract by 2027-02-01.")
+      Some("Need to renew lease by 2027-02-01.")
     );
     assert_eq!(fact.get("status").and_then(Value::as_str), Some("needs_review"));
     assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_updated"));
@@ -6334,11 +6433,15 @@ mod tests {
       generated_candidate.get("status").and_then(Value::as_str),
       Some("new")
     );
+    assert_eq!(
+      generated_candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      json!([])
+    );
     assert!(generated_candidate
       .get("proposedFactText")
       .and_then(Value::as_str)
       .unwrap_or_default()
-      .contains("utility contract"));
+      .contains("lease"));
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
     let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
@@ -6352,10 +6455,18 @@ mod tests {
     let normalized_candidate_count: i64 = connection
       .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
       .expect("normalized candidate count");
+    let normalized_conflicts: String = connection
+      .query_row(
+        "SELECT conflict_with_fact_ids FROM memory_candidates WHERE id = ?1",
+        params![result.candidate_ids[0].clone()],
+        |row| row.get(0),
+      )
+      .expect("normalized candidate conflicts");
 
     assert!(search.is_empty());
-    assert_eq!(normalized_body, "Need to update utility contract by 2027-02-01.");
+    assert_eq!(normalized_body, "Need to renew lease by 2027-02-01.");
     assert_eq!(normalized_candidate_count, 2);
+    assert_eq!(normalized_conflicts, "[]");
     remove_temp_vault(&path);
   }
 
@@ -7113,6 +7224,64 @@ mod tests {
     assert_eq!(new_search.len(), 1);
     assert_eq!(normalized_old_status, "superseded");
     assert!(normalized_new_supersedes.contains("fact_"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_ingest_marks_conflicting_candidate_without_changing_fact() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-conflict");
+    let old_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Old policy note",
+      "Insurance policy renews on 2026-08-31.",
+    )
+    .expect("old source ingest");
+    let old_candidate_id = old_source
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("old candidate id");
+    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
+      .expect("approve old candidate");
+    let old_fact_id = old_review.fact_id.expect("old fact id");
+
+    let new_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "New policy note",
+      "Insurance policy renews on 2027-08-31.",
+    )
+    .expect("new source ingest");
+    let saved: Value = serde_json::from_str(&new_source.payload).expect("saved vault json");
+    let candidate = find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0])
+      .expect("candidate");
+    let old_fact = find_vault_item_by_id(&saved, "facts", &old_fact_id).expect("old fact");
+
+    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("active"));
+    assert_eq!(
+      candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      json!([old_fact_id.clone()])
+    );
+    assert!(candidate
+      .get("conflictReason")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .contains("既存のActive Fact"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_conflicts: String = connection
+      .query_row(
+        "SELECT conflict_with_fact_ids FROM memory_candidates WHERE id = ?1",
+        params![new_source.candidate_ids[0].clone()],
+        |row| row.get(0),
+      )
+      .expect("normalized candidate conflicts");
+
+    assert!(normalized_conflicts.contains(&old_fact_id));
     remove_temp_vault(&path);
   }
 

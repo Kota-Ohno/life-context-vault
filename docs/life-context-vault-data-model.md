@@ -205,6 +205,8 @@ type MemoryCandidate = {
   reviewed_at?: string;
   reviewed_by?: "user";
   creates_fact_ids: string[];
+  conflict_with_fact_ids: string[];
+  conflict_reason?: string;
 };
 ```
 
@@ -216,6 +218,8 @@ Required behavior:
 - Rejection does not delete the RawSource; it records the user's memory decision.
 - Tier 3 candidates default to `blocked_sensitive` until the user opens a sensitive review flow.
 - Tier 4 candidates must be redacted and cannot create ordinary facts containing the secret value.
+- Candidates may carry `conflict_with_fact_ids` and `conflict_reason` when they conservatively disagree with active ApprovedFacts.
+- Conflict metadata is advisory review pressure only. A conflicting candidate remains unapproved, cannot enter Context Packs, and must not overwrite or supersede a Fact unless the user explicitly approves a replacement.
 
 ### ApprovedFact
 
@@ -639,7 +643,7 @@ Retrieval defaults:
 
 ## Conflict Model
 
-Conflict detection creates MemoryCandidate records of type `conflict`.
+Conflict detection creates MemoryCandidate records of type `conflict` or annotates ordinary MemoryCandidates with `conflict_with_fact_ids` and `conflict_reason`.
 
 A conflict exists when a new source or candidate materially disagrees with an active fact about:
 
@@ -660,6 +664,8 @@ Conflict resolution options:
 - Reject the new candidate.
 
 No automatic overwrite is allowed.
+
+The first implementation may use conservative deterministic rules, such as same domain, different detected date, and overlapping key terms. False negatives are acceptable early; false positives must remain safe because they only create review prompts, not facts.
 
 ## Deletion And Forgetting
 

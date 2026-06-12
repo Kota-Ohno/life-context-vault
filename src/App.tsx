@@ -1906,9 +1906,17 @@ function InboxView({
   return (
     <section className="candidate-list">
       {candidates.map((candidate) => {
-        const replacementOptions = facts
-          .filter((fact) => fact.domain === candidate.domain && fact.status === "active")
-          .slice(0, 4);
+        const conflictFactIds = candidate.conflictWithFactIds ?? [];
+        const conflictOptions = facts.filter((fact) => conflictFactIds.includes(fact.id));
+        const replacementOptions = [
+          ...conflictOptions,
+          ...facts.filter(
+            (fact) =>
+              fact.domain === candidate.domain &&
+              fact.status === "active" &&
+              !conflictFactIds.includes(fact.id)
+          )
+        ].slice(0, 4);
         const selectedSupersedes = supersedes[candidate.id] ?? [];
         return (
           <article className="candidate-card" key={candidate.id}>
@@ -1916,6 +1924,7 @@ function InboxView({
               <Badge>{domainLabel(candidate.domain)}</Badge>
               <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
               <Badge>{candidate.confidence}</Badge>
+              {conflictFactIds.length > 0 && <Badge>衝突候補</Badge>}
             </div>
             <textarea
               aria-label="Candidate text"
@@ -1923,6 +1932,12 @@ function InboxView({
               onChange={(event) => setEdit(candidate.id, event.target.value)}
             />
             <p>{candidate.reasonToRemember}</p>
+            {conflictFactIds.length > 0 && (
+              <div className="warning-line conflict-line">
+                <ShieldAlert size={16} />
+                {candidate.conflictReason ?? "既存のFactと異なる可能性があります。保存前に置き換えるか確認してください。"}
+              </div>
+            )}
             {replacementOptions.length > 0 && (
               <div className="supersede-panel">
                 <div className="trust-note compact-note">
@@ -1938,6 +1953,7 @@ function InboxView({
                         type="checkbox"
                       />
                       <span>{fact.factText}</span>
+                      {conflictFactIds.includes(fact.id) && <Badge>衝突</Badge>}
                     </label>
                   ))}
                 </div>

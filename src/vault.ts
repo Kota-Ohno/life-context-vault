@@ -106,7 +106,10 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     ...parsed,
     version: 2,
     sources: parsed.sources ?? [],
-    candidates: parsed.candidates ?? [],
+    candidates: (parsed.candidates ?? []).map((candidate) => ({
+      ...candidate,
+      conflictWithFactIds: candidate.conflictWithFactIds ?? []
+    })),
     facts: (parsed.facts ?? []).map((fact) => ({
       ...fact,
       supersedesFactIds: fact.supersedesFactIds ?? []
@@ -177,7 +180,7 @@ export function addSourceWithCandidates(
     processingStatus: "ready",
     deletionState: "active"
   };
-  const candidates = extractCandidates(source);
+  const candidates = annotateCandidateConflicts(state, extractCandidates(source));
   return {
     ...state,
     sources: [source, ...state.sources],
@@ -251,7 +254,8 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
       confidence: "medium" as const,
       createdAt: nowIso(),
       status,
-      createsFactIds: [] as string[]
+      createsFactIds: [] as string[],
+      conflictWithFactIds: [] as string[]
     };
 
     if (/preferred name|nickname|名前|呼び名/i.test(line)) {
@@ -366,11 +370,73 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
           ? "blocked_sensitive"
           : "new",
       createdAt: nowIso(),
-      createsFactIds: []
+      createsFactIds: [],
+      conflictWithFactIds: []
     } as MemoryCandidate);
   }
 
   return candidates;
+}
+
+function annotateCandidateConflicts(
+  state: VaultState,
+  candidates: MemoryCandidate[]
+): MemoryCandidate[] {
+  return candidates.map((candidate) => {
+    const conflictingFacts = state.facts
+      .filter((fact) => fact.status === "active" && fact.domain === candidate.domain)
+      .filter((fact) => candidateConflictsWithFact(candidate, fact))
+      .slice(0, 4);
+    if (conflictingFacts.length === 0) return candidate;
+    return {
+      ...candidate,
+      conflictWithFactIds: conflictingFacts.map((fact) => fact.id),
+      conflictReason: "既存のActive Factと日付または内容が異なる可能性があります。保存前に置き換えるか確認してください。"
+    };
+  });
+}
+
+function candidateConflictsWithFact(candidate: MemoryCandidate, fact: ApprovedFact): boolean {
+  const candidateDate = candidate.dueDate ?? extractDate(candidate.proposedFactText);
+  const factDate = fact.dueDate ?? extractDate(fact.factText);
+  if (!candidateDate || !factDate || candidateDate === factDate) return false;
+
+  const candidateKeywords = conflictKeywords(candidate.proposedFactText);
+  const factKeywords = conflictKeywords(fact.factText);
+  const overlap = candidateKeywords.filter((keyword) => factKeywords.includes(keyword));
+  return overlap.length >= 2;
+}
+
+function conflictKeywords(text: string): string[] {
+  const stopWords = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "before",
+    "after",
+    "need",
+    "needs",
+    "update",
+    "updated",
+    "renew",
+    "renews",
+    "on",
+    "by",
+    "to",
+    "of"
+  ]);
+  return Array.from(
+    new Set(
+      text
+        .toLowerCase()
+        .replace(/\d{4}-\d{2}-\d{2}/g, " ")
+        .replace(/[^a-z0-9一-龠ぁ-んァ-ンー]+/g, " ")
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !stopWords.has(token))
+    )
+  );
 }
 
 export function approveCandidate(
@@ -669,7 +735,21 @@ export function updateSourceBody(
     defaultSensitivity: nextSensitivity,
     processingStatus: "ready"
   };
-  const newCandidates = extractCandidates(updatedSource).map((candidate) => ({
+  const reviewedFacts = state.facts.map((fact) =>
+    fact.sourceIds.includes(sourceId) && fact.status === "active"
+      ? {
+          ...fact,
+          status: "needs_review" as const,
+          updatedAt: now,
+          reviewReason: "source_updated" as const,
+          reviewSourceId: sourceId
+        }
+      : fact
+  );
+  const newCandidates = annotateCandidateConflicts(
+    { ...state, facts: reviewedFacts },
+    extractCandidates(updatedSource)
+  ).map((candidate) => ({
     ...candidate,
     createdAt: now
   }));
@@ -697,17 +777,7 @@ export function updateSourceBody(
     ...state,
     sources: state.sources.map((item) => (item.id === sourceId ? updatedSource : item)),
     candidates: [...newCandidates, ...archivedCandidates],
-    facts: state.facts.map((fact) =>
-      fact.sourceIds.includes(sourceId) && fact.status === "active"
-        ? {
-            ...fact,
-            status: "needs_review" as const,
-            updatedAt: now,
-            reviewReason: "source_updated" as const,
-            reviewSourceId: sourceId
-          }
-        : fact
-    ),
+    facts: reviewedFacts,
     contextPacks: nextPacks,
     contextPackRequests: state.contextPackRequests.map((request) =>
       invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
@@ -1505,7 +1575,7 @@ export function addPassiveCaptureEvent(
     processingStatus: "ready",
     deletionState: "active"
   };
-  const candidates = extractCandidates(source);
+  const candidates = annotateCandidateConflicts(state, extractCandidates(source));
   const event: PassiveCaptureEvent = {
     id: newId("cap"),
     sourceClient: input.sourceClient,
@@ -1602,7 +1672,7 @@ export function proposeMemoryFromConnector(
     processingStatus: "ready",
     deletionState: "active"
   };
-  const candidates = extractCandidates(source);
+  const candidates = annotateCandidateConflicts(state, extractCandidates(source));
   return {
     ...state,
     sources: [source, ...state.sources],

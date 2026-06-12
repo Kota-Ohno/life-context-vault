@@ -185,6 +185,11 @@ Last updated: 2026-06-12
   - new Facts record `supersedesFactIds`; old Facts move to `superseded` with `supersededByFactId`
   - Context Packs containing superseded Facts are cancelled before external AI can reuse old context
   - Inbox shows same-domain active Facts as explicit replacement choices, and Search shows superseded Facts in a separate human-only history section
+- Added conservative automatic conflict annotation for MemoryCandidates:
+  - new Source, Passive Capture, and MCP memory proposal candidates compare domain, detected date, and key terms against active Facts
+  - conflicting candidates persist `conflictWithFactIds` and `conflictReason` in the JSON snapshot and normalized `memory_candidates` table
+  - Inbox shows a conflict badge, warning copy, and prioritizes the suspected old Fact in the explicit replacement choices
+  - Source body re-extraction moves linked Facts to `needs_review` before conflict annotation so regenerated candidates do not self-conflict against the same edited Source
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -193,7 +198,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Advanced automatic conflict detection, multi-Fact merge, and entity-level versioning beyond the current explicit Candidate approval supersede flow.
+- Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -230,6 +235,7 @@ Last updated: 2026-06-12
 - Native Fact metadata tests proving edits sync FTS, clear blank date fields, reject `secret_never_send`, and invalidate affected Context Packs
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
 - Native Candidate supersede tests proving approval can mark selected old Facts as `superseded`, write version links, invalidate affected Context Packs, and keep superseded Facts out of active search
+- Native Candidate conflict tests proving new conflicting candidates record active Fact ids/reasons, remain unapproved, and do not change the old Fact
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
@@ -259,6 +265,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Sources body edit form keeps textarea, warning copy, and action buttons inside the row without page-level horizontal overflow
   - desktop `1280x720`: Inbox replacement choices show same-domain active Facts, switch the save button to "置き換えて保存", and save one new Fact while moving the old Fact into Search history without page-level overflow
   - mobile `390x844`: Inbox replacement panel and action buttons stack without page-level, card, or panel horizontal overflow
+  - desktop `1280x720`: Inbox conflicting candidate shows `衝突候補`, conflict warning, old/new renewal dates, and switches to "置き換えて保存" after selecting the suspected old Fact without page/card/panel horizontal overflow
+  - mobile `390x844`: Inbox conflicting candidate, replacement panel, and action buttons stack without page-level, card, panel, or button horizontal overflow
   - mobile `390x844`: Search version-history panel and superseded Fact rows render without page-level or row horizontal overflow
   - desktop `1280x920`: Search review queue shows `needs_review` Facts with keep/hide/delete actions, and keep moves the Fact back into active results without page-level horizontal overflow
   - mobile `390x844`: Search review queue and active Fact lifecycle actions stack without page-level horizontal overflow
@@ -287,7 +295,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Source metadata editing, Source body re-extraction, Fact lifecycle, Fact metadata editing, explicit Fact supersede/version history, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while automatic conflict detection and advanced multi-Fact/entity versioning remain future work.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Source metadata editing, Source body re-extraction, Fact lifecycle, Fact metadata editing, explicit Fact supersede/version history, conservative Candidate conflict annotation, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while semantic conflict merging and advanced multi-Fact/entity versioning remain future work.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -332,6 +340,11 @@ Last updated: 2026-06-12
 - Fact Supersede security review: accepted; superseded Facts leave active retrieval immediately, affected Context Packs are cancelled, and version history remains human-readable without becoming AI-bound context.
 - Fact Supersede technical review: accepted; approval writes version links, syncs normalized Fact columns/FTS, returns invalidation metadata through Tauri, and preserves the old approval API for existing MCP/test callers.
 - Fact Supersede UX review: accepted; Inbox replacement choices and Search version history render without desktop/mobile horizontal overflow and keep "saved" separate from "sent to AI".
+- Candidate Conflict review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Candidate Conflict product review: accepted; conflicting life context now receives visible review pressure in Inbox without pretending the new extraction is truth.
+- Candidate Conflict security review: accepted; conflict metadata does not make candidates AI-eligible, does not send Raw Source text, and does not supersede old Facts without explicit user approval.
+- Candidate Conflict technical review: accepted; TypeScript fallback and Rust Vault Core both annotate candidates, sync normalized conflict columns, and avoid self-conflict during Source body re-extraction.
+- Candidate Conflict UX review: accepted; desktop and mobile Inbox surfaces show conflict state and replacement action without horizontal overflow.
 - Context Pack Minimization review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
 - Context Pack Minimization product review: accepted; users can now remove individual Facts from a task-specific Pack without hiding the canonical Fact globally.
 - Context Pack Minimization security review: accepted; removed items stay in `excludedItems` as `user_hidden`, source snippets and max sensitivity are recalculated, and external AI retrieves only the confirmed edited Pack.

@@ -126,6 +126,8 @@ In the desktop product path, review actions enter through typed Vault Core comma
 - Secret-never-send candidates: cannot be approved as Facts.
 - Every review action writes an audit event and refreshes normalized Candidate/Fact/FTS projection before returning.
 
+MemoryCandidates may be annotated with `conflictWithFactIds` and `conflictReason` when Vault Core detects a conservative disagreement with active Facts, such as the same life domain with a different renewal date and overlapping key terms. This annotation changes review priority and replacement guidance only; it does not create, overwrite, or supersede any ApprovedFact until the user chooses Approve or Approve and supersede.
+
 ### Fact Lifecycle
 
 Fact lifecycle actions are also typed Vault Core commands in the desktop path. Keeping a review-needed Fact makes it `active` again and removes Source-deletion review metadata. Hiding, deleting, or moving a Fact back to review removes it from active retrieval and cancels existing Context Packs that included it, so external AI clients cannot reuse stale Pack contents after the user changes memory visibility.
@@ -159,13 +161,14 @@ Initial command behavior:
 - Preserve line boundaries for candidate extraction after secret redaction.
 - Generate MemoryCandidates only; never create ApprovedFacts directly.
 - Redact secret indicators and adjacent secret values before persistence.
+- Annotate new candidates with conflict metadata when they appear to disagree with existing active Facts.
 - Sync normalized `sources`, `source_chunks`, and `memory_candidates` tables before the command returns.
 
 Source lifecycle is also a typed Vault Core command in the desktop path. Soft delete keeps recoverable metadata, archives unapproved candidates from that Source, and marks linked active Facts as `needs_review`. Raw body purge removes the Source body and uses the same candidate/Fact safeguards. Both actions cancel existing Context Packs that included affected Facts so external AI clients cannot retrieve stale Packs after the user removes the evidence.
 
 Source metadata edits are typed Vault Core commands too. Editing Source title, default sensitivity, or passive-capture long-term retention refreshes normalized Source projection, writes a `source_updated` audit event, and cancels existing Context Packs that included linked Facts because their provenance labels or Source exposure policy may now be stale.
 
-Source body edits use a separate re-extraction command. Updating Raw Source text re-runs secret redaction and candidate extraction, archives old unapproved candidates from that Source, creates new MemoryCandidates only, and moves linked active Facts to `needs_review` with `source_updated` metadata. The command never rewrites an ApprovedFact automatically. Any existing Context Pack that included affected Facts is cancelled before another AI client can use it.
+Source body edits use a separate re-extraction command. Updating Raw Source text re-runs secret redaction and candidate extraction, archives old unapproved candidates from that Source, creates new MemoryCandidates only, and moves linked active Facts to `needs_review` with `source_updated` metadata before conflict annotation so the app does not self-conflict against the same updated Source. The command never rewrites an ApprovedFact automatically. Any existing Context Pack that included affected Facts is cancelled before another AI client can use it.
 
 ### Passive Capture
 
@@ -493,7 +496,7 @@ Failed LLM output must not create candidates.
 
 ### Conflicting Facts
 
-New conflicting extraction creates conflict candidates.
+New conflicting extraction creates conflict candidates or annotates extracted candidates with the active Fact ids they may contradict.
 
 Approved facts are not overwritten without user action.
 

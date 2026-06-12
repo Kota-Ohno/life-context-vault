@@ -170,6 +170,8 @@ export type MemoryCandidate = {
   createdAt: string;
   reviewedAt?: string;
   createsFactIds: string[];
+  conflictWithFactIds: string[];
+  conflictReason?: string;
 };
 
 export type MemoryProposal = {

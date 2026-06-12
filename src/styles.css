@@ -1100,7 +1100,7 @@ button:focus-visible {
 
 .supersede-option {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 8px;
   color: #2b342e;
@@ -1127,6 +1127,11 @@ button:focus-visible {
   background: #fff7ed;
   color: #6f3d10;
   line-height: 1.45;
+}
+
+.warning-line.conflict-line {
+  border-color: #d9b56c;
+  background: #fff8e8;
 }
 
 .drop-zone {
