@@ -4479,24 +4479,31 @@ fn annotate_candidate_conflicts(vault: &Value, candidate: &mut Value) {
 }
 
 fn candidate_conflicts_with_fact(candidate: &Value, fact: &Value) -> bool {
+  let candidate_text = str_field(candidate, "proposedFactText");
+  let fact_text = str_field(fact, "factText");
   let candidate_date = optional_str_field(candidate, "dueDate")
-    .or_else(|| extract_yyyy_mm_dd(&str_field(candidate, "proposedFactText")));
+    .or_else(|| extract_yyyy_mm_dd(&candidate_text));
   let fact_date = optional_str_field(fact, "dueDate")
-    .or_else(|| extract_yyyy_mm_dd(&str_field(fact, "factText")));
-  let (Some(candidate_date), Some(fact_date)) = (candidate_date, fact_date) else {
-    return false;
-  };
-  if candidate_date == fact_date {
-    return false;
+    .or_else(|| extract_yyyy_mm_dd(&fact_text));
+
+  if let (Some(candidate_date), Some(fact_date)) = (candidate_date, fact_date) {
+    if candidate_date != fact_date
+      && shared_conflict_keyword_count(&candidate_text, &fact_text) >= 2
+    {
+      return true;
+    }
   }
 
-  let candidate_keywords = conflict_keywords(&str_field(candidate, "proposedFactText"));
-  let fact_keywords = conflict_keywords(&str_field(fact, "factText"));
-  candidate_keywords
+  current_value_conflicts(&candidate_text, &fact_text)
+}
+
+fn shared_conflict_keyword_count(left: &str, right: &str) -> usize {
+  let left_keywords = conflict_keywords(left);
+  let right_keywords = conflict_keywords(right);
+  left_keywords
     .iter()
-    .filter(|keyword| fact_keywords.iter().any(|existing| existing == *keyword))
+    .filter(|keyword| right_keywords.iter().any(|existing| existing == *keyword))
     .count()
-    >= 2
 }
 
 fn conflict_keywords(text: &str) -> Vec<String> {
@@ -4539,6 +4546,115 @@ fn push_conflict_keyword(keywords: &mut Vec<String>, token: &str, stop_words: &[
   if !keywords.iter().any(|keyword| keyword == token) {
     keywords.push(token.to_string());
   }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ConflictValueMarker {
+  kind: &'static str,
+  value: String,
+}
+
+fn current_value_conflicts(candidate_text: &str, fact_text: &str) -> bool {
+  let (Some(candidate_marker), Some(fact_marker)) = (
+    conflict_value_marker(candidate_text),
+    conflict_value_marker(fact_text),
+  ) else {
+    return false;
+  };
+  candidate_marker.kind == fact_marker.kind && candidate_marker.value != fact_marker.value
+}
+
+fn conflict_value_marker(text: &str) -> Option<ConflictValueMarker> {
+  let lower = text.to_lowercase();
+  let anchors: &[(&str, &[&str])] = &[
+    (
+      "address",
+      &[
+        "current address is",
+        "current address:",
+        "my address is",
+        "address:",
+        "現住所は",
+        "現在の住所は",
+        "住所は",
+        "住所:",
+      ],
+    ),
+    (
+      "provider",
+      &[
+        "current provider is",
+        "provider:",
+        "insurance provider is",
+        "insurer is",
+        "保険者は",
+        "保険会社は",
+        "契約先は",
+      ],
+    ),
+    (
+      "employer",
+      &[
+        "current employer is",
+        "employer:",
+        "workplace is",
+        "勤務先は",
+        "現在の勤務先は",
+        "職場は",
+        "会社は",
+      ],
+    ),
+    (
+      "contact",
+      &[
+        "phone is",
+        "phone:",
+        "email is",
+        "email:",
+        "電話番号は",
+        "メールアドレスは",
+      ],
+    ),
+  ];
+
+  for &(kind, kind_anchors) in anchors {
+    for &anchor in kind_anchors {
+      if let Some(index) = lower.find(anchor) {
+        let raw_value = &lower[index + anchor.len()..];
+        if let Some(value) = normalize_conflict_value(raw_value) {
+          return Some(ConflictValueMarker { kind, value });
+        }
+      }
+    }
+  }
+  None
+}
+
+fn normalize_conflict_value(raw_value: &str) -> Option<String> {
+  let value = raw_value
+    .split(|character| matches!(character, '.' | '。' | '\n' | '\r' | ';' | '；'))
+    .next()
+    .unwrap_or_default()
+    .trim_matches(|character: char| {
+      character.is_whitespace()
+        || matches!(character, ':' | '：' | '-' | '=' | ',' | '、' | '"' | '\'')
+    })
+    .trim();
+  let mut normalized = value.to_string();
+  for prefix in ["the ", "a ", "an "] {
+    if let Some(stripped) = normalized.strip_prefix(prefix) {
+      normalized = stripped.trim().to_string();
+    }
+  }
+  for suffix in ["です", "である", "になります"] {
+    if let Some(stripped) = normalized.strip_suffix(suffix) {
+      normalized = stripped.trim().to_string();
+    }
+  }
+  if normalized.chars().count() < 3 {
+    return None;
+  }
+  Some(normalized.chars().take(120).collect())
 }
 
 fn looks_like_contact_point(text: &str) -> bool {
@@ -8197,6 +8313,64 @@ mod tests {
       "manual_entry",
       "New policy note",
       "Insurance policy renews on 2027-08-31.",
+    )
+    .expect("new source ingest");
+    let saved: Value = serde_json::from_str(&new_source.payload).expect("saved vault json");
+    let candidate = find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0])
+      .expect("candidate");
+    let old_fact = find_vault_item_by_id(&saved, "facts", &old_fact_id).expect("old fact");
+
+    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("active"));
+    assert_eq!(
+      candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      json!([old_fact_id.clone()])
+    );
+    assert!(candidate
+      .get("conflictReason")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .contains("既存のActive Fact"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_conflicts: String = connection
+      .query_row(
+        "SELECT conflict_with_fact_ids FROM memory_candidates WHERE id = ?1",
+        params![new_source.candidate_ids[0].clone()],
+        |row| row.get(0),
+      )
+      .expect("normalized candidate conflicts");
+
+    assert!(normalized_conflicts.contains(&old_fact_id));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_ingest_marks_current_value_conflict_without_date() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-current-value-conflict");
+    let old_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Old address note",
+      "Current address: 1 Main Street, Apt 2.",
+    )
+    .expect("old source ingest");
+    let old_candidate_id = old_source
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("old candidate id");
+    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
+      .expect("approve old candidate");
+    let old_fact_id = old_review.fact_id.expect("old fact id");
+
+    let new_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "New address note",
+      "Current address: 2 Oak Avenue.",
     )
     .expect("new source ingest");
     let saved: Value = serde_json::from_str(&new_source.payload).expect("saved vault json");

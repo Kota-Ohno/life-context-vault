@@ -200,6 +200,7 @@ Last updated: 2026-06-12
   - Inbox shows same-domain active Facts as explicit replacement choices, and Search shows superseded Facts in a separate human-only history section
 - Added conservative automatic conflict annotation for MemoryCandidates:
   - new Source, Passive Capture, and MCP memory proposal candidates compare domain, detected date, and key terms against active Facts
+  - current-value anchors also catch likely replacements for current address, provider, employer, phone, and email even when the candidate has no explicit date
   - conflicting candidates persist `conflictWithFactIds` and `conflictReason` in the JSON snapshot and normalized `memory_candidates` table
   - Inbox shows a conflict badge, warning copy, and prioritizes the suspected old Fact in the explicit replacement choices
   - Source body re-extraction moves linked Facts to `needs_review` before conflict annotation so regenerated candidates do not self-conflict against the same edited Source
@@ -228,7 +229,7 @@ Last updated: 2026-06-12
 - Public HTTPS deployment and durable hosted relay domain.
 - Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, and backup controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
-- Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
+- Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - CI-hosted or scheduled retrieval performance tracking; local release qualification now has an explicit product check wrapper, while the 100k Fact / 500k SourceChunk benchmark remains opt-in because of dataset size.
 
 ## Verification
@@ -272,7 +273,7 @@ Last updated: 2026-06-12
 - Native Fact metadata tests proving edits sync FTS, clear blank date fields, reject `secret_never_send`, and invalidate affected Context Packs
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
 - Native Candidate supersede tests proving approval can mark selected old Facts as `superseded`, write version links, invalidate affected Context Packs, and keep superseded Facts out of active search
-- Native Candidate conflict tests proving new conflicting candidates record active Fact ids/reasons, remain unapproved, and do not change the old Fact
+- Native Candidate conflict tests proving new conflicting candidates record active Fact ids/reasons, remain unapproved, and do not change the old Fact, including current-value conflicts without dates
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
@@ -389,6 +390,11 @@ Last updated: 2026-06-12
 - Candidate Conflict security review: accepted; conflict metadata does not make candidates AI-eligible, does not send Raw Source text, and does not supersede old Facts without explicit user approval.
 - Candidate Conflict technical review: accepted; TypeScript fallback and Rust Vault Core both annotate candidates, sync normalized conflict columns, and avoid self-conflict during Source body re-extraction.
 - Candidate Conflict UX review: accepted; desktop and mobile Inbox surfaces show conflict state and replacement action without horizontal overflow.
+- Current-Value Conflict review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, privacy, technical, and false-positive-risk passes.
+- Current-Value Conflict product review: accepted; current address, provider, employer, phone, and email changes are central life context updates, and users should see replacement pressure even when no date is present.
+- Current-Value Conflict privacy review: accepted; the marker logic runs locally, only stores conflict metadata on MemoryCandidates, and does not expose candidate text to AI or mutate ApprovedFacts.
+- Current-Value Conflict false-positive review: accepted; deterministic anchors are intentionally conservative and any match remains review-only, so a mistaken conflict can be ignored without changing the canonical Fact.
+- Current-Value Conflict verification: `cargo test --manifest-path src-tauri/Cargo.toml native_source_ingest_marks_current_value_conflict_without_date` and `npm run product:check` passed. `cargo fmt` was skipped inside `product:check` because rustfmt is not installed for the local stable toolchain.
 - Context Pack Minimization review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
 - Context Pack Minimization product review: accepted; users can now remove individual Facts from a task-specific Pack without hiding the canonical Fact globally.
 - Context Pack Minimization security review: accepted; removed items stay in `excludedItems` as `user_hidden`, source snippets and max sensitivity are recalculated, and external AI retrieves only the confirmed edited Pack.

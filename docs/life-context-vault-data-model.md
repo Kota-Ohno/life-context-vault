@@ -655,6 +655,8 @@ A conflict exists when a new source or candidate materially disagrees with an ac
 - Eligibility or benefit status
 - Required procedure
 
+Deterministic conflict detection may use conservative current-value anchors for current address, provider, employer, phone, and email. These markers only annotate MemoryCandidates and must not rewrite, hide, or supersede ApprovedFacts without an explicit user review action.
+
 Conflict resolution options:
 
 - Keep existing fact.
