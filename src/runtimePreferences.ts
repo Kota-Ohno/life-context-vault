@@ -5,13 +5,19 @@ export interface RuntimePreferences {
   ocrCommand: string;
   ocrArgs: string;
   ocrTimeoutSeconds: number;
+  legacyOfficeCommand: string;
+  legacyOfficeArgs: string;
+  legacyOfficeTimeoutSeconds: number;
 }
 
 const defaultRuntimePreferences: RuntimePreferences = {
   autoStartAiAccess: false,
   ocrCommand: "",
   ocrArgs: "{input}",
-  ocrTimeoutSeconds: 30
+  ocrTimeoutSeconds: 30,
+  legacyOfficeCommand: "",
+  legacyOfficeArgs: "--headless --convert-to {target_ext} --outdir {output_dir} {input}",
+  legacyOfficeTimeoutSeconds: 60
 };
 
 export function loadRuntimePreferences(): RuntimePreferences {

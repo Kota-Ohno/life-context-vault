@@ -160,9 +160,11 @@ Initial command behavior:
 - Save a RawSource with provenance, origin, sensitivity, and deletion state.
 - Accept text-like uploads in the browser path and use the Desktop native extractor for PDF, DOCX, PPTX, XLSX, and OpenDocument files.
 - Accept image uploads only when the Desktop app has an explicitly configured local OCR provider, either from Settings runtime preferences or `LCV_OCR_COMMAND`; otherwise reject images before RawSource creation.
-- Reject legacy Office binaries, unsupported archives, unreadable documents, and oversized files before RawSource creation so garbled text cannot become MemoryCandidates.
+- Accept legacy Office binaries only when the Desktop app has an explicitly configured local conversion provider, either from Settings runtime preferences or `LCV_LEGACY_OFFICE_COMMAND`; otherwise reject them before RawSource creation.
+- Reject unsupported archives, unreadable documents, and oversized files before RawSource creation so garbled text cannot become MemoryCandidates.
 - Bound native extraction by input byte size, ZIP entry size, ZIP entry count, and extracted text size to reduce zip-bomb and huge-document risk.
 - Bound OCR provider execution with an input temp file, stdout-only text ingestion, UTF-8 output requirement, and a short timeout so a hung provider cannot block the Vault indefinitely.
+- Bound legacy Office conversion provider execution with a private temp directory, no shell expansion, a short timeout, and re-validation of the converted output before native extraction.
 - Preserve line boundaries for candidate extraction after secret redaction.
 - Generate MemoryCandidates only; never create ApprovedFacts directly.
 - Redact secret indicators and adjacent secret values before persistence.

@@ -212,7 +212,7 @@ struct NativeSourceIngestResult {
   generated_by: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeDocumentExtractionResult {
   text: String,
@@ -227,6 +227,8 @@ struct NativeDocumentExtractionCapabilities {
   native_document_extraction: bool,
   ocr_extraction: bool,
   ocr_provider_label: Option<String>,
+  legacy_office_conversion: bool,
+  legacy_office_provider_label: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -4228,6 +4230,7 @@ enum NativeDocumentKind {
   Xlsx,
   OpenDocument,
   ImageOcr,
+  LegacyOffice,
 }
 
 impl NativeDocumentKind {
@@ -4240,12 +4243,20 @@ impl NativeDocumentKind {
       NativeDocumentKind::Xlsx => "xlsx",
       NativeDocumentKind::OpenDocument => "opendocument",
       NativeDocumentKind::ImageOcr => "image_ocr",
+      NativeDocumentKind::LegacyOffice => "legacy_office_converted",
     }
   }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OcrCommandConfig {
+  command: String,
+  args: Vec<String>,
+  timeout: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LegacyOfficeCommandConfig {
   command: String,
   args: Vec<String>,
   timeout: Duration,
@@ -4261,11 +4272,38 @@ impl OcrCommandConfig {
   }
 }
 
+impl LegacyOfficeCommandConfig {
+  fn label(&self) -> String {
+    Path::new(&self.command)
+      .file_name()
+      .and_then(|value| value.to_str())
+      .unwrap_or(&self.command)
+      .to_string()
+  }
+}
+
+#[cfg(test)]
 fn extract_native_document_text_from_base64_with_ocr_config(
   file_name: &str,
   mime_type: &str,
   content_base64: &str,
   ocr_config: Option<OcrCommandConfig>,
+) -> Result<NativeDocumentExtractionResult, String> {
+  extract_native_document_text_from_base64_with_configs(
+    file_name,
+    mime_type,
+    content_base64,
+    ocr_config,
+    legacy_office_config_from_env(),
+  )
+}
+
+fn extract_native_document_text_from_base64_with_configs(
+  file_name: &str,
+  mime_type: &str,
+  content_base64: &str,
+  ocr_config: Option<OcrCommandConfig>,
+  legacy_office_config: Option<LegacyOfficeCommandConfig>,
 ) -> Result<NativeDocumentExtractionResult, String> {
   let payload = content_base64
     .split_once(',')
@@ -4284,36 +4322,21 @@ fn extract_native_document_text_from_base64_with_ocr_config(
   let kind = detect_native_document_kind(file_name, mime_type, &bytes)?;
   let mut warnings = Vec::new();
   let text = match kind {
-    NativeDocumentKind::Text => extract_plain_text_document(&bytes)?,
-    NativeDocumentKind::Pdf => pdf_extract::extract_text_from_mem(&bytes)
-      .map_err(|error| format!("PDF本文を抽出できませんでした: {error}"))?,
-    NativeDocumentKind::Docx => {
-      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_docx_text_entry)?;
-      warnings.extend(document_warnings);
-      text
-    }
-    NativeDocumentKind::Pptx => {
-      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_pptx_text_entry)?;
-      warnings.extend(document_warnings);
-      text
-    }
-    NativeDocumentKind::Xlsx => {
-      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_xlsx_text_entry)?;
-      warnings.extend(document_warnings);
-      text
-    }
-    NativeDocumentKind::OpenDocument => {
-      let (text, document_warnings) =
-        extract_zip_xml_document_text(&bytes, is_opendocument_text_entry)?;
-      warnings.extend(document_warnings);
-      text
-    }
-    NativeDocumentKind::ImageOcr => extract_image_ocr_document(
+    NativeDocumentKind::LegacyOffice => extract_legacy_office_document(
       file_name,
       mime_type,
       &bytes,
       &mut warnings,
-      ocr_config,
+      legacy_office_config.as_ref(),
+      ocr_config.as_ref(),
+    )?,
+    _ => extract_standard_native_document_text(
+      kind,
+      file_name,
+      mime_type,
+      &bytes,
+      &mut warnings,
+      ocr_config.as_ref(),
     )?,
   };
   let text = normalize_extracted_document_text(text, &mut warnings)?;
@@ -4322,6 +4345,52 @@ fn extract_native_document_text_from_base64_with_ocr_config(
     detected_kind: kind.label().to_string(),
     warnings,
     generated_by: "native_document_extractor".to_string(),
+  })
+}
+
+fn extract_standard_native_document_text(
+  kind: NativeDocumentKind,
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+  warnings: &mut Vec<String>,
+  ocr_config: Option<&OcrCommandConfig>,
+) -> Result<String, String> {
+  Ok(match kind {
+    NativeDocumentKind::Text => extract_plain_text_document(bytes)?,
+    NativeDocumentKind::Pdf => pdf_extract::extract_text_from_mem(bytes)
+      .map_err(|error| format!("PDF本文を抽出できませんでした: {error}"))?,
+    NativeDocumentKind::Docx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(bytes, is_docx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::Pptx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(bytes, is_pptx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::Xlsx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(bytes, is_xlsx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::OpenDocument => {
+      let (text, document_warnings) =
+        extract_zip_xml_document_text(bytes, is_opendocument_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::ImageOcr => extract_image_ocr_document(
+      file_name,
+      mime_type,
+      bytes,
+      warnings,
+      ocr_config.cloned(),
+    )?,
+    NativeDocumentKind::LegacyOffice => {
+      return Err("旧Office文書は変換Provider経由でのみ抽出できます。".to_string())
+    }
   })
 }
 
@@ -4387,10 +4456,7 @@ fn detect_native_document_kind(
   if matches!(extension.as_str(), "doc" | "xls" | "ppt")
     || bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0])
   {
-    return Err(
-      "旧Officeバイナリ形式はまだ安全に抽出しません。DOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。"
-        .to_string(),
-    );
+    return Ok(NativeDocumentKind::LegacyOffice);
   }
   if is_zip {
     return Err("ZIP系文書として検出しましたが、対応するOffice/OpenDocument形式ではありません。".to_string());
@@ -4452,6 +4518,61 @@ fn ocr_command_config_from_input(
   timeout_seconds: Option<u64>,
 ) -> Option<OcrCommandConfig> {
   command.and_then(|command| ocr_command_config_from_parts(command, args, timeout_seconds))
+}
+
+fn legacy_office_config_from_env() -> Option<LegacyOfficeCommandConfig> {
+  let command = env::var("LCV_LEGACY_OFFICE_COMMAND").ok()?;
+  let timeout_seconds = env::var("LCV_LEGACY_OFFICE_TIMEOUT_SECONDS")
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok());
+  legacy_office_command_config_from_parts(
+    &command,
+    env::var("LCV_LEGACY_OFFICE_ARGS").ok().as_deref(),
+    timeout_seconds,
+  )
+}
+
+fn legacy_office_command_config_from_parts(
+  command: &str,
+  args: Option<&str>,
+  timeout_seconds: Option<u64>,
+) -> Option<LegacyOfficeCommandConfig> {
+  let command = command.trim();
+  if command.is_empty() {
+    return None;
+  }
+  let args = args
+    .map(|value| {
+      value
+        .split_whitespace()
+        .filter(|part| !part.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    })
+    .filter(|args| !args.is_empty())
+    .unwrap_or_else(|| {
+      vec![
+        "--headless".to_string(),
+        "--convert-to".to_string(),
+        "{target_ext}".to_string(),
+        "--outdir".to_string(),
+        "{output_dir}".to_string(),
+        "{input}".to_string(),
+      ]
+    });
+  Some(LegacyOfficeCommandConfig {
+    command: command.to_string(),
+    args,
+    timeout: ocr_timeout_from_value(timeout_seconds),
+  })
+}
+
+fn legacy_office_command_config_from_input(
+  command: Option<&str>,
+  args: Option<&str>,
+  timeout_seconds: Option<u64>,
+) -> Option<LegacyOfficeCommandConfig> {
+  command.and_then(|command| legacy_office_command_config_from_parts(command, args, timeout_seconds))
 }
 
 fn detect_ocr_provider_candidates_from_sources(
@@ -4535,6 +4656,177 @@ fn ocr_config_or_env(config: Option<OcrCommandConfig>) -> Option<OcrCommandConfi
   config.or_else(ocr_command_config_from_env)
 }
 
+fn legacy_office_config_or_env(
+  config: Option<&LegacyOfficeCommandConfig>,
+) -> Option<LegacyOfficeCommandConfig> {
+  config.cloned().or_else(legacy_office_config_from_env)
+}
+
+fn extract_legacy_office_document(
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+  warnings: &mut Vec<String>,
+  legacy_office_config: Option<&LegacyOfficeCommandConfig>,
+  ocr_config: Option<&OcrCommandConfig>,
+) -> Result<String, String> {
+  let config = legacy_office_config_or_env(legacy_office_config);
+  let config = config.as_ref().ok_or_else(|| {
+    "旧Office変換Providerが設定されていません。LibreOffice等でDOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。"
+      .to_string()
+  })?;
+  let target_ext = legacy_office_target_extension(file_name, mime_type)?;
+  let (temp_dir, input_path, output_path) =
+    write_legacy_office_temp_input(file_name, target_ext, bytes)?;
+  let input_path_text = input_path.display().to_string();
+  let output_dir_text = temp_dir.display().to_string();
+  let output_path_text = output_path.display().to_string();
+  let mut command = Command::new(&config.command);
+  command.env_clear();
+  if let Some(path) = env::var_os("PATH") {
+    command.env("PATH", path);
+  }
+  command.env("LC_ALL", "C.UTF-8");
+  command.env("LANG", "C.UTF-8");
+  for arg in &config.args {
+    command.arg(
+      arg
+        .replace("{input}", &input_path_text)
+        .replace("{output_dir}", &output_dir_text)
+        .replace("{output}", &output_path_text)
+        .replace("{target_ext}", target_ext)
+        .replace("{mime}", mime_type)
+        .replace("{file_name}", file_name),
+    );
+  }
+  command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+  let output = run_command_with_timeout(&mut command, config.timeout, "旧Office変換Provider");
+  let converted_bytes = match output {
+    Ok(output) if output.status.success() => {
+      if !output_path.exists() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("旧Office変換Providerは完了しましたが、変換後ファイルが見つかりませんでした。引数の{output_dir}/{output}設定を確認してください。".to_string());
+      }
+      fs::read(&output_path)
+        .map_err(|error| format!("変換後Office文書を読めませんでした: {error}"))?
+    }
+    Ok(_) => {
+      let _ = fs::remove_dir_all(&temp_dir);
+      return Err("旧Office変換Providerが変換に失敗しました。コマンド、引数、対応ファイル形式を確認してください。".to_string());
+    }
+    Err(error) => {
+      let _ = fs::remove_dir_all(&temp_dir);
+      return Err(error);
+    }
+  };
+  let _ = fs::remove_dir_all(&temp_dir);
+  if converted_bytes.len() > MAX_NATIVE_DOCUMENT_BYTES {
+    return Err(format!(
+      "変換後Office文書が大きすぎます。ローカル抽出は{}MBまでです。",
+      MAX_NATIVE_DOCUMENT_BYTES / 1024 / 1024
+    ));
+  }
+  let converted_name = output_path
+    .file_name()
+    .and_then(|value| value.to_str())
+    .unwrap_or(file_name)
+    .to_string();
+  let converted_kind = detect_native_document_kind(&converted_name, "", &converted_bytes)?;
+  if converted_kind == NativeDocumentKind::LegacyOffice {
+    return Err("旧Office変換Providerの出力が旧Office形式のままでした。DOCX/PPTX/XLSX/PDFへ変換する設定にしてください。".to_string());
+  }
+  warnings.push(format!(
+    "旧Office文書はローカル変換Provider `{}` で{}へ変換してから抽出しました。保存前に候補を確認してください。",
+    config.label(),
+    target_ext.to_uppercase()
+  ));
+  extract_standard_native_document_text(
+    converted_kind,
+    &converted_name,
+    "",
+    &converted_bytes,
+    warnings,
+    ocr_config,
+  )
+}
+
+fn legacy_office_target_extension(file_name: &str, mime_type: &str) -> Result<&'static str, String> {
+  let extension = Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    .map(|value| value.to_lowercase())
+    .unwrap_or_default();
+  let mime_type = mime_type.to_lowercase();
+  if extension == "doc" || mime_type == "application/msword" {
+    return Ok("docx");
+  }
+  if extension == "xls" || mime_type == "application/vnd.ms-excel" {
+    return Ok("xlsx");
+  }
+  if extension == "ppt" || mime_type == "application/vnd.ms-powerpoint" {
+    return Ok("pptx");
+  }
+  Err("旧Office文書の種類を判定できませんでした。拡張子が.doc/.xls/.pptのファイルを指定してください。".to_string())
+}
+
+fn write_legacy_office_temp_input(
+  file_name: &str,
+  target_ext: &str,
+  bytes: &[u8],
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+  let extension = Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    .filter(|value| value.chars().all(|character| character.is_ascii_alphanumeric()))
+    .unwrap_or("doc");
+  let stem = Path::new(file_name)
+    .file_stem()
+    .and_then(|value| value.to_str())
+    .map(safe_temp_file_stem)
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "input".to_string());
+  let temp_dir = env::temp_dir().join(new_id("lcv_legacy_office"));
+  fs::create_dir(&temp_dir)
+    .map_err(|error| format!("旧Office変換一時ディレクトリを準備できませんでした: {error}"))?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700));
+  }
+  let input_path = temp_dir.join(format!("{stem}.{extension}"));
+  {
+    let mut file = fs::OpenOptions::new()
+      .write(true)
+      .create_new(true)
+      .open(&input_path)
+      .map_err(|error| format!("旧Office変換入力ファイルを準備できませんでした: {error}"))?;
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
+    file
+      .write_all(bytes)
+      .map_err(|error| format!("旧Office変換入力ファイルを書き込めませんでした: {error}"))?;
+  }
+  let output_path = temp_dir.join(format!("{stem}.{target_ext}"));
+  Ok((temp_dir, input_path, output_path))
+}
+
+fn safe_temp_file_stem(value: &str) -> String {
+  value
+    .chars()
+    .map(|character| {
+      if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+        character
+      } else {
+        '_'
+      }
+    })
+    .collect()
+}
+
 fn extract_image_ocr_document(
   file_name: &str,
   mime_type: &str,
@@ -4593,7 +4885,7 @@ fn extract_image_ocr_document_with_config(
   }
   command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-  let output = run_command_with_timeout(&mut command, config.timeout);
+  let output = run_command_with_timeout(&mut command, config.timeout, "OCR Provider");
   let _ = fs::remove_dir_all(&temp_dir);
   let output = output?;
   if !output.status.success() {
@@ -4645,20 +4937,24 @@ fn write_ocr_temp_input(file_name: &str, bytes: &[u8]) -> Result<(PathBuf, PathB
   Ok((temp_dir, input_path))
 }
 
-fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {
+fn run_command_with_timeout(
+  command: &mut Command,
+  timeout: Duration,
+  provider_label: &str,
+) -> Result<Output, String> {
   let mut child = command
     .spawn()
-    .map_err(|error| format!("OCR Providerを起動できませんでした: {error}"))?;
+    .map_err(|error| format!("{provider_label}を起動できませんでした: {error}"))?;
   let started_at = SystemTime::now();
   loop {
     match child
       .try_wait()
-      .map_err(|error| format!("OCR Providerの状態を確認できませんでした: {error}"))?
+      .map_err(|error| format!("{provider_label}の状態を確認できませんでした: {error}"))?
     {
       Some(_) => {
         return child
           .wait_with_output()
-          .map_err(|error| format!("OCR Providerの出力を読めませんでした: {error}"));
+          .map_err(|error| format!("{provider_label}の出力を読めませんでした: {error}"));
       }
       None => {
         let elapsed = started_at.elapsed().unwrap_or_default();
@@ -4666,7 +4962,7 @@ fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Result<
           let _ = child.kill();
           let _ = child.wait();
           return Err(format!(
-            "OCR Providerが{}秒以内に完了しなかったため停止しました。",
+            "{provider_label}が{}秒以内に完了しなかったため停止しました。",
             timeout.as_secs()
           ));
         }
@@ -7083,27 +7379,39 @@ fn extract_native_document_text(
   ocr_command: Option<String>,
   ocr_args: Option<String>,
   ocr_timeout_seconds: Option<u64>,
+  legacy_office_command: Option<String>,
+  legacy_office_args: Option<String>,
+  legacy_office_timeout_seconds: Option<u64>,
 ) -> Result<NativeDocumentExtractionResult, String> {
   let ocr_config = ocr_command_config_from_input(
     ocr_command.as_deref(),
     ocr_args.as_deref(),
     ocr_timeout_seconds,
   );
-  extract_native_document_text_from_base64_with_ocr_config(
+  let legacy_office_config = legacy_office_command_config_from_input(
+    legacy_office_command.as_deref(),
+    legacy_office_args.as_deref(),
+    legacy_office_timeout_seconds,
+  );
+  extract_native_document_text_from_base64_with_configs(
     &file_name,
     &mime_type,
     &content_base64,
     ocr_config,
+    legacy_office_config,
   )
 }
 
 #[tauri::command]
 fn native_document_extraction_capabilities() -> NativeDocumentExtractionCapabilities {
   let ocr_config = ocr_command_config_from_env();
+  let legacy_office_config = legacy_office_config_from_env();
   NativeDocumentExtractionCapabilities {
     native_document_extraction: true,
     ocr_extraction: ocr_config.is_some(),
     ocr_provider_label: ocr_config.map(|config| config.label()),
+    legacy_office_conversion: legacy_office_config.is_some(),
+    legacy_office_provider_label: legacy_office_config.map(|config| config.label()),
   }
 }
 
@@ -7642,6 +7950,71 @@ mod tests {
       .text
       .contains("Contact the insurer before moving address."));
     assert_eq!(result.generated_by, "native_document_extractor");
+  }
+
+  #[test]
+  fn native_document_extraction_refuses_legacy_office_without_converter() {
+    let result = extract_native_document_text_from_base64_with_configs(
+      "old-benefits.doc",
+      "application/msword",
+      &STANDARD.encode([0xD0, 0xCF, 0x11, 0xE0, 0x00]),
+      None,
+      None,
+    );
+    let error = result.expect_err("legacy office should require converter");
+    assert!(error.contains("旧Office変換Provider"));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn native_document_extraction_converts_legacy_office_with_local_provider() {
+    let docx_bytes = zipped_document(&[(
+      "word/document.xml",
+      r#"
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p><w:r><w:t>Legacy pension document renews on 2028-04-01.</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+      "#,
+    )]);
+    let temp_dir = env::temp_dir().join(new_id("lcv_legacy_office_test"));
+    fs::create_dir_all(&temp_dir).expect("test temp dir");
+    let fixture_path = temp_dir.join("converted.docx");
+    fs::write(&fixture_path, docx_bytes).expect("fixture docx");
+    let script_path = temp_dir.join("convert.sh");
+    fs::write(
+      &script_path,
+      format!("#!/bin/sh\ncp '{}' \"$1\"\n", fixture_path.display()),
+    )
+    .expect("converter script");
+    {
+      use std::os::unix::fs::PermissionsExt;
+      fs::set_permissions(&script_path, fs::Permissions::from_mode(0o700)).expect("script chmod");
+    }
+    let config = LegacyOfficeCommandConfig {
+      command: script_path.to_string_lossy().to_string(),
+      args: vec!["{output}".to_string()],
+      timeout: Duration::from_secs(5),
+    };
+    let result = extract_native_document_text_from_base64_with_configs(
+      "old-benefits.doc",
+      "application/msword",
+      &STANDARD.encode([0xD0, 0xCF, 0x11, 0xE0, 0x00]),
+      None,
+      Some(config),
+    )
+    .expect("legacy office conversion");
+
+    assert_eq!(result.detected_kind, "legacy_office_converted");
+    assert!(result
+      .text
+      .contains("Legacy pension document renews on 2028-04-01."));
+    assert!(result
+      .warnings
+      .iter()
+      .any(|warning| warning.contains("旧Office文書")));
+    let _ = fs::remove_dir_all(temp_dir);
   }
 
   #[test]

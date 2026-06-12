@@ -102,7 +102,8 @@ export function describeTextSourceFile(
 export function describeSourceFile(
   file: Pick<File, "name" | "size" | "type">,
   nativeExtractionAvailable: boolean,
-  ocrExtractionAvailable = false
+  ocrExtractionAvailable = false,
+  legacyOfficeConversionAvailable = false
 ): SourceFileDecision {
   const extension = fileExtension(file.name);
   const mimeType = file.type.toLowerCase();
@@ -138,6 +139,10 @@ export function describeSourceFile(
     legacyOfficeMimeTypes.has(mimeType) ||
     LEGACY_OFFICE_EXTENSIONS.includes(extension as (typeof LEGACY_OFFICE_EXTENSIONS)[number])
   ) {
+    if (file.size > MAX_NATIVE_DOCUMENT_SOURCE_BYTES) return { supported: false, reason: "too_large" };
+    if (nativeExtractionAvailable && legacyOfficeConversionAvailable) {
+      return { supported: true, extraction: "native_document" };
+    }
     return { supported: false, reason: "legacy_office" };
   }
 

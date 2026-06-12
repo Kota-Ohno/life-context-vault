@@ -118,6 +118,18 @@ describe("source upload safety", () => {
         true
       )
     ).toEqual({ supported: false, reason: "legacy_office" });
+    expect(
+      describeSourceFile(
+        {
+          name: "old-benefits.doc",
+          size: 420,
+          type: "application/msword"
+        },
+        true,
+        false,
+        true
+      )
+    ).toEqual({ supported: true, extraction: "native_document" });
   });
 
   it("rejects oversized text sources for the current local extractor", () => {

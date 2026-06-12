@@ -78,10 +78,14 @@ import {
 import {
   MAX_NATIVE_DOCUMENT_SOURCE_BYTES,
   MAX_TEXT_SOURCE_BYTES,
+  LEGACY_OFFICE_EXTENSIONS,
+  OCR_DOCUMENT_EXTENSIONS,
   SUPPORTED_SOURCE_ACCEPT,
   SUPPORTED_SOURCE_ACCEPT_WITH_OCR,
   SUPPORTED_SOURCE_LABEL,
   SUPPORTED_SOURCE_LABEL_WITH_OCR,
+  SUPPORTED_TEXT_SOURCE_EXTENSIONS,
+  SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS,
   describeSourceFile,
   formatFileSize,
   looksLikeReadableText
@@ -591,13 +595,23 @@ export function App() {
   const configuredOcrCommand = runtimePreferences.ocrCommand.trim();
   const configuredOcrArgs = runtimePreferences.ocrArgs.trim();
   const configuredOcrTimeoutSeconds = normalizedOcrTimeout(runtimePreferences.ocrTimeoutSeconds);
+  const configuredLegacyOfficeCommand = runtimePreferences.legacyOfficeCommand.trim();
+  const configuredLegacyOfficeArgs = runtimePreferences.legacyOfficeArgs.trim();
+  const configuredLegacyOfficeTimeoutSeconds = normalizedOcrTimeout(runtimePreferences.legacyOfficeTimeoutSeconds, 60);
   const runtimeOcrAvailable = Boolean(configuredOcrCommand);
+  const runtimeLegacyOfficeAvailable = Boolean(configuredLegacyOfficeCommand);
   const ocrExtractionAvailable = Boolean(documentExtractionCapabilities?.ocrExtraction || runtimeOcrAvailable);
+  const legacyOfficeConversionAvailable = Boolean(
+    documentExtractionCapabilities?.legacyOfficeConversion || runtimeLegacyOfficeAvailable
+  );
   const ocrProviderLabel = runtimeOcrAvailable
     ? ocrProviderLabelFromCommand(configuredOcrCommand)
     : documentExtractionCapabilities?.ocrProviderLabel ?? null;
-  const sourceAccept = ocrExtractionAvailable ? SUPPORTED_SOURCE_ACCEPT_WITH_OCR : SUPPORTED_SOURCE_ACCEPT;
-  const sourceLabel = ocrExtractionAvailable ? SUPPORTED_SOURCE_LABEL_WITH_OCR : SUPPORTED_SOURCE_LABEL;
+  const legacyOfficeProviderLabel = runtimeLegacyOfficeAvailable
+    ? ocrProviderLabelFromCommand(configuredLegacyOfficeCommand)
+    : documentExtractionCapabilities?.legacyOfficeProviderLabel ?? null;
+  const sourceAccept = sourceAcceptForCapabilities(ocrExtractionAvailable, legacyOfficeConversionAvailable);
+  const sourceLabel = sourceLabelForCapabilities(ocrExtractionAvailable, legacyOfficeConversionAvailable);
 
   function apply(next: VaultState, message?: string) {
     setState(next);
@@ -658,7 +672,12 @@ export function App() {
   }
 
   async function handleFileUpload(file: File) {
-    const support = describeSourceFile(file, Boolean(nativePath), ocrExtractionAvailable);
+    const support = describeSourceFile(
+      file,
+      Boolean(nativePath),
+      ocrExtractionAvailable,
+      legacyOfficeConversionAvailable
+    );
     if (!support.supported) {
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
       return;
@@ -694,7 +713,10 @@ export function App() {
           contentBase64: await fileToBase64(file),
           ocrCommand: runtimeOcrAvailable ? configuredOcrCommand : null,
           ocrArgs: runtimeOcrAvailable ? configuredOcrArgs : null,
-          ocrTimeoutSeconds: runtimeOcrAvailable ? configuredOcrTimeoutSeconds : null
+          ocrTimeoutSeconds: runtimeOcrAvailable ? configuredOcrTimeoutSeconds : null,
+          legacyOfficeCommand: runtimeLegacyOfficeAvailable ? configuredLegacyOfficeCommand : null,
+          legacyOfficeArgs: runtimeLegacyOfficeAvailable ? configuredLegacyOfficeArgs : null,
+          legacyOfficeTimeoutSeconds: runtimeLegacyOfficeAvailable ? configuredLegacyOfficeTimeoutSeconds : null
         });
         if (!extracted) {
           setUploadFeedback(unsupportedFileFeedback(file, "native_required"));
@@ -1676,6 +1698,8 @@ export function App() {
             handleFileUpload={handleFileUpload}
             ocrExtractionAvailable={ocrExtractionAvailable}
             ocrProviderLabel={ocrProviderLabel}
+            legacyOfficeConversionAvailable={legacyOfficeConversionAvailable}
+            legacyOfficeProviderLabel={legacyOfficeProviderLabel}
             sourceAccept={sourceAccept}
             sourceLabel={sourceLabel}
             uploadFeedback={uploadFeedback}
@@ -2271,6 +2295,8 @@ function SourcesView({
   handleFileUpload,
   ocrExtractionAvailable,
   ocrProviderLabel,
+  legacyOfficeConversionAvailable,
+  legacyOfficeProviderLabel,
   sourceAccept,
   sourceLabel,
   uploadFeedback,
@@ -2289,6 +2315,8 @@ function SourcesView({
   handleFileUpload: (file: File) => void;
   ocrExtractionAvailable: boolean;
   ocrProviderLabel: string | null;
+  legacyOfficeConversionAvailable: boolean;
+  legacyOfficeProviderLabel: string | null;
   sourceAccept: string;
   sourceLabel: string;
   uploadFeedback: UploadFeedback | null;
@@ -2386,7 +2414,10 @@ function SourcesView({
             PDF/OfficeはDesktopでローカル抽出します。
             {ocrExtractionAvailable
               ? ` 画像は ${ocrProviderLabel ?? "OCR Provider"} をローカル実行して抽出し、Inbox候補として確認します。`
-              : " 画像OCRと旧Office形式は、誤記憶を避けるためProvider接続までSource化しません。"}
+              : " 画像OCRは、誤記憶を避けるためProvider接続までSource化しません。"}
+            {legacyOfficeConversionAvailable
+              ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Legacy Office Provider"} でローカル変換してから抽出します。`
+              : " 旧Office形式は、誤記憶を避けるため変換Provider接続までSource化しません。"}
           </span>
         </div>
       </div>
@@ -3885,7 +3916,9 @@ function SettingsView({
   copyText: (value: string, message: string) => Promise<boolean>;
 }) {
   const hasOcrCommand = Boolean(runtimePreferences.ocrCommand.trim());
+  const hasLegacyOfficeCommand = Boolean(runtimePreferences.legacyOfficeCommand.trim());
   const ocrInstallGuides = ocrInstallerGuidesForPlatform();
+  const legacyOfficeInstallGuides = legacyOfficeInstallGuidesForPlatform();
   return (
     <section className="view-grid">
       <div className="panel">
@@ -3907,6 +3940,104 @@ function SettingsView({
             <Upload size={16} />
             Restore
           </button>
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Legacy Office conversion</p>
+            <h3>DOC / XLS / PPTを変換して読む</h3>
+          </div>
+          <Badge>{hasLegacyOfficeCommand ? "configured" : "off"}</Badge>
+        </div>
+        <div className="form-stack">
+          <div className="trust-note">
+            <ShieldCheck size={16} />
+            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
+          </div>
+          <div className="table-list">
+            {legacyOfficeInstallGuides.map((guide) => (
+              <div className="table-row" key={guide.id}>
+                <div>
+                  <strong>{guide.label}</strong>
+                  <span>{guide.description}</span>
+                  <code>{guide.installCommand}</code>
+                </div>
+                <div className="action-row compact-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() => copyText(guide.installCommand, `${guide.label}のLibreOfficeインストールコマンドをコピーしました。`)}
+                    type="button"
+                  >
+                    <Clipboard size={16} />
+                    Copy
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateRuntimePreference({
+                        legacyOfficeCommand: guide.command,
+                        legacyOfficeArgs: guide.args,
+                        legacyOfficeTimeoutSeconds: 60
+                      })
+                    }
+                    type="button"
+                  >
+                    <Settings size={16} />
+                    パスを反映
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Input
+            label="Command"
+            value={runtimePreferences.legacyOfficeCommand}
+            onChange={(value) => updateRuntimePreference({ legacyOfficeCommand: value })}
+            placeholder="/Applications/LibreOffice.app/Contents/MacOS/soffice"
+          />
+          <Textarea
+            label="Arguments"
+            value={runtimePreferences.legacyOfficeArgs}
+            onChange={(value) => updateRuntimePreference({ legacyOfficeArgs: value })}
+            placeholder="--headless --convert-to {target_ext} --outdir {output_dir} {input}"
+          />
+          <Input
+            label="Timeout seconds"
+            value={String(runtimePreferences.legacyOfficeTimeoutSeconds)}
+            onChange={(value) =>
+              updateRuntimePreference({ legacyOfficeTimeoutSeconds: normalizedOcrTimeout(Number(value), 60) })
+            }
+            type="number"
+          />
+          <div className="action-row">
+            <button
+              className="secondary-button"
+              onClick={() =>
+                updateRuntimePreference({
+                  legacyOfficeArgs: "--headless --convert-to {target_ext} --outdir {output_dir} {input}"
+                })
+              }
+              type="button"
+            >
+              <Settings size={16} />
+              LibreOffice引数
+            </button>
+            <button
+              className="danger-button"
+              onClick={() =>
+                updateRuntimePreference({
+                  legacyOfficeCommand: "",
+                  legacyOfficeArgs: "--headless --convert-to {target_ext} --outdir {output_dir} {input}",
+                  legacyOfficeTimeoutSeconds: 60
+                })
+              }
+              type="button"
+            >
+              <X size={16} />
+              Clear
+            </button>
+          </div>
         </div>
       </div>
       <div className="panel">
@@ -4017,7 +4148,7 @@ function SettingsView({
             onChange={(value) => updateRuntimePreference({ ocrCommand: value })}
             placeholder="/opt/homebrew/bin/tesseract"
           />
-          <Input
+          <Textarea
             label="Arguments"
             value={runtimePreferences.ocrArgs}
             onChange={(value) => updateRuntimePreference({ ocrArgs: value })}
@@ -4570,8 +4701,8 @@ function unsupportedFileFeedback(
   if (reason === "legacy_office") {
     return {
       tone: "attention",
-      title: "旧Office形式は変換してください",
-      body: `${file.name} は旧Officeバイナリ形式です。DOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。`
+      title: "旧Office変換はまだ未接続です",
+      body: `${file.name} は旧Officeバイナリ形式です。SettingsのLegacy Office conversionでLibreOffice等を設定するか、DOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。`
     };
   }
   return {
@@ -4605,6 +4736,8 @@ function documentExtractionLabel(kind: string): string {
       return "OpenDocument";
     case "image_ocr":
       return "画像OCR";
+    case "legacy_office_converted":
+      return "旧Office変換済み文書";
     case "text":
       return "テキスト";
     default:
@@ -4612,8 +4745,35 @@ function documentExtractionLabel(kind: string): string {
   }
 }
 
-function normalizedOcrTimeout(value: number): number {
-  if (!Number.isFinite(value)) return 30;
+function sourceAcceptForCapabilities(
+  ocrExtractionAvailable: boolean,
+  legacyOfficeConversionAvailable: boolean
+): string {
+  if (!legacyOfficeConversionAvailable) {
+    return ocrExtractionAvailable ? SUPPORTED_SOURCE_ACCEPT_WITH_OCR : SUPPORTED_SOURCE_ACCEPT;
+  }
+  return [
+    ...SUPPORTED_TEXT_SOURCE_EXTENSIONS,
+    ...SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS,
+    ...LEGACY_OFFICE_EXTENSIONS,
+    ...(ocrExtractionAvailable ? OCR_DOCUMENT_EXTENSIONS : [])
+  ].join(",");
+}
+
+function sourceLabelForCapabilities(
+  ocrExtractionAvailable: boolean,
+  legacyOfficeConversionAvailable: boolean
+): string {
+  if (ocrExtractionAvailable && legacyOfficeConversionAvailable) {
+    return "TXT, PDF, Office, OpenDocument, Images";
+  }
+  if (ocrExtractionAvailable) return SUPPORTED_SOURCE_LABEL_WITH_OCR;
+  if (legacyOfficeConversionAvailable) return "TXT, PDF, Office, OpenDocument";
+  return SUPPORTED_SOURCE_LABEL;
+}
+
+function normalizedOcrTimeout(value: number, defaultValue = 30): number {
+  if (!Number.isFinite(value)) return defaultValue;
   return Math.min(120, Math.max(1, Math.round(value)));
 }
 
@@ -4666,6 +4826,49 @@ function ocrInstallerGuidesForPlatform(): OcrInstallGuide[] {
       ? "linux_apt"
       : platform.includes("mac")
         ? "mac_homebrew"
+        : "";
+  if (!preferredId) return guides;
+  return [
+    ...guides.filter((guide) => guide.id === preferredId),
+    ...guides.filter((guide) => guide.id !== preferredId)
+  ];
+}
+
+function legacyOfficeInstallGuidesForPlatform(): OcrInstallGuide[] {
+  const args = "--headless --convert-to {target_ext} --outdir {output_dir} {input}";
+  const guides: OcrInstallGuide[] = [
+    {
+      id: "mac_libreoffice",
+      label: "macOS / Homebrew",
+      description: "LibreOfficeを入れて、旧OfficeをDOCX/PPTX/XLSXへローカル変換します。",
+      installCommand: "brew install --cask libreoffice",
+      command: "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+      args
+    },
+    {
+      id: "windows_libreoffice",
+      label: "Windows / winget",
+      description: "LibreOfficeを入れます。インストール先が違う場合はCommandを修正してください。",
+      installCommand: "winget install --id TheDocumentFoundation.LibreOffice",
+      command: "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+      args
+    },
+    {
+      id: "linux_libreoffice",
+      label: "Ubuntu / apt",
+      description: "Ubuntu系Linux向けです。headless変換で旧Officeを新形式へ変換します。",
+      installCommand: "sudo apt install libreoffice",
+      command: "/usr/bin/libreoffice",
+      args
+    }
+  ];
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform.toLowerCase();
+  const preferredId = platform.includes("win")
+    ? "windows_libreoffice"
+    : platform.includes("linux")
+      ? "linux_libreoffice"
+      : platform.includes("mac")
+        ? "mac_libreoffice"
         : "";
   if (!preferredId) return guides;
   return [

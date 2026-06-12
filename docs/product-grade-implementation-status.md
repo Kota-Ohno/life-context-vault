@@ -231,12 +231,12 @@ Last updated: 2026-06-13
   - Source body re-extraction moves linked Facts to `needs_review` before conflict annotation so regenerated candidates do not self-conflict against the same edited Source
 - Added safe text-upload guard for document Sources:
   - Browser-only upload now accepts only text-like formats within the local extraction size ceiling
-  - unreadable binary content, images without OCR, legacy Office binaries, unsupported files, and oversized files are rejected before RawSource or MemoryCandidate creation
+  - unreadable binary content, images without OCR, legacy Office binaries without a configured local converter, unsupported files, and oversized files are rejected before RawSource or MemoryCandidate creation
   - the Upload card explains the safe fallback to Manual source text when local extraction or OCR/provider extraction is unavailable
 - Added native document extraction for Desktop uploads:
   - PDF, DOCX, PPTX, XLSX, and OpenDocument files are extracted locally through a Tauri Vault boundary before Source creation
   - extracted document text flows into the existing RawSource -> MemoryCandidate path and still never creates ApprovedFacts automatically
-  - native extraction rejects images without OCR Provider, legacy Office binaries, unsupported archives, unreadable files, zip-entry overages, and oversized uploads before RawSource creation
+  - native extraction rejects images without OCR Provider, legacy Office binaries without a configured local converter, unsupported archives, unreadable files, zip-entry overages, and oversized uploads before RawSource creation
   - Upload UX now explains local PDF/Office extraction separately from OCR/provider gaps
 - Added explicit local OCR provider support for Desktop image uploads:
   - images remain blocked by default unless an OCR command is configured in Settings or `LCV_OCR_COMMAND`
@@ -276,12 +276,16 @@ Last updated: 2026-06-13
   - Connections now shows the MCP endpoint, Remote/Local/Copy access routes, Context Pack boundary, and readiness checklist in one first-screen panel
   - Remote Relay diagnostics include an SSE ready check alongside health and POST header checks
   - the older duplicate Connection readiness panel was removed so users reach AI Access Service and connector policy controls faster
+- Added local Legacy Office conversion provider support:
+  - `.doc`, `.xls`, and `.ppt` remain blocked by default, but can be accepted when the user configures a local LibreOffice/soffice-style conversion command
+  - conversion runs locally in a private temp directory, then the converted DOCX/PPTX/XLSX/PDF output goes through the existing native extraction and Memory Inbox review flow
+  - Settings now includes OS-specific LibreOffice install commands, safe default conversion arguments, and clear/copy actions
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
 
 - Provisioning the actual public HTTPS Relay domain, TLS termination, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
-- Legacy Office conversion beyond the Settings/env local OCR command provider, detected OCR provider presets, and local PDF/modern Office extractor.
+- Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Remote MCP hosted-client certification, long-running SSE soak, and provider-specific connector registration against a real public HTTPS Relay.
@@ -321,8 +325,9 @@ Last updated: 2026-06-13
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Context Pack minimization tests proving user-hidden items are removed from the AI-bound Pack, retained as exclusions, and remain absent after confirmation and `get_request_status`
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
-- Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images require a provider unless configured, legacy Office binaries are blocked, and oversized files are rejected before Source creation
+- Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images require a provider unless configured, legacy Office binaries require a converter unless configured, and oversized files are rejected before Source creation
 - Native document extraction tests proving DOCX XML text can be extracted locally, image OCR is refused without a provider, and a configured local OCR command can provide image text without creating ApprovedFacts
+- Native Legacy Office conversion tests proving `.doc` remains blocked without a converter and a configured local converter produces extracted text without creating ApprovedFacts
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
 - Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
@@ -841,6 +846,15 @@ Last updated: 2026-06-13
 - UX/design: a redundant Connection readiness panel was removed after rendered review because the new Universal AI Access panel already covered readiness and the duplicate panel pushed service controls too far down the page.
 - Verification: `npm test -- --run`, `npm run build`, desktop `1280x920` browser render, and mobile `390x844` browser render passed. Both viewports had no horizontal overflow, no clipped checklist/button text, and the old duplicate panel was absent.
 - Review fallback: SubAgents were not used for this UI slice; the main thread ran separate product-fit, privacy, visual QA, and maintainability passes.
+
+### Legacy Office Conversion Provider Slice
+
+- Product fit: users with older life documents can now configure a local LibreOffice/soffice command and upload `.doc`, `.xls`, or `.ppt` without manually converting files outside the app first.
+- Security/privacy: old Office binaries are still blocked by default. When enabled, conversion runs as an explicit local command with no shell expansion, a private temp directory, a bounded timeout, minimal environment variables, and no cloud upload; extracted text still creates only Source plus unapproved MemoryCandidates.
+- Technical design: the native extractor detects legacy Office separately, maps it to DOCX/XLSX/PPTX output targets, runs the configured converter with `{input}`, `{output_dir}`, `{output}`, and `{target_ext}` placeholders, then re-enters the existing native extraction pipeline. Runtime preferences and Settings expose command, arguments, and timeout.
+- UX/design: Settings includes OS-specific LibreOffice install commands and editable conversion arguments. The Sources upload copy now distinguishes OCR Provider and Legacy Office conversion Provider readiness.
+- Verification: `npm test -- --run src/sourceUpload.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_document_extraction`, `npm run build`, desktop `1280x920` Settings render, and mobile `390x844` Settings render passed with no horizontal overflow or clipped provider fields.
+- Review fallback: SubAgents were not used for this local extraction slice; the main thread ran separate product-fit, security/privacy, technical, and visual QA passes.
 
 ### Remote MCP Connection Diagnostics UX Slice
 

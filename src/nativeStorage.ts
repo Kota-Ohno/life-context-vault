@@ -40,6 +40,8 @@ export interface NativeDocumentExtractionCapabilities {
   nativeDocumentExtraction: boolean;
   ocrExtraction: boolean;
   ocrProviderLabel: string | null;
+  legacyOfficeConversion: boolean;
+  legacyOfficeProviderLabel: string | null;
 }
 
 export interface NativeOcrProviderCandidate {
@@ -117,6 +119,9 @@ export async function extractNativeDocumentText(input: {
   ocrCommand?: string | null;
   ocrArgs?: string | null;
   ocrTimeoutSeconds?: number | null;
+  legacyOfficeCommand?: string | null;
+  legacyOfficeArgs?: string | null;
+  legacyOfficeTimeoutSeconds?: number | null;
 }): Promise<NativeDocumentExtractionResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
