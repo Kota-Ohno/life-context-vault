@@ -1,14 +1,28 @@
 const NATIVE_HOST = "dev.life_context_vault.capture";
+const STORAGE_LAST_CAPTURE_META = "lcvLastCaptureMeta";
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "LCV_CAPTURE_ACTIVE_TAB") return false;
-  captureActiveTab().then(sendResponse).catch((error) => {
-    sendResponse({
-      ok: false,
-      error: error instanceof Error ? error.message : "Capture failed"
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "LCV_CAPTURE_ACTIVE_TAB") {
+    captureActiveTab().then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Capture failed"
+      });
     });
-  });
-  return true;
+    return true;
+  }
+
+  if (message?.type === "LCV_CAPTURE_PAGE_FRAGMENT") {
+    capturePageFragment(message.page, message.reason ?? "auto").then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Capture failed"
+      });
+    });
+    return true;
+  }
+
+  return false;
 });
 
 async function captureActiveTab() {
@@ -27,15 +41,43 @@ async function captureActiveTab() {
     throw new Error("No conversation text was found on this page.");
   }
 
-  return chrome.runtime.sendNativeMessage(NATIVE_HOST, {
+  return capturePageFragment(page, page.selected ? "selection" : "manual");
+}
+
+async function capturePageFragment(page, reason) {
+  if (!page?.url || !isAllowedUrl(page.url)) {
+    throw new Error("Open ChatGPT, Claude, or Gemini before capturing.");
+  }
+  if (!page.text) {
+    throw new Error("No conversation text was found on this page.");
+  }
+
+  const result = await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
     type: "capture_fragment",
     sourceClient: page.sourceClient,
     conversationId: page.conversationId,
     url: page.url,
     pageTitle: page.title,
     text: page.text,
-    selected: page.selected
+    selected: Boolean(page.selected)
   });
+  await recordCaptureMeta(page, result, reason);
+  return result;
+}
+
+async function recordCaptureMeta(page, result, reason) {
+  const meta = {
+    ok: Boolean(result?.ok),
+    status: result?.status ?? (result?.ok ? "captured" : "failed"),
+    candidateCount: result?.candidateCount ?? 0,
+    sourceClient: page.sourceClient,
+    conversationId: page.conversationId,
+    url: page.url,
+    pageTitle: page.title,
+    reason,
+    capturedAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ [STORAGE_LAST_CAPTURE_META]: meta });
 }
 
 function isAllowedUrl(url) {

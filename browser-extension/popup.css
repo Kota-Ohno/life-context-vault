@@ -35,6 +35,38 @@ small {
   line-height: 1.45;
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d7ddd4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26352b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #26352b;
+}
+
+.hint,
+.last-capture {
+  font-size: 12px;
+}
+
+.last-capture {
+  padding: 9px;
+  border: 1px solid #d7ddd4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 button {
   min-height: 40px;
   border: 1px solid #26352b;
@@ -54,6 +86,18 @@ button:disabled {
 
 #status[data-state="ok"] {
   color: #245b35;
+}
+
+#last-capture[data-state="ok"] {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+  color: #245b35;
+}
+
+#last-capture[data-state="attention"] {
+  border-color: #e0c796;
+  background: #fffaf0;
+  color: #6f4c10;
 }
 
 #status[data-state="error"] {

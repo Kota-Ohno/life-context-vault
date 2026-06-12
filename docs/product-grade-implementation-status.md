@@ -269,7 +269,7 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and `GET /mcp` behavior expected by hosted clients.
-- Fully continuous browser Capture with persistent in-page status, recent-capture review/delete, and delta queueing. Current shipped browser extension is an explicit user-triggered capture path with local processing and TTL purge.
+- Browser Capture now supports explicit popup capture and opt-in Auto Capture with persistent in-page status. Remaining product-hardening: extension-side recent captured Source review/delete and true delta queueing instead of debounced changed-text capture.
 
 ## Verification
 
@@ -715,13 +715,20 @@ Last updated: 2026-06-13
 - UX/accessibility: the existing file input remains available with an explicit accessible label, while the drop zone exposes a drag-active state, focus state, accepted-format copy, and a one-file-at-a-time expectation without hiding the native picker.
 - Verification: `npm run product:check` passed. Browser checks at desktop `1280x720` and mobile `390x844` confirmed the Sources upload zone renders with no horizontal overflow, keeps the file input within the panel, and exposes the expected ARIA labels.
 
+### Browser Auto Capture Slice
+
+- Product fit: the Chrome extension now supports opt-in Auto Capture on supported AI chat pages, bringing the product closer to "life context follows everyday AI" without requiring users to remember popup capture every time.
+- Security/privacy: Auto Capture is off by default, shows a persistent in-page status badge, debounces page changes, skips unchanged text hashes, and stores only preference/hash/status metadata in Chrome storage. Captured transcript text still goes directly to the local Native Messaging host and Vault Core, where app-level Pause, allowed-site policy, retention, redaction, and candidate-only boundaries are enforced.
+- Technical design: popup manual capture and content-script Auto Capture now share the same background `capturePageFragment` path and recent status metadata. The content script responds to popup setting changes without a page reload.
+- Verification: extension static checks passed with `node --check browser-extension/background.js`, `node --check browser-extension/content.js`, and `node --check browser-extension/popup.js`. Static popup visual inspection via the in-app browser was attempted, but local `file://` extension HTML was blocked by the browser URL policy; no alternate browser workaround was used.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
 
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
-- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, and Sources accepts file selection or drag-and-drop without losing the native picker.
+- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish, public Origin allowlists, detailed OAuth challenge headers, and `GET /mcp` semantics remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: full continuous browser Capture and bundled/non-developer OCR setup remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: browser Capture recent-source review/delete, true delta queueing, and bundled/non-developer OCR setup remain product-hardening work after the core AI access boundary.

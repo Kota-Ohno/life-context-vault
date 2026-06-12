@@ -1,14 +1,16 @@
 # Browser Capture Extension
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 Life Context Vault includes a Chrome Manifest V3 extension plus a Native Messaging host.
 
-The extension captures the current ChatGPT, Claude, or Gemini chat page and sends the text to the local native host. The native host then delegates to shared Rust Vault Core, which writes a `passive_capture` Source, `PassiveCaptureEvent`, audit records, and unapproved `MemoryCandidate` records to the encrypted local Vault.
+The extension captures the current ChatGPT, Claude, or Gemini chat page and sends the text to the local native host. Users can run an explicit popup capture or turn on opt-in Auto Capture for supported AI pages. The native host then delegates to shared Rust Vault Core, which writes a `passive_capture` Source, `PassiveCaptureEvent`, audit records, and unapproved `MemoryCandidate` records to the encrypted local Vault.
 
 ## Safety Boundary
 
-- Capture is explicit from the popup button.
+- Capture is explicit from the popup button unless the user turns on the extension's Auto Capture toggle.
+- Auto Capture is off by default, shows a small in-page status badge, debounces page changes, and skips writes when the captured text hash has not changed.
+- Chrome extension storage keeps Auto Capture preference, the last text hash, and recent capture status metadata only; it does not store captured transcript text.
 - The extension only runs on:
   - `chatgpt.com`
   - `chat.openai.com`
@@ -76,7 +78,7 @@ browser-extension/native-host.dev.json
 3. Turn Passive Capture on.
 4. Open ChatGPT, Claude, or Gemini in Chrome.
 5. Click the Life Context Vault extension.
-6. Click **Capture current chat**.
+6. Click **Capture current chat**, or turn on **Auto capture supported AI pages** for debounced page-change capture.
 7. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
 8. Review the generated candidate in **Memory Inbox**.
 
@@ -95,6 +97,8 @@ The extension sends:
   "selected": false
 }
 ```
+
+Auto Capture sends the same message shape with `selected: false`. The Native host and Vault Core still enforce the app-level Passive Capture switch, allowed-site policy, retention policy, and candidate-only boundary.
 
 The host replies:
 
