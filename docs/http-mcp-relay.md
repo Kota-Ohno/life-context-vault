@@ -19,6 +19,8 @@ npm run agent:build
 
 `npm run tauri:bundle` prepares and embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` into the macOS app bundle.
 
+For hosted container deployment, see [Hosted Relay Deployment](./hosted-relay-deployment.md).
+
 ## App-Managed Service
 
 In the Tauri desktop app, open **Connections** and use **Start AI Access**. The app will:
@@ -225,6 +227,4 @@ This relay is not yet the public hosted relay.
 
 Remaining production work:
 
-- HTTPS deployment.
-- Durable hosted relay deployment and domain.
-- Hosted relay deployment-specific rotation runbooks and incident procedures for the same metadata-only state model.
+- Provisioning the actual public HTTPS domain, TLS terminator, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.

@@ -243,12 +243,16 @@ Last updated: 2026-06-12
   - `.github/workflows/product-check.yml` runs `npm run product:check` on pull requests and pushes to `main`/`master`
   - scheduled weekly runs and manual `workflow_dispatch` can include a bounded retrieval benchmark profile
   - workflow summaries and an uploaded `product-check.log` preserve release-check and benchmark output for review
+- Added hosted Relay deployment artifacts:
+  - `deploy/relay/Dockerfile` builds a relay-only container with direct Vault sidecar fallback disabled
+  - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
+  - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, smoke tests, token rotation, and incident runbooks
+  - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
 
-- Public HTTPS deployment and durable hosted relay domain.
-- Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, backup, and short-lived handoff controls.
+- Provisioning the actual public HTTPS Relay domain, TLS termination, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
 - Packaged OCR onboarding and legacy Office conversion beyond the explicit local OCR command provider and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
@@ -304,6 +308,7 @@ Last updated: 2026-06-12
 - Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
 - Product release check wrapper covering standard app/Rust/release-binary checks and optional full Tauri + retrieval benchmark qualification
 - GitHub Actions product check workflow for PR/push checks plus weekly/manual bounded retrieval benchmark runs
+- Hosted Relay Dockerfile and deployment runbook with metadata-only state, token rotation, incident response, and smoke-test guidance
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
@@ -538,6 +543,15 @@ Last updated: 2026-06-12
 - Technical design: accepted; Agent/Vault remains canonical when online, while offline `get_request_status` can use the cached response for the matching request id.
 - Operations: accepted; `/relay/state` exposes handoff count, request id, client id, creation time, expiry time, and TTL settings for debugging without exposing Pack body text.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay` passed.
+
+### Hosted Relay Deployment Slice
+
+- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate hosted-ops, security/privacy, product, and maintainability passes.
+- Product fit: accepted; everyday AI clients now have a documented public HTTPS relay shape while the actual Vault remains on the user's device.
+- Security/privacy: accepted; the Docker defaults disable direct sidecar fallback, require external secrets for public binds, persist only metadata under `/data`, and keep Context Pack handoff bodies memory-only.
+- Hosted operations: accepted; deployment docs define required env vars, durable volume, smoke tests, admin token rotation, static fallback token rotation, and incident response.
+- Maintainability: accepted; the Dockerfile builds only `lcv-relay`, `.dockerignore` keeps local Vault/state/build artifacts out of the context, and the runbook links from `docs/http-mcp-relay.md`.
+- Verification: Dockerfile/runbook added, YAML/docs diff checked, and local `npm run product:check` had already passed for the codebase before this docs/deploy-only slice.
 
 ### First-Run AI Access UX Slice
 
