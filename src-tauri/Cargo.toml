@@ -27,6 +27,10 @@ path = "src/bin/lcv-mcp.rs"
 name = "lcv-relay"
 path = "src/bin/lcv-relay.rs"
 
+[[bin]]
+name = "lcv-capture-host"
+path = "src/bin/lcv-capture-host.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 

@@ -57,12 +57,18 @@ Last updated: 2026-06-12
   - bearer token required for `/mcp`
   - loopback bind by default
 - Added Connections UI setup guidance for local relay endpoint and launch command.
+- Added Chrome browser capture extension and Native Messaging host:
+  - Manifest V3 extension under `browser-extension/`
+  - popup-triggered capture for ChatGPT, Claude, and Gemini
+  - native host `lcv-capture-host`
+  - capture writes `passive_capture` Source, `PassiveCaptureEvent`, and unapproved Inbox candidates
+  - host refuses capture unless Passive Capture is enabled and the site is allowed
+- Added Connections UI setup guidance for extension and native host manifest installation.
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
 
 - Hosted remote MCP relay with public HTTPS, OAuth, pairing, and local Agent websocket.
-- Browser extension and Native Messaging capture bridge.
 - SQLCipher or equivalent local database encryption with OS keychain-managed keys.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
@@ -78,6 +84,8 @@ Last updated: 2026-06-12
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
 - HTTP relay smoke test for `/health`, unauthorized `/mcp`, and authorized `tools/list`
+- `npm run capture:build`
+- Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Browser UI checks:
@@ -85,6 +93,14 @@ Last updated: 2026-06-12
   - mobile `390x844`: Connections MCP setup card and code blocks fit without page-level horizontal overflow
   - desktop `1440x980`: Connections HTTP Relay setup card displays endpoint and launch command without horizontal overflow
   - mobile `390x844`: MCP and Relay setup grids stack without page-level horizontal overflow
+  - desktop `1440x980`: Connections browser extension setup card displays native host instructions without horizontal overflow
+  - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
+- Extension static checks:
+  - `node --check browser-extension/background.js`
+  - `node --check browser-extension/content.js`
+  - `node --check browser-extension/popup.js`
+  - `node --check scripts/write-native-host-manifest.mjs`
+  - `LCV_EXTENSION_ID=... npm run extension:host-manifest`
 
 `cargo fmt --check` could not run because `cargo-fmt` is not installed for the active stable Apple Silicon toolchain.
 

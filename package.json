@@ -15,7 +15,9 @@
     "mcp:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-mcp",
     "mcp:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-mcp",
     "relay:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay",
-    "relay:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-relay"
+    "relay:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-relay",
+    "capture:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-capture-host",
+    "extension:host-manifest": "node scripts/write-native-host-manifest.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

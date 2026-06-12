@@ -38,6 +38,7 @@ npm test
 npm run build
 npm run mcp:build
 npm run relay:build
+npm run capture:build
 npm run tauri:build
 npm run tauri:bundle
 ```
@@ -59,6 +60,7 @@ npm run tauri:bundle
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
 - Local MCP stdio sidecar for same-device AI clients
 - HTTP MCP relay for local Remote-MCP-style testing
+- Chrome browser capture extension and Native Messaging host
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to SQLite in the app data directory and projected into normalized tables.
 
@@ -88,6 +90,15 @@ npm run relay:build
 Then open **Connections** and copy the relay command.
 
 The relay defaults to `http://127.0.0.1:8765/mcp`, requires a bearer token, and forwards requests to the local MCP sidecar. See `docs/http-mcp-relay.md`.
+
+## Run Browser Capture Extension
+
+```bash
+npm run capture:build
+LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest
+```
+
+Then load `browser-extension/` as an unpacked Chrome extension. See `docs/browser-capture-extension.md`.
 
 ## Try The Product-Grade Slice
 

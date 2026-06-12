@@ -1032,8 +1032,35 @@ function ConnectionsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Capture simulator</p>
-            <h3>ブラウザ拡張の入力を模擬</h3>
+            <p className="eyebrow">Browser extension</p>
+            <h3>AIチャット画面から直接Inboxへ送る</h3>
+          </div>
+          <Clipboard size={18} />
+        </div>
+        <div className="form-stack">
+          <pre className="code-box">npm run capture:build{"\n"}LCV_EXTENSION_ID=&lt;Chrome extension id&gt; npm run extension:host-manifest</pre>
+          <p className="muted">Chromeの拡張機能画面でDeveloper modeを有効にし、`browser-extension/`をLoad unpackedしてください。拡張IDをコピーしてhost manifestを書き直すと、AIチャット画面のpopupからCaptureできます。</p>
+          <button
+            className="secondary-button"
+            onClick={() =>
+              copyText(
+                "npm run capture:build\nLCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest",
+                "ブラウザ拡張セットアップコマンドをコピーしました。"
+              )
+            }
+            type="button"
+          >
+            <Clipboard size={16} />
+            Copy setup
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Manual capture</p>
+            <h3>拡張が使えない時の入力</h3>
           </div>
           <Clipboard size={18} />
         </div>
