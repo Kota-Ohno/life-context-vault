@@ -932,6 +932,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged Connections as too dense for general users. UI/UX review checked desktop and mobile screenshots and kept the primary connection options visible. Security/privacy review verified that hidden sections are still reachable and that hiding them does not imply auto-approval or auto-capture. Maintainability review kept the change to presentation structure and shared disclosure styling.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Chrome/CDP checked Connections at desktop `1280x900` and mobile `390x844`: six setup disclosures render closed by default, top connection choices and Hosted Relay remain visible, collapsed sections can be opened through native `summary`, the policy controls render after opening, and there is no page-level horizontal overflow.
 
+### Home Source Provenance Slice
+
+- Product fit: Home now preserves the "sourced life context" promise in the first-use dashboard. Background Snapshot passes Source records into Fact rendering, so source-backed facts show titles such as Guided background setup or Sample insurance renewal note instead of "Unknown source."
+- UX/design: Fact source labels now use a shared `factSourceNames` helper that distinguishes real source titles, missing sources, no-source facts, and truncated multi-source lists. This keeps Home, Search, and review rows aligned without adding another visual pattern.
+- Security/privacy: The change displays existing Source titles already visible elsewhere in the app and does not expose Raw Source body text or unapproved MemoryCandidate text. Missing sources are labeled explicitly instead of implying a source exists.
+- Review fallback: Product fit review flagged "Unknown source" in Home as a trust regression. Security/privacy review checked that only titles, not Source bodies, are displayed. Maintainability review added unit coverage for source-title formatting so the regression is harder to reintroduce.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Chrome/CDP checked Home at desktop `1280x900` and mobile `390x844`: demo Background Snapshot shows Guided background setup and Sample insurance renewal note, no Unknown source or Source未検出 appears, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

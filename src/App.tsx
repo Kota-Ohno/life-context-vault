@@ -145,6 +145,7 @@ import {
   MemoryCandidate,
   PassiveCaptureEvent,
   PassiveCaptureSettings,
+  RawSource,
   SensitivityTier,
   SourceBodyUpdate,
   SourceLifecycleAction,
@@ -2277,7 +2278,7 @@ function HomeView({
               <section className="domain-section" key={domain}>
                 <h4>{domainLabel(domain as LifeContextDomain)}</h4>
                 {items.map((fact) => (
-                  <FactRow fact={fact} key={fact.id} />
+                  <FactRow fact={fact} key={fact.id} sources={sources} />
                 ))}
               </section>
             ))}
@@ -5069,10 +5070,7 @@ function FactRow({
   editFactMetadata?: (factId: string, input: FactMetadataUpdate) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<FactMetadataUpdate | null>(null);
-  const sourceNames = fact.sourceIds
-    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Unknown source")
-    .slice(0, 2)
-    .join(", ");
+  const sourceNames = factSourceNames(fact, sources);
   return (
     <div className="fact-row">
       <div className="fact-main">
@@ -5205,6 +5203,18 @@ function FactRow({
       </div>
     </div>
   );
+}
+
+export function factSourceNames(
+  fact: Pick<ApprovedFact, "sourceIds">,
+  sources: Array<Pick<RawSource, "id" | "title">>
+): string {
+  if (fact.sourceIds.length === 0) return "出典なし";
+  const visibleNames = fact.sourceIds
+    .slice(0, 2)
+    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Source未検出");
+  const hiddenCount = fact.sourceIds.length - visibleNames.length;
+  return hiddenCount > 0 ? [...visibleNames, `+${hiddenCount}`].join(", ") : visibleNames.join(", ");
 }
 
 function Input({

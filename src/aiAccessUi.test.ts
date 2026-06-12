@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { aiMcpEndpointDisplay, canCopyAiMcpEndpoint, isHostedRelayConfirmed, webAiMcpEndpoint } from "./App";
+import {
+  aiMcpEndpointDisplay,
+  canCopyAiMcpEndpoint,
+  factSourceNames,
+  isHostedRelayConfirmed,
+  webAiMcpEndpoint
+} from "./App";
 
 describe("AI access UI safety", () => {
   it("blocks public MCP endpoint copying while hosted relay pairing is unconfirmed", () => {
@@ -23,5 +29,19 @@ describe("AI access UI safety", () => {
     expect(aiMcpEndpointDisplay(localRelay, "http://127.0.0.1:8765/mcp")).toBe("http://127.0.0.1:8765/mcp");
     expect(webAiMcpEndpoint(localRelay, "http://127.0.0.1:8765/mcp")).toBeNull();
     expect(webAiMcpEndpoint(localRelay, "https://relay.example.com/mcp")).toBe("https://relay.example.com/mcp");
+  });
+
+  it("shows source titles for source-backed facts", () => {
+    expect(
+      factSourceNames(
+        { sourceIds: ["source_background", "source_policy", "source_extra"] },
+        [
+          { id: "source_background", title: "Guided background setup" },
+          { id: "source_policy", title: "Sample insurance renewal note" }
+        ]
+      )
+    ).toBe("Guided background setup, Sample insurance renewal note, +1");
+    expect(factSourceNames({ sourceIds: [] }, [])).toBe("出典なし");
+    expect(factSourceNames({ sourceIds: ["missing"] }, [])).toBe("Source未検出");
   });
 });
