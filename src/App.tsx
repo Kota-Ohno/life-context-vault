@@ -1689,9 +1689,6 @@ export function App() {
             connectors={state.connectorSessions}
             policies={state.accessPolicies}
             captureSettings={state.passiveCaptureSettings}
-            approvedFactCount={activeFacts.length}
-            pendingCandidateCount={activeCandidates.length}
-            requestCount={state.contextPackRequests.length}
             updateCapture={updateCapture}
             updatePolicy={updatePolicy}
             nativePath={nativePath}
@@ -2624,9 +2621,6 @@ function ConnectionsView({
   connectors,
   policies,
   captureSettings,
-  approvedFactCount,
-  pendingCandidateCount,
-  requestCount,
   updateCapture,
   updatePolicy,
   nativePath,
@@ -2663,9 +2657,6 @@ function ConnectionsView({
   connectors: ConnectorSession[];
   policies: VaultState["accessPolicies"];
   captureSettings: PassiveCaptureSettings;
-  approvedFactCount: number;
-  pendingCandidateCount: number;
-  requestCount: number;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   updatePolicy: (
     clientId: string,
@@ -2703,6 +2694,8 @@ function ConnectionsView({
   simulatePassiveCapture: () => void;
 }) {
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const aiAccessChecklist = aiAccessChecklistItems(aiServiceStatus, nativePath);
+  const mcpEndpoint = aiServiceStatus?.mcpServerUrl ?? localRelayUrl;
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
   const [allowedSitesDraft, setAllowedSitesDraft] = useState(captureSettings.allowedSites.join(", "));
 
@@ -2772,7 +2765,7 @@ function ConnectionsView({
           </button>
           <button
             className="secondary-button"
-            onClick={() => copyText(aiServiceStatus?.mcpServerUrl ?? localRelayUrl, "MCP URLをコピーしました。")}
+            onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
             type="button"
           >
             <Clipboard size={16} />
@@ -2787,6 +2780,71 @@ function ConnectionsView({
             <PauseCircle size={16} />
             Stop managed
           </button>
+        </div>
+      </div>
+
+      <div className="panel wide ai-access-map">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Universal AI Access</p>
+            <h3>普段使うAIへ渡す入口と境界</h3>
+          </div>
+        </div>
+        <div className="ai-access-map-grid">
+          <div className="ai-access-endpoint">
+            <span>MCP endpoint</span>
+            <strong>{mcpEndpoint}</strong>
+            <p>ChatGPT/ClaudeのRemote MCP、Claude Desktop/CodexのLocal MCP、コピーfallbackのどれでも、AIへ渡す外部境界はContext Packだけです。</p>
+            <div className="service-actions">
+              <button
+                className="primary-button"
+                onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy URL
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(JSON.stringify(makeRemoteConnectorInfo(), null, 2), "Remote MCP connector情報をコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy connector info
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy SSE check
+              </button>
+            </div>
+          </div>
+          <div className="ai-access-boundary">
+            <div>
+              <span>AIへ渡るもの</span>
+              <strong>確認済みContext Packだけ</strong>
+              <p>Fact本文、最小Source snippet、除外理由、警告だけを目的別に絞ります。</p>
+            </div>
+            <div>
+              <span>AIへ渡らないもの</span>
+              <strong>Raw Source / 未承認候補 / Vault全体</strong>
+              <p>保存と送信は別です。Inbox候補は承認されるまで高信頼文脈になりません。</p>
+            </div>
+          </div>
+        </div>
+        <div className="ai-access-checklist" aria-label="AI Access readiness checklist">
+          {aiAccessChecklist.map((item) => (
+            <div className={`ai-access-check ${item.state}`} key={item.label}>
+              {item.state === "ready" ? <CheckCircle2 size={18} /> : item.state === "blocked" ? <ShieldAlert size={18} /> : <Clock size={18} />}
+              <div>
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -2913,25 +2971,6 @@ function ConnectionsView({
         </div>
       </div>
 
-      <div className={`panel wide readiness-panel ${accessReadiness.tone}`}>
-        <div className="readiness-main">
-          <div className="readiness-icon">
-            {accessReadiness.tone === "ready" ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}
-          </div>
-          <div>
-            <p className="eyebrow">Connection readiness</p>
-            <h3>{accessReadiness.title}</h3>
-            <p>{accessReadiness.detail}</p>
-          </div>
-        </div>
-        <div className="readiness-metrics">
-          <Metric label="Approved Facts" value={approvedFactCount} />
-          <Metric label="Inbox" value={pendingCandidateCount} />
-          <Metric label="Requests" value={requestCount} />
-          <Metric label="Capture" value={captureSettings.enabled ? "on" : "paused"} />
-        </div>
-      </div>
-
       <div className="panel wide">
         <div className="panel-heading">
           <div>
@@ -2949,7 +2988,7 @@ function ConnectionsView({
             <Metric label="Relay" value={aiServiceStatus?.relayReachable ? "reachable" : "offline"} />
             <Metric label="Agent" value={aiServiceStatus?.agentConnected ? "connected" : "offline"} />
             <Metric label="Managed" value={serviceManagedCopy(aiServiceStatus)} />
-            <Metric label="MCP URL" value={aiServiceStatus?.mcpServerUrl ?? localRelayUrl} />
+            <Metric label="MCP URL" value={mcpEndpoint} />
           </div>
           <div className="service-actions">
             <button
@@ -3219,6 +3258,7 @@ function ConnectionsView({
             <div className="scope-row">
               <Badge>health: 200</Badge>
               <Badge>mcp: 401 OAuth</Badge>
+              <Badge>sse: ready</Badge>
               <Badge>headers: 406/415</Badge>
             </div>
             <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
@@ -3239,8 +3279,17 @@ function ConnectionsView({
                 <Clipboard size={16} />
                 Copy MCP check
               </button>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy SSE check
+              </button>
             </div>
             <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
+            <pre className="code-box">{makeRemoteMcpSseCheckCommand()}</pre>
           </div>
           <div className="setup-step">
             <Badge>Boundary</Badge>
@@ -4908,6 +4957,47 @@ function aiAccessReadinessCopy(
   };
 }
 
+function aiAccessChecklistItems(
+  status: AiAccessServiceStatus | null,
+  nativePath: string | null
+): Array<{ label: string; detail: string; state: "ready" | "pending" | "blocked" }> {
+  return [
+    {
+      label: "Desktop Vault",
+      detail: nativePath
+        ? "暗号化Vaultをこの端末で開いています。"
+        : "Desktop appで開くとRelayとAgentを管理できます。",
+      state: nativePath ? "ready" : "blocked"
+    },
+    {
+      label: "Relay endpoint",
+      detail: status?.relayReachable
+        ? "Remote MCPのHTTPS/HTTP入口が応答しています。"
+        : "Start AI AccessでMCP endpointを起動します。",
+      state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
+    },
+    {
+      label: "Local Agent",
+      detail: status?.agentConnected
+        ? "Vault検索とContext Pack生成をローカルで実行できます。"
+        : "Agent接続後にAIからの要求をVault Coreへ渡せます。",
+      state: status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
+    },
+    {
+      label: "Streamable HTTP",
+      detail: status?.relayReachable
+        ? "POST JSON-RPC、GET SSE、MCP session、DELETE終了に対応しています。"
+        : "Relay起動後にSSE ready診断で確認できます。",
+      state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
+    },
+    {
+      label: "Context Pack boundary",
+      detail: "AIへ返すのは承認済みFactから作る短命Context Packだけです。",
+      state: "ready"
+    }
+  ];
+}
+
 function makeClaudeDesktopConfig(nativePath: string | null): string {
   return JSON.stringify(
     {
@@ -4958,6 +5048,15 @@ function makeRemoteMcpHeaderCheckCommand(): string {
     "  -H 'Accept: application/json, text/event-stream'",
     "  -H 'MCP-Protocol-Version: 2025-11-25'",
     "  --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'",
+    `  ${localRelayUrl}`
+  ].join(" \\\n");
+}
+
+function makeRemoteMcpSseCheckCommand(): string {
+  return [
+    "curl -i -N",
+    "  -H 'Accept: text/event-stream'",
+    "  -H 'MCP-Protocol-Version: 2025-11-25'",
     `  ${localRelayUrl}`
   ].join(" \\\n");
 }

@@ -856,25 +856,128 @@ button:focus-visible {
   justify-content: flex-end;
 }
 
+.ai-access-map {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-access-map-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+  gap: 16px;
+}
+
+.ai-access-endpoint,
+.ai-access-boundary {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ai-access-endpoint {
+  padding-right: 16px;
+  border-right: 1px solid #e1e8df;
+}
+
+.ai-access-endpoint span,
+.ai-access-boundary span {
+  color: #667267;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-access-endpoint strong,
+.ai-access-boundary strong {
+  overflow-wrap: anywhere;
+}
+
+.ai-access-endpoint p,
+.ai-access-boundary p {
+  margin: 0;
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ai-access-boundary div {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e7ece5;
+}
+
+.ai-access-boundary div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ai-access-checklist {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ai-access-check {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid #e0e5dd;
+  background: #fbfcfa;
+}
+
+.ai-access-check:last-child {
+  border-right: 0;
+}
+
+.ai-access-check.ready svg {
+  color: #4f8156;
+}
+
+.ai-access-check.pending svg {
+  color: #b07a26;
+}
+
+.ai-access-check.blocked svg {
+  color: #a5422e;
+}
+
+.ai-access-check div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-access-check strong,
+.ai-access-check span {
+  overflow-wrap: anywhere;
+}
+
+.ai-access-check strong {
+  color: #26352b;
+  font-size: 13px;
+}
+
+.ai-access-check span {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .service-console {
   display: grid;
   gap: 14px;
 }
 
-.readiness-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
-  gap: 16px;
-  align-items: stretch;
-}
-
-.readiness-panel.ready,
 .service-brief.ready {
   border-color: #b7d0bd;
   background: #f5fbf2;
 }
 
-.readiness-panel.attention,
 .service-brief.attention {
   border-color: #e0c796;
   background: #fffaf0;
@@ -913,13 +1016,6 @@ button:focus-visible {
   background: #ffffff;
 }
 
-.readiness-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.readiness-metrics div,
 .service-brief {
   display: grid;
   gap: 4px;
@@ -930,14 +1026,12 @@ button:focus-visible {
   background: #ffffff;
 }
 
-.readiness-metrics span,
 .service-brief span {
   color: #667267;
   font-size: 12px;
   line-height: 1.45;
 }
 
-.readiness-metrics strong,
 .service-brief strong {
   overflow-wrap: anywhere;
 }
@@ -1761,8 +1855,9 @@ button:focus-visible {
   .policy-grid,
   .policy-controls,
   .policy-domain-list,
-  .readiness-panel,
   .ai-access-quickstart,
+  .ai-access-map-grid,
+  .ai-access-checklist,
   .service-status-grid,
   .automation-grid,
   .setup-grid,
@@ -1773,6 +1868,22 @@ button:focus-visible {
 
   .home-grid .background-panel {
     grid-row: auto;
+  }
+
+  .ai-access-endpoint {
+    padding-right: 0;
+    padding-bottom: 12px;
+    border-right: 0;
+    border-bottom: 1px solid #e1e8df;
+  }
+
+  .ai-access-check {
+    border-right: 0;
+    border-bottom: 1px solid #e0e5dd;
+  }
+
+  .ai-access-check:last-child {
+    border-bottom: 0;
   }
 
   .ask-layout.has-active-pack .context-pack-panel {
