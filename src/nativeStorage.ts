@@ -683,6 +683,7 @@ export async function updateNativeAccessPolicy(input: {
   clientId: string;
   sensitivityCeiling?: SensitivityTier;
   requiresApprovalAbove?: SensitivityTier;
+  domainAllowlist?: LifeContextDomain[];
   passiveCaptureAllowed?: boolean;
 }): Promise<NativeVaultSettingsUpdateResult | null> {
   if (!isTauriRuntime()) return null;
@@ -691,6 +692,7 @@ export async function updateNativeAccessPolicy(input: {
     clientId: input.clientId,
     sensitivityCeiling: input.sensitivityCeiling ?? null,
     requiresApprovalAbove: input.requiresApprovalAbove ?? null,
+    domainAllowlist: input.domainAllowlist ?? null,
     passiveCaptureAllowed: input.passiveCaptureAllowed ?? null
   });
   return {

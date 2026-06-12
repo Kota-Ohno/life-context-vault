@@ -727,6 +727,91 @@ button:focus-visible {
   padding-top: 2px;
 }
 
+.policy-domain-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e1e8df;
+  padding-top: 12px;
+}
+
+.policy-domain-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.policy-domain-heading div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.policy-domain-heading strong {
+  font-size: 0.92rem;
+  color: #273123;
+}
+
+.policy-domain-heading span {
+  color: #6f786b;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.policy-domain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.policy-domain-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.domain-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #dbe5d9;
+  border-radius: 8px;
+  background: #fbfdf8;
+  color: #2f392b;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  overflow: hidden;
+}
+
+.domain-checkbox input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border-radius: 4px;
+  accent-color: #4f8156;
+}
+
+.domain-checkbox span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.domain-checkbox:has(input:checked) {
+  border-color: #9fbea0;
+  background: #f2f8ef;
+}
+
+.domain-checkbox:has(input:disabled) {
+  opacity: 0.7;
+}
+
 .setup-grid {
   display: grid;
   grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.25fr) minmax(220px, 0.85fr);
@@ -1529,6 +1614,7 @@ button:focus-visible {
   .launch-panel .onboarding-checklist,
   .policy-grid,
   .policy-controls,
+  .policy-domain-list,
   .readiness-panel,
   .ai-access-quickstart,
   .service-status-grid,
@@ -1558,6 +1644,7 @@ button:focus-visible {
   .panel-heading,
   .automation-card-heading,
   .search-mode-row,
+  .policy-domain-heading,
   .fact-row,
   .table-row,
   .connection-row,
@@ -1565,6 +1652,14 @@ button:focus-visible {
   .toggle-row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .policy-domain-actions {
+    justify-content: flex-start;
+  }
+
+  .policy-domain-actions button {
+    flex: 1 1 130px;
   }
 
   .nav-list {

@@ -49,20 +49,53 @@ function lowerSensitivityTier(left: SensitivityTier, right: SensitivityTier): Se
 }
 
 const domainLabels: Record<LifeContextDomain, string> = {
-  identity_and_profile: "Identity",
-  values_goals_and_preferences: "Values and goals",
-  life_events_and_plans: "Life events",
-  routines_and_logistics: "Routines",
-  home_and_places: "Home and places",
-  documents_and_evidence: "Documents",
-  contracts_and_policies: "Contracts",
-  procedures_and_obligations: "Procedures",
-  health_and_care: "Health and care",
-  finance_and_benefits: "Finance and benefits",
-  work_and_education: "Work and education",
-  relationships_and_household: "Relationships",
-  constraints_and_accessibility: "Constraints"
+  identity_and_profile: "本人情報",
+  values_goals_and_preferences: "価値観・希望",
+  life_events_and_plans: "予定・ライフイベント",
+  routines_and_logistics: "日常・手配",
+  home_and_places: "住まい・場所",
+  documents_and_evidence: "書類・証明",
+  contracts_and_policies: "契約・保険",
+  procedures_and_obligations: "手続き・義務",
+  health_and_care: "医療・ケア",
+  finance_and_benefits: "お金・給付",
+  work_and_education: "仕事・学び",
+  relationships_and_household: "家族・関係",
+  constraints_and_accessibility: "制約・配慮"
 };
+
+const allLifeDomains = Object.keys(domainLabels) as LifeContextDomain[];
+const cautiousLifeDomains = allLifeDomains.filter(
+  (domain) =>
+    ![
+      "identity_and_profile",
+      "health_and_care",
+      "finance_and_benefits",
+      "constraints_and_accessibility"
+    ].includes(domain)
+);
+
+function isLifeContextDomain(value: unknown): value is LifeContextDomain {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(domainLabels, value);
+}
+
+function normalizePolicyDomainAllowlist(
+  value: unknown,
+  fallback: LifeContextDomain[]
+): LifeContextDomain[] {
+  const parsed = parsePolicyDomainAllowlist(value);
+  return parsed ?? [...fallback];
+}
+
+function parsePolicyDomainAllowlist(value: unknown): LifeContextDomain[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized: LifeContextDomain[] = [];
+  for (const item of value) {
+    if (!isLifeContextDomain(item)) return null;
+    if (!normalized.includes(item)) normalized.push(item);
+  }
+  return normalized.length > 0 ? normalized : null;
+}
 
 type LegacyVaultState = Omit<VaultState, "version"> & { version: 1 };
 type PersistedVaultState = VaultState | LegacyVaultState | Partial<VaultState>;
@@ -132,10 +165,7 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
       ...fact,
       supersedesFactIds: fact.supersedesFactIds ?? []
     })),
-    accessPolicies:
-      parsed.accessPolicies && parsed.accessPolicies.length > 0
-        ? parsed.accessPolicies
-        : empty.accessPolicies,
+    accessPolicies: normalizeAccessPolicies(parsed.accessPolicies, empty.accessPolicies),
     passiveCaptureSettings: {
       ...empty.passiveCaptureSettings,
       ...(parsed.passiveCaptureSettings ?? {})
@@ -148,6 +178,32 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     contextPackRequests: parsed.contextPackRequests ?? [],
     contextPacks: parsed.contextPacks ?? [],
     auditEvents: parsed.auditEvents ?? []
+  };
+}
+
+function normalizeAccessPolicies(
+  parsedPolicies: AccessPolicy[] | undefined,
+  defaultPolicies: AccessPolicy[]
+): AccessPolicy[] {
+  const incoming = Array.isArray(parsedPolicies) ? parsedPolicies : [];
+  const defaultClientIds = new Set(defaultPolicies.map((policy) => policy.clientId));
+  const normalizedDefaults = defaultPolicies.map((defaultPolicy) => {
+    const incomingPolicy = incoming.find((policy) => policy.clientId === defaultPolicy.clientId);
+    return normalizeAccessPolicy(incomingPolicy ? { ...defaultPolicy, ...incomingPolicy } : defaultPolicy, defaultPolicy);
+  });
+  const extraPolicies = incoming
+    .filter((policy) => policy.clientId && !defaultClientIds.has(policy.clientId))
+    .map((policy) => normalizeAccessPolicy(policy, createDefaultAccessPolicy(policy.clientId, nowIso())));
+  return [...normalizedDefaults, ...extraPolicies];
+}
+
+function normalizeAccessPolicy(policy: AccessPolicy, fallbackPolicy: AccessPolicy): AccessPolicy {
+  return {
+    ...fallbackPolicy,
+    ...policy,
+    sensitivityCeiling: policySensitivityValue(policy.sensitivityCeiling, fallbackPolicy.sensitivityCeiling),
+    requiresApprovalAbove: policySensitivityValue(policy.requiresApprovalAbove, fallbackPolicy.requiresApprovalAbove),
+    domainAllowlist: normalizePolicyDomainAllowlist(policy.domainAllowlist, cautiousLifeDomains)
   };
 }
 
@@ -971,6 +1027,55 @@ function invalidatePacksForFacts(
   });
 }
 
+function invalidatePacksForClientPolicy(
+  packs: VaultState["contextPacks"],
+  requests: VaultState["contextPackRequests"],
+  clientId: string
+): {
+  packs: VaultState["contextPacks"];
+  requests: VaultState["contextPackRequests"];
+  invalidatedCount: number;
+} {
+  const requestsById = new Map(requests.map((request) => [request.id, request]));
+  const requestIdsForClient = new Set(
+    requests.filter((request) => request.clientId === clientId).map((request) => request.id)
+  );
+  if (requestIdsForClient.size === 0) {
+    return { packs, requests, invalidatedCount: 0 };
+  }
+
+  const invalidatedRequestIds = new Set<string>();
+  const nextPacks = packs.map((pack) => {
+    if (!pack.requestId || !requestIdsForClient.has(pack.requestId) || pack.confirmationStatus === "cancelled") {
+      return pack;
+    }
+    const request = requestsById.get(pack.requestId);
+    if (isExpired(pack.expiresAt ?? request?.expiresAt ?? "")) return pack;
+    invalidatedRequestIds.add(pack.requestId);
+    return {
+      ...pack,
+      confirmationStatus: "cancelled" as const,
+      confirmedAt: undefined,
+      warnings: [
+        {
+          kind: "policy_limited" as const,
+          message: "AI接続ポリシーが更新されたため、このContext Packは無効化されました。新しいContext Packを作成してください。",
+          relatedIds: [clientId]
+        },
+        ...pack.warnings
+      ]
+    };
+  });
+  const nextRequests = requests.map((request) =>
+    invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+  );
+  return {
+    packs: nextPacks,
+    requests: nextRequests,
+    invalidatedCount: invalidatedRequestIds.size
+  };
+}
+
 export function searchFacts(
   state: VaultState,
   query: string,
@@ -1424,6 +1529,22 @@ export function saveContextPack(state: VaultState, pack: ContextPack): VaultStat
 export function confirmContextPack(state: VaultState, packId: string): VaultState {
   const pack = state.contextPacks.find((item) => item.id === packId);
   if (!pack) return state;
+  if (pack.confirmationStatus === "cancelled") return state;
+  const request = pack.requestId
+    ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+    : null;
+  if (isExpired(pack.expiresAt ?? request?.expiresAt ?? "")) {
+    return {
+      ...state,
+      contextPackRequests: state.contextPackRequests.map((item) =>
+        pack.requestId && item.id === pack.requestId ? { ...item, status: "expired" as const } : item
+      )
+    };
+  }
+  const policyViolation = contextPackPolicyViolation(state, pack);
+  if (policyViolation) {
+    return cancelContextPackForPolicyViolation(state, pack, policyViolation);
+  }
   return {
     ...state,
     contextPacks: state.contextPacks.map((pack) =>
@@ -1438,6 +1559,77 @@ export function confirmContextPack(state: VaultState, packId: string): VaultStat
     ),
     auditEvents: [
       audit("context_pack_confirmed", "context_pack", packId, pack.maxSensitivityIncluded, {
+        requestId: pack.requestId
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+export function canSendContextPackToAi(state: VaultState, pack: ContextPack): boolean {
+  return pack.confirmationStatus === "confirmed" && contextPackPolicyViolation(state, pack) === null;
+}
+
+function contextPackPolicyViolation(
+  state: VaultState,
+  pack: ContextPack
+): "domain_policy" | "sensitivity_policy" | "deleted" | "expired" | null {
+  const request = pack.requestId
+    ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+    : null;
+  if (!request) return "deleted";
+  if (request.status === "denied" || request.status === "expired") return "expired";
+  if (isExpired(pack.expiresAt ?? request.expiresAt)) return "expired";
+  const currentCeiling = lowerSensitivityTier(
+    policyCeilingForClient(state, request.clientId),
+    request.sensitivityCeiling
+  );
+  const domainAllowlist = policyDomainAllowlistForClient(state, request.clientId);
+  for (const item of pack.items) {
+    const fact = state.facts.find((candidate) => candidate.id === item.factId);
+    if (!fact) return "deleted";
+    if (sensitivityRank[item.sensitivity] > sensitivityRank[currentCeiling]) return "sensitivity_policy";
+    if (sensitivityRank[fact.sensitivity] > sensitivityRank[currentCeiling]) return "sensitivity_policy";
+    if (!domainAllowlist.includes(fact.domain)) return "domain_policy";
+  }
+  return null;
+}
+
+function cancelContextPackForPolicyViolation(
+  state: VaultState,
+  pack: ContextPack,
+  reason: "domain_policy" | "sensitivity_policy" | "deleted" | "expired"
+): VaultState {
+  const message =
+    reason === "expired"
+      ? "Context Packの有効期限が切れました。新しいContext Packを作成してください。"
+      : "現在のAI接続ポリシーでは、このContext PackはAIに渡せません。新しいContext Packを作成してください。";
+  return {
+    ...state,
+    contextPacks: state.contextPacks.map((item) =>
+      item.id === pack.id
+        ? {
+            ...item,
+            confirmationStatus: "cancelled" as const,
+            confirmedAt: undefined,
+            warnings: [
+              {
+                kind: reason === "expired" || reason === "deleted" ? "stale_fact" as const : "policy_limited" as const,
+                message,
+                relatedIds: [pack.requestId ?? pack.id]
+              },
+              ...item.warnings
+            ]
+          }
+        : item
+    ),
+    contextPackRequests: state.contextPackRequests.map((item) =>
+      pack.requestId && item.id === pack.requestId ? { ...item, status: "expired" as const } : item
+    ),
+    auditEvents: [
+      audit("context_pack_updated", "context_pack", pack.id, pack.maxSensitivityIncluded, {
+        action: "policy_invalidated",
+        reason,
         requestId: pack.requestId
       }),
       ...state.auditEvents
@@ -1564,28 +1756,41 @@ export function updatePassiveCaptureSettings(
 export function updateAccessPolicy(
   state: VaultState,
   clientId: string,
-  settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+  settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
 ): VaultState {
   const now = nowIso();
-  const currentPolicy = state.accessPolicies.find((policy) => policy.clientId === clientId);
-  if (!currentPolicy) return state;
+  const existingPolicy = state.accessPolicies.find((policy) => policy.clientId === clientId);
+  const currentPolicy = normalizeAccessPolicy(
+    existingPolicy ?? createDefaultAccessPolicy(clientId, now),
+    existingPolicy ?? createDefaultAccessPolicy(clientId, now)
+  );
+  const nextDomainAllowlist =
+    settings.domainAllowlist === undefined ? currentPolicy.domainAllowlist : parsePolicyDomainAllowlist(settings.domainAllowlist);
+  if (!nextDomainAllowlist) return state;
   const updatedPolicy: AccessPolicy = {
     ...currentPolicy,
     ...settings,
+    domainAllowlist: nextDomainAllowlist,
     updatedAt: now
   };
-  const accessPolicies = state.accessPolicies.map((policy) =>
-    policy.clientId === clientId ? updatedPolicy : policy
-  );
+  const accessPolicies = existingPolicy
+    ? state.accessPolicies.map((policy) => (policy.clientId === clientId ? updatedPolicy : policy))
+    : [updatedPolicy, ...state.accessPolicies];
+  const invalidated = invalidatePacksForClientPolicy(state.contextPacks, state.contextPackRequests, clientId);
   return {
     ...state,
     accessPolicies,
+    contextPacks: invalidated.packs,
+    contextPackRequests: invalidated.requests,
     auditEvents: [
       audit("policy_updated", "policy", updatedPolicy.id, updatedPolicy.sensitivityCeiling, {
         clientId,
         sensitivityCeiling: updatedPolicy.sensitivityCeiling,
         requiresApprovalAbove: updatedPolicy.requiresApprovalAbove,
-        passiveCaptureAllowed: updatedPolicy.passiveCaptureAllowed
+        domainAllowlist: updatedPolicy.domainAllowlist,
+        domainAllowlistCount: updatedPolicy.domainAllowlist.length,
+        passiveCaptureAllowed: updatedPolicy.passiveCaptureAllowed,
+        invalidatedPackCount: invalidated.invalidatedCount
       }),
       ...state.auditEvents
     ]
@@ -2139,56 +2344,34 @@ function defaultConnectorSessions(createdAt: string): ConnectorSession[] {
 }
 
 function defaultAccessPolicies(createdAt: string): AccessPolicy[] {
-  const allDomains: LifeContextDomain[] = [
-    "identity_and_profile",
-    "values_goals_and_preferences",
-    "life_events_and_plans",
-    "routines_and_logistics",
-    "home_and_places",
-    "documents_and_evidence",
-    "contracts_and_policies",
-    "procedures_and_obligations",
-    "health_and_care",
-    "finance_and_benefits",
-    "work_and_education",
-    "relationships_and_household",
-    "constraints_and_accessibility"
-  ];
   return [
-    {
-      id: "policy_claude_desktop",
-      clientId: "conn_claude_desktop",
-      scopes: ["context_pack.request", "memory.propose", "policy.read", "request.status"],
-      domainAllowlist: allDomains,
-      sensitivityCeiling: "sensitive",
-      requiresApprovalAbove: "personal",
-      passiveCaptureAllowed: false,
-      createdAt,
-      updatedAt: createdAt
-    },
-    {
-      id: "policy_chatgpt",
-      clientId: "conn_chatgpt",
-      scopes: ["context_pack.request", "memory.propose", "policy.read", "request.status"],
-      domainAllowlist: allDomains,
-      sensitivityCeiling: "private_consequential",
-      requiresApprovalAbove: "personal",
-      passiveCaptureAllowed: false,
-      createdAt,
-      updatedAt: createdAt
-    },
-    {
-      id: "policy_browser_capture",
-      clientId: "conn_browser_capture",
-      scopes: ["passive_capture.write", "memory.propose"],
-      domainAllowlist: allDomains,
-      sensitivityCeiling: "personal",
-      requiresApprovalAbove: "public",
-      passiveCaptureAllowed: false,
-      createdAt,
-      updatedAt: createdAt
-    }
+    createDefaultAccessPolicy("conn_claude_desktop", createdAt),
+    createDefaultAccessPolicy("conn_chatgpt", createdAt),
+    createDefaultAccessPolicy("conn_browser_capture", createdAt),
+    createDefaultAccessPolicy("conn_copy_fallback", createdAt)
   ];
+}
+
+function createDefaultAccessPolicy(clientId: string, createdAt: string): AccessPolicy {
+  return {
+    id: `policy_${clientId.replace(/^conn_/, "")}`,
+    clientId,
+    scopes:
+      clientId === "conn_browser_capture"
+        ? ["passive_capture.write", "memory.propose"]
+        : ["context_pack.request", "memory.propose", "policy.read", "request.status"],
+    domainAllowlist: [...allLifeDomains],
+    sensitivityCeiling:
+      clientId === "conn_claude_desktop"
+        ? "sensitive"
+        : clientId === "conn_browser_capture"
+          ? "personal"
+          : "private_consequential",
+    requiresApprovalAbove: clientId === "conn_browser_capture" ? "public" : "personal",
+    passiveCaptureAllowed: false,
+    createdAt,
+    updatedAt: createdAt
+  };
 }
 
 function policyCeilingForClient(state: VaultState, clientId: string): SensitivityTier {
@@ -2198,8 +2381,11 @@ function policyCeilingForClient(state: VaultState, clientId: string): Sensitivit
   );
 }
 
-function policyDomainAllowlistForClient(state: VaultState, clientId: string): LifeContextDomain[] | undefined {
-  return state.accessPolicies.find((policy) => policy.clientId === clientId)?.domainAllowlist;
+function policyDomainAllowlistForClient(state: VaultState, clientId: string): LifeContextDomain[] {
+  return normalizePolicyDomainAllowlist(
+    state.accessPolicies.find((policy) => policy.clientId === clientId)?.domainAllowlist,
+    cautiousLifeDomains
+  );
 }
 
 function policyRequiresApprovalAboveForClient(state: VaultState, clientId: string): SensitivityTier {

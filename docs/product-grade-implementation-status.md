@@ -182,6 +182,12 @@ Last updated: 2026-06-13
   - per-client `domainAllowlist` is enforced by both Rust Vault Core and the browser fallback Pack builder
   - per-client `requiresApprovalAbove` controls whether a generated Pack must pause for user confirmation
   - domain-limited Facts are recorded as `domain_policy` exclusions and contribute to policy-limited warnings without becoming AI-bound Pack items
+- Added general-user AccessPolicy domain controls:
+  - Connections now exposes a per-AI checklist for the life domains that may enter Context Pack-capable AI clients; browser Capture is not shown this outbound-AI control
+  - quick actions can restore all domains or apply a clearer conservative preset that excludes identity/profile, health/care, finance/benefits, and accessibility/constraint context
+  - TypeScript fallback, Tauri command, and Rust Vault Core all persist `domainAllowlist`; empty, unknown, or mixed-invalid domain lists cannot widen access
+  - policy updates cancel existing short-lived Packs for that client, expire the associated requests, and re-check the current policy before Pack confirmation/copy/status handoff
+  - policy update audit metadata records the domain allowlist, count, and invalidated Pack count
 - Added Rust-owned Source lifecycle path for the Tauri Control Center:
   - `update_native_source_lifecycle` supports soft delete, restore, and Raw body purge through Vault Core
   - Source deletion archives unapproved candidates from that Source and marks linked active Facts as `needs_review`
@@ -263,7 +269,6 @@ Last updated: 2026-06-13
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and `GET /mcp` behavior expected by hosted clients.
 - Fully continuous browser Capture with persistent in-page status, recent-capture review/delete, and delta queueing. Current shipped browser extension is an explicit user-triggered capture path with local processing and TTL purge.
-- General-user domain policy editing in Connections. Vault Core enforces `domainAllowlist`, but the current UI exposes sensitivity ceiling and approval threshold first; domain allowlist editing should become a checklist/preset flow before broader beta use.
 
 ## Verification
 
@@ -311,6 +316,7 @@ Last updated: 2026-06-13
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
 - Native and browser fallback Context Pack tests proving client domain allowlists exclude disallowed Facts, `requiresApprovalAbove` changes confirmation status, request ceilings cannot widen client policy, malformed policy sensitivity values fail closed, and domain-limited Facts cannot be restored into edited Packs
+- Native and browser fallback policy update tests proving per-client domain allowlists persist, deduplicate, audit their count, reject empty/unknown/mixed-invalid domain updates without widening access, fail closed for corrupted empty persisted allowlists, and invalidate existing Packs before later confirmation or retrieval
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts, `get_request_status` strips internal Pack fields, and confirmed Packs are hidden from clients that do not own the original request
 - Agent tests proving Remote Relay client identity is forwarded to the MCP sidecar as trusted runtime metadata
@@ -686,6 +692,14 @@ Last updated: 2026-06-13
 - Technical design: TypeScript fallback and Rust Vault Core share the same policy semantics, including `domain_policy` exclusions, policy-limited warnings, ceiling minimization, and approval-threshold fail-closed behavior.
 - Security/privacy: Vault Core external IDs, app-managed Relay tokens, and Relay OAuth/client/pairing tokens now require OS randomness through `getrandom` instead of falling back to predictable time-derived values.
 - Verification: `npm test` covers the browser fallback path, `cargo test --manifest-path src-tauri/Cargo.toml` covers Rust Vault Core, MCP, Relay, and Agent paths, and focused coverage confirms domain allowlists, invalid/widened ceilings, client-bound request status, and Agent-to-MCP client id propagation.
+
+### Connections Domain Policy UX Slice
+
+- Product fit: users can now decide which life areas each Context Pack-capable AI is allowed to receive, instead of relying on invisible Core-only `domainAllowlist` rules.
+- UX: each eligible AI connection card shows the allowed domain count, a checklist of Japanese life-domain labels, and two accessible presets: all domains or a conservative preset that removes personal identity, care, money/benefits, and accessibility/constraint context. Browser Capture no longer shows this outbound-AI control.
+- Security/privacy: empty, unknown, or mixed-invalid domain updates cannot widen access. Browser fallback preserves the previous allowlist for invalid updates, Rust Vault Core rejects invalid updates, corrupted empty persisted allowlists fail closed to a conservative domain set, and policy changes cancel existing Packs before later confirmation, copy, status, or Relay handoff.
+- Review disposition: SubAgent security and UX findings for stale Pack egress, mixed invalid domain handling, empty persisted allowlists, oversized checkbox rendering, Capture-policy confusion, missing Copy fallback policy, repeated button accessible names, and unclear domain labels were fixed in this slice.
+- Verification: `npm test`, `cargo test --manifest-path src-tauri/Cargo.toml`, and `npm run build` passed. Browser checks at desktop `1280x720` and mobile `390x844` found no page, card, action-row, or policy-domain-panel horizontal overflow; domain checkbox inputs measured `16x16`, Browser Capture had no policy-domain panel, and ChatGPT's conservative/all-domain actions updated checked domains and summary count.
 
 ## SubAgent Completion Review Disposition
 

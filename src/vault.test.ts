@@ -7,12 +7,15 @@ import {
   attachLocalAnswer,
   buildContextPack,
   buildContextPackForRequest,
+  canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
   createEmptyVault,
   makeAiContextPackPayload,
+  normalizeVaultState,
   purgeExpiredPassiveCaptures,
   searchFacts,
+  updateAccessPolicy,
   updateContextPackItemVisibility,
   updateSourceBody,
   updateSourceMetadata
@@ -379,6 +382,149 @@ describe("vault flow", () => {
       referencedId: "fact_personal",
       reason: "sensitivity_policy"
     });
+  });
+
+  it("updates client domain allowlists without accepting empty or unknown domains", () => {
+    const state = createEmptyVault();
+    const updated = updateAccessPolicy(state, "conn_chatgpt", {
+      domainAllowlist: [
+        "health_and_care",
+        "documents_and_evidence",
+        "health_and_care"
+      ]
+    });
+    const policy = updated.accessPolicies.find((policy) => policy.clientId === "conn_chatgpt")!;
+
+    expect(policy.domainAllowlist).toEqual(["health_and_care", "documents_and_evidence"]);
+    expect(updated.auditEvents[0].metadata?.domainAllowlistCount).toBe(2);
+
+    const unchanged = updateAccessPolicy(updated, "conn_chatgpt", {
+      domainAllowlist: [] as VaultState["accessPolicies"][number]["domainAllowlist"]
+    });
+    expect(unchanged.accessPolicies.find((item) => item.clientId === "conn_chatgpt")?.domainAllowlist).toEqual([
+      "health_and_care",
+      "documents_and_evidence"
+    ]);
+
+    const unknownIgnored = updateAccessPolicy(updated, "conn_chatgpt", {
+      domainAllowlist: ["not_a_domain" as VaultState["accessPolicies"][number]["domainAllowlist"][number]]
+    });
+    expect(unknownIgnored.accessPolicies.find((item) => item.clientId === "conn_chatgpt")?.domainAllowlist).toEqual([
+      "health_and_care",
+      "documents_and_evidence"
+    ]);
+
+    const mixedInvalidIgnored = updateAccessPolicy(updated, "conn_chatgpt", {
+      domainAllowlist: [
+        "health_and_care",
+        "not_a_domain" as VaultState["accessPolicies"][number]["domainAllowlist"][number]
+      ]
+    });
+    expect(
+      mixedInvalidIgnored.accessPolicies.find((item) => item.clientId === "conn_chatgpt")?.domainAllowlist
+    ).toEqual(["health_and_care", "documents_and_evidence"]);
+  });
+
+  it("invalidates client context packs when the AI access policy changes", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_health",
+          factText: "Doctor follow-up is scheduled for next month.",
+          domain: "health_and_care",
+          factType: "support_need",
+          sourceIds: [],
+          sensitivity: "personal",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: []
+        },
+        {
+          id: "fact_work",
+          factText: "Work shift starts at 9am.",
+          domain: "work_and_education",
+          factType: "routine",
+          sourceIds: [],
+          sensitivity: "public",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: []
+        }
+      ]
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me with the doctor follow-up and work shift",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    expect(built.pack?.items.some((item) => item.factId === "fact_work")).toBe(true);
+
+    const tightened = updateAccessPolicy(built.state, "conn_chatgpt", {
+      domainAllowlist: ["health_and_care"]
+    });
+    const cancelledPack = tightened.contextPacks.find((pack) => pack.id === built.pack!.id)!;
+    const expiredRequest = tightened.contextPackRequests.find((request) => request.id === requested.request.id)!;
+
+    expect(cancelledPack.confirmationStatus).toBe("cancelled");
+    expect(expiredRequest.status).toBe("expired");
+    expect(tightened.auditEvents[0].metadata?.invalidatedPackCount).toBe(1);
+    expect(canSendContextPackToAi(tightened, cancelledPack)).toBe(false);
+
+    const confirmed = confirmContextPack(tightened, built.pack!.id);
+    expect(confirmed.contextPacks.find((pack) => pack.id === built.pack!.id)?.confirmationStatus).toBe("cancelled");
+  });
+
+  it("fails closed when a persisted access policy has an empty domain allowlist", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const normalized = normalizeVaultState({
+      ...base,
+      facts: [
+        {
+          id: "fact_health",
+          factText: "Doctor follow-up is scheduled for next month.",
+          domain: "health_and_care",
+          factType: "support_need",
+          sourceIds: [],
+          sensitivity: "personal",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: []
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((policy) =>
+        policy.clientId === "conn_chatgpt" ? { ...policy, domainAllowlist: [] } : policy
+      )
+    });
+    const requested = createContextPackRequest(normalized, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me with the doctor follow-up",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    expect(
+      built.pack?.excludedItems.some(
+        (item) => item.referencedId === "fact_health" && item.reason === "domain_policy"
+      )
+    ).toBe(true);
+    expect(built.pack?.items.some((item) => item.factId === "fact_health")).toBe(false);
   });
 
   it("confirms a context pack for external AI without generating a local answer", () => {

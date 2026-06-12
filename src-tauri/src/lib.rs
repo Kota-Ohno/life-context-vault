@@ -1520,6 +1520,7 @@ pub fn confirm_context_pack_at_path(
     return Err("cancelled ContextPacks cannot be confirmed.".to_string());
   }
   ensure_pack_not_expired(&mut vault, &pack)?;
+  ensure_context_pack_allowed_by_current_policy(&vault, &pack)?;
   let request_id = optional_str_field(&pack, "requestId");
   let now = now_iso();
   mutate_vault_item_by_id(&mut vault, "contextPacks", pack_id, |pack| {
@@ -2112,6 +2113,7 @@ pub fn update_access_policy_at_path(
   client_id: &str,
   sensitivity_ceiling: Option<&str>,
   requires_approval_above: Option<&str>,
+  domain_allowlist: Option<Vec<String>>,
   passive_capture_allowed: Option<bool>,
 ) -> Result<VaultCoreSettingsUpdateResult, String> {
   let client_id = client_id.trim();
@@ -2128,36 +2130,53 @@ pub fn update_access_policy_at_path(
   let approval = requires_approval_above
     .map(sensitivity_tier)
     .transpose()?;
+  let domains = domain_allowlist
+    .map(normalize_policy_domain_allowlist)
+    .transpose()?;
 
-  let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
-    return Err("Vault has no accessPolicies array.".to_string());
-  };
-  let Some(policy) = policies
-    .iter_mut()
-    .find(|policy| str_field(policy, "clientId") == client_id)
-  else {
-    return Err(format!("AccessPolicy was not found for client: {client_id}"));
-  };
+  let (policy_id, sensitivity, mut metadata) = {
+    let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+      return Err("Vault has no accessPolicies array.".to_string());
+    };
+    let Some(policy) = policies
+      .iter_mut()
+      .find(|policy| str_field(policy, "clientId") == client_id)
+    else {
+      return Err(format!("AccessPolicy was not found for client: {client_id}"));
+    };
 
-  if let Some(ceiling) = ceiling {
-    policy["sensitivityCeiling"] = Value::String(ceiling.to_string());
+    if let Some(ceiling) = ceiling {
+      policy["sensitivityCeiling"] = Value::String(ceiling.to_string());
+    }
+    if let Some(approval) = approval {
+      policy["requiresApprovalAbove"] = Value::String(approval.to_string());
+    }
+    if let Some(domains) = domains {
+      policy["domainAllowlist"] = json!(domains);
+    }
+    if let Some(passive_capture_allowed) = passive_capture_allowed {
+      policy["passiveCaptureAllowed"] = Value::Bool(passive_capture_allowed);
+    }
+    policy["updatedAt"] = Value::String(now.clone());
+    let policy_id = str_field(policy, "id");
+    let sensitivity = str_field(policy, "sensitivityCeiling");
+    let normalized_domains = normalize_existing_policy_domain_allowlist(policy.get("domainAllowlist"));
+    let normalized_domain_count = normalized_domains.len();
+    let metadata = json!({
+      "clientId": client_id,
+      "sensitivityCeiling": sensitivity,
+      "requiresApprovalAbove": str_field(policy, "requiresApprovalAbove"),
+      "domainAllowlist": normalized_domains,
+      "domainAllowlistCount": normalized_domain_count,
+      "passiveCaptureAllowed": policy.get("passiveCaptureAllowed").and_then(Value::as_bool).unwrap_or(false),
+      "generatedBy": "native_vault_core"
+    });
+    (policy_id, sensitivity, metadata)
+  };
+  let invalidated_pack_count = invalidate_context_packs_for_client_policy(&mut vault, client_id);
+  if let Some(object) = metadata.as_object_mut() {
+    object.insert("invalidatedPackCount".to_string(), json!(invalidated_pack_count));
   }
-  if let Some(approval) = approval {
-    policy["requiresApprovalAbove"] = Value::String(approval.to_string());
-  }
-  if let Some(passive_capture_allowed) = passive_capture_allowed {
-    policy["passiveCaptureAllowed"] = Value::Bool(passive_capture_allowed);
-  }
-  policy["updatedAt"] = Value::String(now.clone());
-  let policy_id = str_field(policy, "id");
-  let sensitivity = str_field(policy, "sensitivityCeiling");
-  let metadata = json!({
-    "clientId": client_id,
-    "sensitivityCeiling": sensitivity,
-    "requiresApprovalAbove": str_field(policy, "requiresApprovalAbove"),
-    "passiveCaptureAllowed": policy.get("passiveCaptureAllowed").and_then(Value::as_bool).unwrap_or(false),
-    "generatedBy": "native_vault_core"
-  });
 
   push_json_array(
     &mut vault,
@@ -2907,19 +2926,35 @@ fn get_context_request_status_at_path_with_client(
     })
     .cloned();
   let expires_at = str_field(&request, "expiresAt");
-  let confirmed = pack
+  let pack_confirmed = pack
     .as_ref()
     .map(|pack| str_field(pack, "confirmationStatus") == "confirmed")
-    .unwrap_or(false)
-    || str_field(&request, "status") == "fulfilled";
+    .unwrap_or(false);
+  let confirmed = pack_confirmed && str_field(&request, "status") == "fulfilled";
   let expired = !confirmed && !expires_at.is_empty() && is_expired(&expires_at);
 
   if confirmed {
+    let Some(pack) = pack.as_ref() else {
+      return Ok(VaultCoreRequestStatusResult {
+        status: "expired".to_string(),
+        request_id: request_id.to_string(),
+        expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+        context_pack: None,
+      });
+    };
+    if ensure_context_pack_allowed_by_current_policy(&vault, pack).is_err() {
+      return Ok(VaultCoreRequestStatusResult {
+        status: "expired".to_string(),
+        request_id: request_id.to_string(),
+        expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+        context_pack: None,
+      });
+    }
     return Ok(VaultCoreRequestStatusResult {
       status: "fulfilled".to_string(),
       request_id: request_id.to_string(),
       expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
-      context_pack: pack.as_ref().map(safe_context_pack_for_client),
+      context_pack: Some(safe_context_pack_for_client(pack)),
     });
   }
 
@@ -2976,6 +3011,53 @@ fn ensure_pack_can_be_edited(vault: &mut Value, pack: &Value) -> Result<(), Stri
       if matches!(request_status.as_str(), "denied" | "expired" | "fulfilled") {
         return Err(format!("ContextPackRequest is already {request_status}."));
       }
+    }
+  }
+  Ok(())
+}
+
+fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) -> Result<(), String> {
+  let request_id = optional_str_field(pack, "requestId")
+    .ok_or_else(|| "ContextPack has no client request boundary.".to_string())?;
+  let request = find_vault_item_by_id(vault, "contextPackRequests", &request_id)
+    .ok_or_else(|| format!("ContextPackRequest was not found: {request_id}"))?;
+  let client_id = str_field(&request, "clientId");
+  if client_id.is_empty() {
+    return Err("ContextPackRequest has no clientId.".to_string());
+  }
+  let request_status = str_field(&request, "status");
+  if matches!(request_status.as_str(), "denied" | "expired") {
+    return Err(format!("ContextPackRequest is already {request_status}."));
+  }
+  let policy_ceiling = policy_ceiling_for_client(vault, &client_id);
+  let request_ceiling = policy_sensitivity_value(&str_field(&request, "sensitivityCeiling"), "public");
+  let ceiling = lower_sensitivity_tier(&policy_ceiling, &request_ceiling);
+  let domain_allowlist = policy_domain_allowlist_for_client(vault, &client_id);
+  let items = pack
+    .get("items")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  for item in items {
+    let item_sensitivity = item
+      .get("sensitivity")
+      .and_then(Value::as_str)
+      .and_then(|value| sensitivity_tier(value).ok().map(str::to_string))
+      .ok_or_else(|| "ContextPack item has an invalid sensitivity.".to_string())?;
+    if sensitivity_rank(&item_sensitivity) > sensitivity_rank(&ceiling) {
+      return Err("ContextPack exceeds the current AI client sensitivity policy.".to_string());
+    }
+    let fact_id = str_field(&item, "factId");
+    let fact = find_vault_item_by_id(vault, "facts", &fact_id)
+      .ok_or_else(|| format!("ContextPack references a missing Fact: {fact_id}"))?;
+    let fact_sensitivity = str_field(&fact, "sensitivity");
+    let fact_sensitivity = sensitivity_tier(&fact_sensitivity).unwrap_or("secret_never_send");
+    if sensitivity_rank(fact_sensitivity) > sensitivity_rank(&ceiling) {
+      return Err("ContextPack Fact exceeds the current AI client sensitivity policy.".to_string());
+    }
+    let fact_domain = life_domain(&str_field(&fact, "domain"))?;
+    if !domain_allowlist.iter().any(|domain| domain == fact_domain) {
+      return Err("ContextPack Fact is outside the current AI client domain policy.".to_string());
     }
   }
   Ok(())
@@ -3994,6 +4076,22 @@ fn all_life_domains() -> Vec<&'static str> {
     "relationships_and_household",
     "constraints_and_accessibility",
   ]
+}
+
+fn cautious_life_domains() -> Vec<String> {
+  all_life_domains()
+    .into_iter()
+    .filter(|domain| {
+      !matches!(
+        *domain,
+        "identity_and_profile"
+          | "health_and_care"
+          | "finance_and_benefits"
+          | "constraints_and_accessibility"
+      )
+    })
+    .map(str::to_string)
+    .collect()
 }
 
 fn default_policy_scopes(client_id: &str) -> Vec<&'static str> {
@@ -5311,6 +5409,62 @@ fn invalidate_context_packs_for_facts_with_warning(
   affected
 }
 
+fn invalidate_context_packs_for_client_policy(vault: &mut Value, client_id: &str) -> usize {
+  let request_ids = value_array(vault, "contextPackRequests")
+    .into_iter()
+    .filter(|request| str_field(request, "clientId") == client_id)
+    .map(|request| str_field(request, "id"))
+    .filter(|request_id| !request_id.is_empty())
+    .collect::<HashSet<_>>();
+  if request_ids.is_empty() {
+    return 0;
+  }
+
+  let mut invalidated_request_ids = HashSet::new();
+  let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) else {
+    return 0;
+  };
+  let mut affected = 0;
+  for pack in packs {
+    let request_id = optional_str_field(pack, "requestId").unwrap_or_default();
+    if request_ids.contains(&request_id) && str_field(pack, "confirmationStatus") != "cancelled" {
+      pack["confirmationStatus"] = Value::String("cancelled".to_string());
+      if let Some(object) = pack.as_object_mut() {
+        object.remove("confirmedAt");
+      }
+      let mut warnings = pack
+        .get("warnings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+      warnings.insert(
+        0,
+        json!({
+          "kind": "policy_limited",
+          "message": "AI接続ポリシーが更新されたため、このContext Packは無効化されました。新しいContext Packを作成してください。",
+          "relatedIds": [client_id]
+        }),
+      );
+      pack["warnings"] = Value::Array(warnings);
+      invalidated_request_ids.insert(request_id);
+      affected += 1;
+    }
+  }
+
+  if let Some(requests) = vault
+    .get_mut("contextPackRequests")
+    .and_then(Value::as_array_mut)
+  {
+    for request in requests {
+      if invalidated_request_ids.contains(&str_field(request, "id")) {
+        request["status"] = Value::String("expired".to_string());
+      }
+    }
+  }
+
+  affected
+}
+
 fn copy_optional_candidate_field(candidate: &Value, fact: &mut Value, key: &str) {
   if let Some(value) = candidate.get(key).cloned() {
     if !value.as_str().map(str::is_empty).unwrap_or(false) {
@@ -5390,19 +5544,44 @@ fn policy_domain_allowlist_for_client(vault: &Value, client_id: &str) -> Vec<Str
   value_array(vault, "accessPolicies")
     .into_iter()
     .find(|policy| str_field(policy, "clientId") == client_id)
-    .and_then(|policy| {
-      policy
-        .get("domainAllowlist")
-        .and_then(Value::as_array)
-        .map(|domains| {
-          domains
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-        })
-    })
-    .unwrap_or_default()
+    .map(|policy| normalize_existing_policy_domain_allowlist(policy.get("domainAllowlist")))
+    .unwrap_or_else(cautious_life_domains)
+}
+
+fn normalize_existing_policy_domain_allowlist(value: Option<&Value>) -> Vec<String> {
+  let Some(domains) = value.and_then(Value::as_array) else {
+    return cautious_life_domains();
+  };
+  let mut normalized = Vec::new();
+  for domain in domains {
+    let Some(domain) = domain.as_str() else {
+      return cautious_life_domains();
+    };
+    let Ok(domain) = life_domain(domain.trim()) else {
+      return cautious_life_domains();
+    };
+    if !normalized.iter().any(|existing| existing == domain) {
+      normalized.push(domain.to_string());
+    }
+  }
+  if normalized.is_empty() {
+    return cautious_life_domains();
+  }
+  normalized
+}
+
+fn normalize_policy_domain_allowlist(domains: Vec<String>) -> Result<Vec<String>, String> {
+  let mut normalized = Vec::new();
+  for domain in domains {
+    let domain = life_domain(domain.trim())?.to_string();
+    if !normalized.iter().any(|existing| existing == &domain) {
+      normalized.push(domain);
+    }
+  }
+  if normalized.is_empty() {
+    return Err("domainAllowlist must include at least one life domain.".to_string());
+  }
+  Ok(normalized)
 }
 
 fn push_json_array(value: &mut Value, key: &str, item: Value) {
@@ -6784,6 +6963,7 @@ fn update_native_access_policy(
   client_id: String,
   sensitivity_ceiling: Option<String>,
   requires_approval_above: Option<String>,
+  domain_allowlist: Option<Vec<String>>,
   passive_capture_allowed: Option<bool>,
 ) -> Result<NativeVaultSettingsUpdateResult, String> {
   let path = vault_db_path(&app)?;
@@ -6792,6 +6972,7 @@ fn update_native_access_policy(
     &client_id,
     sensitivity_ceiling.as_deref(),
     requires_approval_above.as_deref(),
+    domain_allowlist,
     passive_capture_allowed,
   )?;
   Ok(NativeVaultSettingsUpdateResult {
@@ -8680,6 +8861,11 @@ mod tests {
       "conn_chatgpt",
       Some("personal"),
       Some("public"),
+      Some(vec![
+        "health_and_care".to_string(),
+        "documents_and_evidence".to_string(),
+        "health_and_care".to_string(),
+      ]),
       Some(false),
     )
     .expect("policy update");
@@ -8702,6 +8888,10 @@ mod tests {
       policy.get("requiresApprovalAbove").and_then(Value::as_str),
       Some("public")
     );
+    assert_eq!(
+      policy.get("domainAllowlist"),
+      Some(&json!(["health_and_care", "documents_and_evidence"]))
+    );
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
     let normalized_policy_count: i64 = connection
@@ -8717,7 +8907,128 @@ mod tests {
 
     assert_eq!(normalized_policy_count, 1);
     assert_eq!(audit_count, 1);
+    let empty_domain_error = match update_access_policy_at_path(
+      &path,
+      "conn_chatgpt",
+      None,
+      None,
+      Some(Vec::new()),
+      None,
+    ) {
+      Ok(_) => panic!("empty domain allowlist should be rejected"),
+      Err(error) => error,
+    };
+    assert!(empty_domain_error.contains("domainAllowlist"));
+    let mixed_domain_error = match update_access_policy_at_path(
+      &path,
+      "conn_chatgpt",
+      None,
+      None,
+      Some(vec![
+        "health_and_care".to_string(),
+        "not_a_domain".to_string(),
+      ]),
+      None,
+    ) {
+      Ok(_) => panic!("mixed invalid domain allowlist should be rejected"),
+      Err(error) => error,
+    };
+    assert!(mixed_domain_error.contains("unsupported life context domain"));
     remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_access_policy_update_invalidates_existing_client_packs() {
+    use_test_vault_key();
+    let path = temp_vault_path("policy-update-invalidates-pack");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Care note",
+      "Doctor follow-up is scheduled for next month.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me with the doctor follow-up.",
+      Some("普段使うAIへの回答文脈"),
+      Some("sensitive"),
+      Some("always_review"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let updated = update_access_policy_at_path(
+      &path,
+      "conn_chatgpt",
+      None,
+      None,
+      Some(vec!["documents_and_evidence".to_string()]),
+      None,
+    )
+    .expect("policy update");
+    let saved: Value = serde_json::from_str(&updated.payload).expect("vault json");
+    let pack = find_vault_item_by_id(&saved, "contextPacks", &built.pack_id).expect("pack");
+    let request =
+      find_vault_item_by_id(&saved, "contextPackRequests", &built.request_id).expect("request");
+    let status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status");
+    let reconfirm_error = match confirm_context_pack_at_path(&path, &built.pack_id) {
+      Ok(_) => panic!("cancelled pack should not be reconfirmed"),
+      Err(error) => error,
+    };
+
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
+    assert_eq!(
+      request.get("status").and_then(Value::as_str),
+      Some("expired")
+    );
+    assert_eq!(status.status, "expired");
+    assert!(status.context_pack.is_none());
+    assert!(reconfirm_error.contains("cancelled"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_policy_domain_allowlist_fails_closed_for_empty_or_invalid_persistence() {
+    let empty_policy = json!({
+      "accessPolicies": [
+        {
+          "id": "policy_chatgpt",
+          "clientId": "conn_chatgpt",
+          "domainAllowlist": []
+        }
+      ]
+    });
+    let invalid_policy = json!({
+      "accessPolicies": [
+        {
+          "id": "policy_chatgpt",
+          "clientId": "conn_chatgpt",
+          "domainAllowlist": ["health_and_care", "not_a_domain"]
+        }
+      ]
+    });
+    let empty_allowlist = policy_domain_allowlist_for_client(&empty_policy, "conn_chatgpt");
+    let invalid_allowlist = policy_domain_allowlist_for_client(&invalid_policy, "conn_chatgpt");
+
+    assert!(!empty_allowlist.contains(&"health_and_care".to_string()));
+    assert!(!invalid_allowlist.contains(&"health_and_care".to_string()));
+    assert!(empty_allowlist.contains(&"documents_and_evidence".to_string()));
+    assert!(invalid_allowlist.contains(&"documents_and_evidence".to_string()));
   }
 
   #[test]

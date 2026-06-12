@@ -91,6 +91,7 @@ import {
   attachLocalAnswer,
   backgroundSetupBody,
   buildContextPackForRequest,
+  canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
   createBackgroundSource,
@@ -184,6 +185,10 @@ const domainOptions: Array<LifeContextDomain | "all"> = [
   "relationships_and_household",
   "constraints_and_accessibility"
 ];
+
+const policyDomainOptions = domainOptions.filter(
+  (domain): domain is LifeContextDomain => domain !== "all"
+);
 
 const sensitivityOptions: Array<SensitivityTier | "all"> = [
   "all",
@@ -1113,6 +1118,10 @@ export function App() {
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
       : null;
     if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
+      if (!canSendContextPackToAi(state, pack)) {
+        setNotice("このContext Packは現在のAI接続ポリシーでは送信できません。新しいContext Packを作成してください。");
+        return;
+      }
       const handoff = await tryRelayHandoff(state, request.id);
       setNotice(
         handoff.status !== "skipped"
@@ -1139,10 +1148,16 @@ export function App() {
         return;
       }
     }
-    apply(
-      confirmContextPack(state, pack.id),
-      "Context Packを承認しました。外部AIはget_request_statusで取得できます。"
-    );
+    const confirmedState = confirmContextPack(state, pack.id);
+    const confirmedPack = confirmedState.contextPacks.find((item) => item.id === pack.id);
+    if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
+      apply(
+        confirmedState,
+        "このContext Packは現在のAI接続ポリシーでは承認できません。新しいContext Packを作成してください。"
+      );
+      return;
+    }
+    apply(confirmedState, "Context Packを承認しました。外部AIはget_request_statusで取得できます。");
   }
 
   async function copyPackForAi(pack: ContextPack) {
@@ -1150,6 +1165,10 @@ export function App() {
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
       : null;
     const shouldConfirm = pack.confirmationStatus !== "confirmed" || request?.status !== "fulfilled";
+    if (!shouldConfirm && !canSendContextPackToAi(state, pack)) {
+      setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+      return;
+    }
     let payloadPack = shouldConfirm
       ? { ...pack, confirmationStatus: "confirmed" as const, confirmedAt: new Date().toISOString() }
       : pack;
@@ -1164,13 +1183,25 @@ export function App() {
             setActivePackId(updated.packId ?? pack.id);
             if (updated.requestId) setActiveRequestId(updated.requestId);
             payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
+            if (!canSendContextPackToAi(updated.state, payloadPack)) {
+              setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+              return;
+            }
           }
         } catch (error) {
           setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを承認できませんでした。");
           return;
         }
       } else {
-        setState(confirmContextPack(state, pack.id));
+        const confirmedState = confirmContextPack(state, pack.id);
+        const confirmedPack = confirmedState.contextPacks.find((item) => item.id === pack.id);
+        if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
+          setState(confirmedState);
+          setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+          return;
+        }
+        setState(confirmedState);
+        payloadPack = confirmedPack;
       }
     }
     await copyText(
@@ -1228,14 +1259,14 @@ export function App() {
 
   function updatePolicy(
     clientId: string,
-    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
   ) {
     void updatePolicyThroughCore(clientId, settings);
   }
 
   async function updatePolicyThroughCore(
     clientId: string,
-    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
   ) {
     if (nativePath) {
       try {
@@ -2582,7 +2613,7 @@ function ConnectionsView({
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   updatePolicy: (
     clientId: string,
-    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
   ) => void;
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
@@ -2622,6 +2653,34 @@ function ConnectionsView({
   useEffect(() => {
     setAllowedSitesDraft(captureSettings.allowedSites.join(", "));
   }, [captureSettings.allowedSites]);
+
+  const cautiousDomains = policyDomainOptions.filter(
+    (domain) =>
+      ![
+        "identity_and_profile",
+        "health_and_care",
+        "finance_and_benefits",
+        "constraints_and_accessibility"
+      ].includes(domain)
+  );
+
+  function domainsForPolicy(policy?: AccessPolicy): LifeContextDomain[] {
+    return policy && policy.domainAllowlist.length > 0 ? policy.domainAllowlist : cautiousDomains;
+  }
+
+  function togglePolicyDomain(clientId: string, policy: AccessPolicy | undefined, domain: LifeContextDomain) {
+    const current = domainsForPolicy(policy);
+    const next = current.includes(domain)
+      ? current.filter((item) => item !== domain)
+      : [...current, domain];
+    if (next.length === 0) return;
+    updatePolicy(clientId, { domainAllowlist: next });
+  }
+
+  function setPolicyDomains(clientId: string, domains: LifeContextDomain[]) {
+    if (domains.length === 0) return;
+    updatePolicy(clientId, { domainAllowlist: domains });
+  }
 
   return (
     <section className="view-grid connections-grid">
@@ -2678,6 +2737,8 @@ function ConnectionsView({
         <div className="connection-list">
           {connectors.map((connector) => {
             const policy = policies.find((item) => item.clientId === connector.id);
+            const allowedDomains = domainsForPolicy(policy);
+            const supportsContextPacks = connector.scopes.includes("context_pack.request");
             return (
               <article className="connection-card" key={connector.id}>
                 <div className="connection-main">
@@ -2735,6 +2796,53 @@ function ConnectionsView({
                     </select>
                   </label>
                 </div>
+                {supportsContextPacks ? (
+                <div className="policy-domain-panel">
+                  <div className="policy-domain-heading">
+                    <div>
+                      <strong>このAIに渡してよい生活領域</strong>
+                      <span>
+                        {allowedDomains.length}/{policyDomainOptions.length} 領域を許可中。未許可の領域はContext Packから除外されます。
+                      </span>
+                    </div>
+                    <div className="policy-domain-actions">
+                      <button
+                        aria-label={`${connector.clientName}の生活領域をすべて許可する`}
+                        className="secondary-button"
+                        onClick={() => setPolicyDomains(connector.id, policyDomainOptions)}
+                        type="button"
+                      >
+                        すべて許可
+                      </button>
+                      <button
+                        aria-label={`${connector.clientName}の生活領域から本人情報、医療・ケア、お金・給付、制約・配慮を外す`}
+                        className="secondary-button"
+                        onClick={() => setPolicyDomains(connector.id, cautiousDomains)}
+                        type="button"
+                      >
+                        個人情報等を外す
+                      </button>
+                    </div>
+                  </div>
+                  <div className="policy-domain-list">
+                    {policyDomainOptions.map((domain) => {
+                      const selected = allowedDomains.includes(domain);
+                      return (
+                        <label className="domain-checkbox" key={domain}>
+                          <input
+                            aria-label={`${connector.clientName}に${domainLabel(domain)}を渡す`}
+                            checked={selected}
+                            disabled={selected && allowedDomains.length === 1}
+                            onChange={() => togglePolicyDomain(connector.id, policy, domain)}
+                            type="checkbox"
+                          />
+                          <span>{domainLabel(domain)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                ) : null}
               </article>
             );
           })}
