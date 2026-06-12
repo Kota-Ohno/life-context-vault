@@ -80,6 +80,10 @@ Last updated: 2026-06-12
   - `Stop managed` only stops processes started by the app
   - closing the app window also stops app-managed Relay and Agent processes
   - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
+- Added first-run AI access launchpad UX:
+  - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
+  - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
+  - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -125,6 +129,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: MCP and Remote Relay setup grids stack without page-level horizontal overflow
   - desktop `1440x980`: Connections browser extension setup card displays native host instructions without horizontal overflow
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
+  - desktop `1280x720`: Home first-run launchpad and Connections readiness panel have no page-level horizontal overflow
+  - mobile `390x844`: Home first-run launchpad and Connections readiness panel stack to one column without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow
   - mobile `390x844`: Settings storage panel stacks without page-level horizontal overflow
 - Extension static checks:
@@ -160,6 +166,13 @@ Last updated: 2026-06-12
 - UX: Connections now leads with service status and direct controls, keeping manual commands as fallback.
 - Lifecycle: app-managed Relay and Agent are stopped by **Stop managed** and on app window close; external relays are observed but not killed or auto-attached.
 - Verification: bundled Relay and Agent launched from `Life Context Vault.app/Contents/MacOS` and served MCP `tools/list` through the Agent WebSocket path.
+
+### First-Run AI Access UX Slice
+
+- Product fit: Home now gives non-developer users a concrete sequence from "add life context" to "AI can request a Context Pack" instead of expecting them to discover Connections first.
+- UX: Connections now explains readiness in natural language and separates service state from Vault usefulness signals such as Approved Facts, Inbox, Requests, and Capture.
+- Safety: readiness copy reinforces that external AI receives only Context Packs, not Raw Sources, unapproved candidates, or the full Vault.
+- Verification: Browser DOM layout checks covered desktop `1280x720` and mobile `390x844`; screenshot capture timed out in the Browser runtime, so visual QA relied on rendered layout metrics and DOM state for this slice.
 
 ## Independent Review Passes
 

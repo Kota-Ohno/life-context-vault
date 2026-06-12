@@ -207,9 +207,88 @@ button {
   grid-column: 1 / -1;
 }
 
-.home-grid .panel.wide {
+.home-grid .background-panel {
   grid-row: span 2;
-  grid-column: auto;
+}
+
+.launch-panel {
+  display: grid;
+  gap: 4px;
+}
+
+.onboarding-checklist {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.onboarding-step {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 168px;
+  padding: 12px;
+  border: 1px solid #dde5da;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #26352b;
+  text-align: left;
+}
+
+.onboarding-step:hover {
+  border-color: #9eb49d;
+  background: #f3f8ee;
+}
+
+.onboarding-step:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.onboarding-step.done {
+  border-color: #b7d0bd;
+  background: #f0f8ef;
+}
+
+.onboarding-step.current {
+  border-color: #dfc28d;
+  background: #fffaf0;
+}
+
+.onboarding-step.blocked {
+  background: #f7f8f5;
+}
+
+.onboarding-step strong,
+.onboarding-step small,
+.step-action {
+  overflow-wrap: anywhere;
+}
+
+.onboarding-step small {
+  color: #5d6a61;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.step-index {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #4d5a52;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.step-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  color: #26352b;
+  font-size: 13px;
+  font-weight: 850;
 }
 
 .panel-heading {
@@ -479,6 +558,87 @@ button:focus-visible {
 .service-console {
   display: grid;
   gap: 14px;
+}
+
+.readiness-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.readiness-panel.ready,
+.service-brief.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.readiness-panel.attention,
+.service-brief.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.readiness-main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.readiness-main h3,
+.readiness-main p {
+  margin: 0;
+}
+
+.readiness-main h3 {
+  margin-top: 4px;
+}
+
+.readiness-main p {
+  margin-top: 6px;
+  color: #56645c;
+  line-height: 1.5;
+}
+
+.readiness-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #cbd8ca;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.readiness-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.readiness-metrics div,
+.service-brief {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.readiness-metrics span,
+.service-brief span {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.readiness-metrics strong,
+.service-brief strong {
+  overflow-wrap: anywhere;
 }
 
 .service-status-grid {
@@ -827,7 +987,9 @@ button:focus-visible {
   .view-grid,
   .home-grid,
   .ask-layout,
+  .onboarding-checklist,
   .policy-grid,
+  .readiness-panel,
   .service-status-grid,
   .setup-grid,
   .setup-grid.remote-relay-setup,
@@ -835,7 +997,7 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .home-grid .panel.wide {
+  .home-grid .background-panel {
     grid-row: auto;
   }
 }

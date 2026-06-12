@@ -1,8 +1,11 @@
 import {
   Activity,
   Archive,
+  ArrowRight,
   Check,
+  CheckCircle2,
   Clipboard,
+  CircleDot,
   Clock,
   Download,
   FileText,
@@ -82,6 +85,15 @@ type View =
   | "search"
   | "audit"
   | "settings";
+
+type OnboardingStep = {
+  title: string;
+  body: string;
+  status: "done" | "current" | "blocked";
+  actionLabel: string;
+  action?: () => void;
+  disabled?: boolean;
+};
 
 const domainOptions: Array<LifeContextDomain | "all"> = [
   "all",
@@ -493,11 +505,18 @@ export function App() {
             candidates={activeCandidates}
             connectors={state.connectorSessions}
             captureSettings={state.passiveCaptureSettings}
+            sources={state.sources}
+            requests={state.contextPackRequests}
+            nativePath={nativePath}
+            aiServiceStatus={aiServiceStatus}
+            aiServiceBusy={aiServiceBusy}
             setup={setup}
             setSetup={setSetup}
             submitBackground={submitBackground}
+            startAiAccess={startAiAccess}
             seedDemo={seedDemo}
             goInbox={() => setView("inbox")}
+            goSources={() => setView("sources")}
             goRequests={() => setView("requests")}
             goConnections={() => setView("connections")}
           />
@@ -529,6 +548,9 @@ export function App() {
             connectors={state.connectorSessions}
             policies={state.accessPolicies}
             captureSettings={state.passiveCaptureSettings}
+            approvedFactCount={activeFacts.length}
+            pendingCandidateCount={activeCandidates.length}
+            requestCount={state.contextPackRequests.length}
             updateCapture={updateCapture}
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
@@ -634,11 +656,18 @@ function HomeView({
   candidates,
   connectors,
   captureSettings,
+  sources,
+  requests,
+  nativePath,
+  aiServiceStatus,
+  aiServiceBusy,
   setup,
   setSetup,
   submitBackground,
+  startAiAccess,
   seedDemo,
   goInbox,
+  goSources,
   goRequests,
   goConnections
 }: {
@@ -646,11 +675,18 @@ function HomeView({
   candidates: MemoryCandidate[];
   connectors: ConnectorSession[];
   captureSettings: PassiveCaptureSettings;
+  sources: VaultState["sources"];
+  requests: ContextPackRequest[];
+  nativePath: string | null;
+  aiServiceStatus: AiAccessServiceStatus | null;
+  aiServiceBusy: boolean;
   setup: BackgroundSetupInput;
   setSetup: (input: BackgroundSetupInput) => void;
   submitBackground: () => void;
+  startAiAccess: () => void;
   seedDemo: () => void;
   goInbox: () => void;
+  goSources: () => void;
   goRequests: () => void;
   goConnections: () => void;
 }) {
@@ -667,10 +703,86 @@ function HomeView({
     ].includes(fact.domain)
   );
   const grouped = groupByDomain(backgroundFacts);
+  const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
+  const approvedContextReady = facts.length > 0;
+  const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
+  const requestTried = requests.length > 0;
+  const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const onboardingSteps: OnboardingStep[] = [
+    {
+      title: "生活背景を入れる",
+      body: backgroundStarted
+        ? "Sourceまたは候補が作成されています。"
+        : "呼び名、制約、いま動いている生活領域から始めます。",
+      status: backgroundStarted ? "done" : "current",
+      actionLabel: backgroundStarted ? "Sourceを見る" : "Source追加",
+      action: goSources
+    },
+    {
+      title: "候補を承認する",
+      body: approvedContextReady
+        ? `${facts.length}件のApprovedFactがAIに使える状態です。`
+        : candidates.length > 0
+          ? `${candidates.length}件の候補が承認待ちです。`
+          : "候補ができたら、保存するものだけFactにします。",
+      status: approvedContextReady ? "done" : candidates.length > 0 ? "current" : "blocked",
+      actionLabel: "Inboxを開く",
+      action: goInbox
+    },
+    {
+      title: "AI Accessを起動する",
+      body: accessReadiness.body,
+      status: aiAccessReady ? "done" : nativePath ? "current" : "blocked",
+      actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "起動する" : "Desktopで開く",
+      action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
+      disabled: aiServiceBusy
+    },
+    {
+      title: "Context Packを確認する",
+      body: requestTried
+        ? `${requests.length}件のContext Request履歴があります。`
+        : "AIへ渡す最小文脈を確認してから回答を作ります。",
+      status: requestTried ? "done" : approvedContextReady ? "current" : "blocked",
+      actionLabel: "Requestsを開く",
+      action: goRequests
+    }
+  ];
 
   return (
     <section className="view-grid home-grid">
-      <div className="panel wide">
+      <div className="panel wide launch-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">First 10 minutes</p>
+            <h3>AIがあなたの生活文脈を使えるまで</h3>
+          </div>
+          <Badge>{accessReadiness.badge}</Badge>
+        </div>
+        <div className="onboarding-checklist">
+          {onboardingSteps.map((step, index) => (
+            <button
+              className={`onboarding-step ${step.status}`}
+              disabled={step.disabled}
+              key={step.title}
+              onClick={step.action}
+              type="button"
+            >
+              <span className="step-index">
+                {step.status === "done" ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}
+                {index + 1}
+              </span>
+              <strong>{step.title}</strong>
+              <small>{step.body}</small>
+              <span className="step-action">
+                {step.actionLabel}
+                <ArrowRight size={14} />
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel background-panel">
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Background Snapshot</p>
@@ -938,6 +1050,9 @@ function ConnectionsView({
   connectors,
   policies,
   captureSettings,
+  approvedFactCount,
+  pendingCandidateCount,
+  requestCount,
   updateCapture,
   nativePath,
   aiServiceStatus,
@@ -957,6 +1072,9 @@ function ConnectionsView({
   connectors: ConnectorSession[];
   policies: VaultState["accessPolicies"];
   captureSettings: PassiveCaptureSettings;
+  approvedFactCount: number;
+  pendingCandidateCount: number;
+  requestCount: number;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
@@ -974,6 +1092,7 @@ function ConnectionsView({
   simulatePassiveCapture: () => void;
 }) {
   const claudeConfig = makeClaudeDesktopConfig(nativePath);
+  const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
 
   return (
     <section className="view-grid connections-grid">
@@ -1015,6 +1134,25 @@ function ConnectionsView({
         </div>
       </div>
 
+      <div className={`panel wide readiness-panel ${accessReadiness.tone}`}>
+        <div className="readiness-main">
+          <div className="readiness-icon">
+            {accessReadiness.tone === "ready" ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}
+          </div>
+          <div>
+            <p className="eyebrow">Connection readiness</p>
+            <h3>{accessReadiness.title}</h3>
+            <p>{accessReadiness.detail}</p>
+          </div>
+        </div>
+        <div className="readiness-metrics">
+          <Metric label="Approved Facts" value={approvedFactCount} />
+          <Metric label="Inbox" value={pendingCandidateCount} />
+          <Metric label="Requests" value={requestCount} />
+          <Metric label="Capture" value={captureSettings.enabled ? "on" : "paused"} />
+        </div>
+      </div>
+
       <div className="panel wide">
         <div className="panel-heading">
           <div>
@@ -1024,6 +1162,10 @@ function ConnectionsView({
           <Activity size={18} />
         </div>
         <div className="service-console">
+          <div className={`service-brief ${accessReadiness.tone}`}>
+            <strong>{accessReadiness.title}</strong>
+            <span>{accessReadiness.body}</span>
+          </div>
           <div className="service-status-grid">
             <Metric label="Relay" value={aiServiceStatus?.relayReachable ? "reachable" : "offline"} />
             <Metric label="Agent" value={aiServiceStatus?.agentConnected ? "connected" : "offline"} />
@@ -1687,6 +1829,66 @@ function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
   if (status.agentManagedRunning) return "agent";
   if (status.relayReachable || status.agentConnected) return "external";
   return "stopped";
+}
+
+function aiAccessReadinessCopy(
+  status: AiAccessServiceStatus | null,
+  nativePath: string | null
+): {
+  badge: string;
+  title: string;
+  body: string;
+  detail: string;
+  tone: "ready" | "attention" | "neutral";
+} {
+  if (!nativePath) {
+    return {
+      badge: "Desktop required",
+      title: "Desktop appでAI Accessを管理できます",
+      body: "ブラウザ表示ではVault Agentを起動できません。",
+      detail:
+        "Vault本体とAgentはローカルで動く前提です。Desktop appを開くと、RelayとAgentをここから起動できます。",
+      tone: "neutral"
+    };
+  }
+  if (status?.agentConnected) {
+    return {
+      badge: "Ready",
+      title: "AIがContext Packを要求できる状態です",
+      body: "RelayとLocal Agentが接続済みです。",
+      detail:
+        "外部AIへ渡る境界はContext Packだけです。未承認候補、Raw Source、Vault全体はこの接続から直接渡しません。",
+      tone: "ready"
+    };
+  }
+  if (status?.relayReachable && !status.relayManagedRunning) {
+    return {
+      badge: "External relay",
+      title: "外部Relayを検知しています",
+      body: "アプリは自分が起動していないRelayへAgentを自動接続しません。",
+      detail:
+        "手動で起動したRelayを使う場合は手動pairingを続けてください。アプリ管理にしたい場合は外部Relayを停止してからStart AI Accessを押します。",
+      tone: "attention"
+    };
+  }
+  if (status?.relayReachable) {
+    return {
+      badge: "Relay online",
+      title: "Relayは起動していますがAgent待ちです",
+      body: "Local Agentの接続が完了するとAIからVaultに要求を送れます。",
+      detail:
+        "AgentはVaultをローカルで検索し、ポリシーと確認画面を通したContext PackだけをRelayへ返します。",
+      tone: "attention"
+    };
+  }
+  return {
+    badge: "Not started",
+    title: "AI Access Serviceはまだ停止しています",
+    body: "Start AI AccessでRelayとLocal Agentをまとめて起動します。",
+    detail:
+      "最初は背景情報を承認してから起動すると、AIに渡すContext Packの確認まで一気に試せます。",
+    tone: "neutral"
+  };
 }
 
 function makeClaudeDesktopConfig(nativePath: string | null): string {
