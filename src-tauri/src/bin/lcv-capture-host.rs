@@ -228,10 +228,10 @@ fn save_vault(vault: &Value) -> Result<(), String> {
   connection
     .execute(
       "INSERT INTO vault_state (key, payload, updated_at)
-       VALUES (?1, ?2, CURRENT_TIMESTAMP)
+       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ON CONFLICT(key) DO UPDATE SET
          payload = excluded.payload,
-         updated_at = CURRENT_TIMESTAMP",
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
       params![VAULT_STATE_KEY, vault.to_string()],
     )
     .map_err(|error| format!("failed to save vault state: {error}"))?;
@@ -249,6 +249,32 @@ fn ensure_vault_state_table(connection: &Connection) -> Result<(), String> {
       [],
     )
     .map_err(|error| format!("failed to initialize vault_state: {error}"))?;
+  ensure_vault_state_updated_at_column(connection)?;
+  Ok(())
+}
+
+fn ensure_vault_state_updated_at_column(connection: &Connection) -> Result<(), String> {
+  let mut statement = connection
+    .prepare("PRAGMA table_info(vault_state)")
+    .map_err(|error| format!("failed to inspect vault_state schema: {error}"))?;
+  let columns = statement
+    .query_map([], |row| row.get::<_, String>(1))
+    .map_err(|error| format!("failed to read vault_state schema: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("failed to collect vault_state schema: {error}"))?;
+  if !columns.iter().any(|column| column == "updated_at") {
+    connection
+      .execute("ALTER TABLE vault_state ADD COLUMN updated_at TEXT", [])
+      .map_err(|error| format!("failed to add vault_state updated_at: {error}"))?;
+  }
+  connection
+    .execute(
+      "UPDATE vault_state
+       SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE updated_at IS NULL OR updated_at = ''",
+      [],
+    )
+    .map_err(|error| format!("failed to backfill vault_state updated_at: {error}"))?;
   Ok(())
 }
 

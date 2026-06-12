@@ -84,6 +84,11 @@ Last updated: 2026-06-12
   - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
   - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
+- Added live native Vault sync for external AI writes:
+  - native vault state now exposes `updatedAt` metadata to the frontend
+  - the Control Center polls the encrypted native Vault and imports changes written by MCP sidecars, Remote Relay Agent calls, or browser capture
+  - incoming pending Context Requests are selected automatically so the user can confirm or deny them from **Requests**
+  - legacy `vault_state` tables without `updated_at` are backfilled on open by the app, MCP sidecar, and capture host
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -113,6 +118,7 @@ Last updated: 2026-06-12
 - `npm run relay:build`
 - `npm run agent:build`
 - `npm run sidecars:prepare`
+- MCP sidecar smoke test for external `request_context_pack` persistence and `get_request_status` lookup against the same encrypted Vault
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
@@ -173,6 +179,14 @@ Last updated: 2026-06-12
 - UX: Connections now explains readiness in natural language and separates service state from Vault usefulness signals such as Approved Facts, Inbox, Requests, and Capture.
 - Safety: readiness copy reinforces that external AI receives only Context Packs, not Raw Sources, unapproved candidates, or the full Vault.
 - Verification: Browser DOM layout checks covered desktop `1280x720` and mobile `390x844`; screenshot capture timed out in the Browser runtime, so visual QA relied on rendered layout metrics and DOM state for this slice.
+
+### External Vault Sync Slice
+
+- Product fit: Context Requests and Memory Proposals created by everyday AI clients are no longer invisible until the user manually reloads the native Vault.
+- Technical design: `vault_state.updated_at` is treated as the lightweight revision marker for external writers; legacy tables are migrated in all native entry points that can open the Vault.
+- UX: when a pending external Context Request appears, the app selects it and shows a notice pointing the user to **Requests** for confirmation.
+- Safety: the app still confirms Context Packs locally; the sync path only imports the updated encrypted Vault snapshot and does not add new external read tools.
+- Verification: Rust tests cover legacy `updated_at` backfill, and an MCP sidecar smoke test wrote a Context Request then read its status from the same encrypted Vault.
 
 ## Independent Review Passes
 

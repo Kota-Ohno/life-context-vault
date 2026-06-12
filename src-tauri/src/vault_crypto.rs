@@ -105,10 +105,10 @@ fn migrate_plaintext_to_encrypted(path: &Path, payload: &str, key: &str) -> Resu
   connection
     .execute(
       "INSERT INTO vault_state (key, payload, updated_at)
-       VALUES (?1, ?2, CURRENT_TIMESTAMP)
+       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ON CONFLICT(key) DO UPDATE SET
          payload = excluded.payload,
-         updated_at = CURRENT_TIMESTAMP",
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
       params![VAULT_STATE_KEY, payload],
     )
     .map_err(|error| format!("failed to write encrypted vault payload: {error}"))?;

@@ -27,12 +27,12 @@ import {
   Upload,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AiAccessServiceStatus,
   getAiAccessServiceStatus,
   getNativeVaultPath,
-  loadNativeVault,
+  loadNativeVaultSnapshot,
   saveNativeVault,
   startAiAccessServices,
   stopAiAccessServices
@@ -159,14 +159,21 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
+  const [nativeRevision, setNativeRevision] = useState<string | null>(null);
+  const nativeRevisionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    nativeRevisionRef.current = nativeRevision;
+  }, [nativeRevision]);
 
   useEffect(() => {
     let cancelled = false;
     async function hydrateNativeStorage() {
       try {
-        const [nativeVault, path] = await Promise.all([loadNativeVault(), getNativeVaultPath()]);
+        const [nativeSnapshot, path] = await Promise.all([loadNativeVaultSnapshot(), getNativeVaultPath()]);
         if (cancelled) return;
-        if (nativeVault) setState(nativeVault);
+        if (nativeSnapshot?.state) setState(nativeSnapshot.state);
+        setNativeRevision(nativeSnapshot?.updatedAt ?? null);
         setNativePath(path);
       } catch (error) {
         console.warn("Native storage unavailable", error);
@@ -182,14 +189,66 @@ export function App() {
 
   useEffect(() => {
     if (!storageReady) return;
+    let cancelled = false;
     saveVault(state);
-    void saveNativeVault(state);
+    void saveNativeVault(state)
+      .then((updatedAt) => {
+        if (!cancelled && updatedAt) setNativeRevision(updatedAt);
+      })
+      .catch((error) => console.warn("Native vault save failed", error));
+    return () => {
+      cancelled = true;
+    };
   }, [state, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
     setState((current) => purgeExpiredPassiveCaptures(current));
   }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady || !nativePath) return;
+    let cancelled = false;
+
+    async function syncNativeExternalChanges() {
+      try {
+        const snapshot = await loadNativeVaultSnapshot();
+        if (
+          cancelled ||
+          !snapshot?.state ||
+          !snapshot.updatedAt ||
+          snapshot.updatedAt === nativeRevisionRef.current
+        ) {
+          return;
+        }
+
+        nativeRevisionRef.current = snapshot.updatedAt;
+        setNativeRevision(snapshot.updatedAt);
+        setState(snapshot.state);
+
+        const pendingRequest = snapshot.state.contextPackRequests.find(
+          (request) => request.status === "pending_user_confirmation"
+        );
+        if (pendingRequest) {
+          setActiveRequestId(pendingRequest.id);
+          setActivePackId(
+            snapshot.state.contextPacks.find((pack) => pack.requestId === pendingRequest.id)?.id ?? null
+          );
+          setNotice(`${pendingRequest.clientName}からContext Requestを受信しました。Requestsで確認できます。`);
+        } else {
+          setNotice("外部AI接続からのVault更新を同期しました。");
+        }
+      } catch (error) {
+        console.warn("Native vault external sync failed", error);
+      }
+    }
+
+    const interval = window.setInterval(syncNativeExternalChanges, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [nativePath, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -391,12 +450,13 @@ export function App() {
 
   async function refreshFromNative() {
     try {
-      const nativeVault = await loadNativeVault();
-      if (!nativeVault) {
+      const nativeSnapshot = await loadNativeVaultSnapshot();
+      if (!nativeSnapshot?.state) {
         setNotice("Native Vaultはまだ見つかりません。");
         return;
       }
-      setState(nativeVault);
+      setState(nativeSnapshot.state);
+      setNativeRevision(nativeSnapshot.updatedAt);
       setNotice("Native Vaultから最新状態を読み込みました。");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Native Vaultの再読み込みに失敗しました。");
@@ -612,6 +672,7 @@ export function App() {
             clearVault={clearVault}
             seedDemo={seedDemo}
             nativePath={nativePath}
+            nativeRevision={nativeRevision}
             storageReady={storageReady}
           />
         )}
@@ -1606,6 +1667,7 @@ function SettingsView({
   clearVault,
   seedDemo,
   nativePath,
+  nativeRevision,
   storageReady
 }: {
   passphrase: string;
@@ -1617,6 +1679,7 @@ function SettingsView({
   clearVault: () => void;
   seedDemo: () => void;
   nativePath: string | null;
+  nativeRevision: string | null;
   storageReady: boolean;
 }) {
   return (
@@ -1656,7 +1719,7 @@ function SettingsView({
               <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "Browser localStorage"}</strong>
               <span>
                 {nativePath
-                  ? `${nativePath} / Vault鍵はOSの安全な資格情報ストアで管理されます。`
+                  ? `${nativePath} / Vault鍵はOSの安全な資格情報ストアで管理 / 最終同期: ${nativeRevision ? new Date(nativeRevision).toLocaleString() : "未保存"}`
                   : "Tauri外ではブラウザのlocalStorageに保存します。"}
               </span>
             </div>

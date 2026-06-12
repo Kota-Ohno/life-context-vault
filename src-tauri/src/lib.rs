@@ -57,6 +57,13 @@ struct AiAccessServiceStatus {
   last_error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultStateSnapshot {
+  payload: Option<String>,
+  updated_at: Option<String>,
+}
+
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -84,8 +91,35 @@ fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
       [],
     )
     .map_err(|error| format!("failed to initialize vault database: {error}"))?;
+  ensure_vault_state_updated_at_column(&connection)?;
   initialize_vault_schema(&connection)?;
   Ok(connection)
+}
+
+fn ensure_vault_state_updated_at_column(connection: &Connection) -> Result<(), String> {
+  let mut statement = connection
+    .prepare("PRAGMA table_info(vault_state)")
+    .map_err(|error| format!("failed to inspect vault_state schema: {error}"))?;
+  let columns = statement
+    .query_map([], |row| row.get::<_, String>(1))
+    .map_err(|error| format!("failed to read vault_state schema: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("failed to collect vault_state schema: {error}"))?;
+
+  if !columns.iter().any(|column| column == "updated_at") {
+    connection
+      .execute("ALTER TABLE vault_state ADD COLUMN updated_at TEXT", [])
+      .map_err(|error| format!("failed to add vault_state updated_at: {error}"))?;
+  }
+  connection
+    .execute(
+      "UPDATE vault_state
+       SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE updated_at IS NULL OR updated_at = ''",
+      [],
+    )
+    .map_err(|error| format!("failed to backfill vault_state updated_at: {error}"))?;
+  Ok(())
 }
 
 fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
@@ -708,32 +742,58 @@ fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<Child, Stri
 
 #[tauri::command]
 fn load_vault_state(app: AppHandle) -> Result<Option<String>, String> {
+  load_vault_state_snapshot(app).map(|snapshot| snapshot.payload)
+}
+
+#[tauri::command]
+fn load_vault_state_snapshot(app: AppHandle) -> Result<VaultStateSnapshot, String> {
   let connection = open_vault_db(&app)?;
   connection
     .query_row(
-      "SELECT payload FROM vault_state WHERE key = ?1",
+      "SELECT payload, updated_at FROM vault_state WHERE key = ?1",
       params![VAULT_STATE_KEY],
-      |row| row.get::<_, String>(0),
+      |row| {
+        Ok(VaultStateSnapshot {
+          payload: Some(row.get::<_, String>(0)?),
+          updated_at: Some(row.get::<_, String>(1)?),
+        })
+      },
     )
     .optional()
+    .map(|snapshot| {
+      snapshot.unwrap_or(VaultStateSnapshot {
+        payload: None,
+        updated_at: None,
+      })
+    })
     .map_err(|error| format!("failed to load vault state: {error}"))
 }
 
 #[tauri::command]
-fn save_vault_state(app: AppHandle, payload: String) -> Result<(), String> {
+fn save_vault_state(app: AppHandle, payload: String) -> Result<String, String> {
   let mut connection = open_vault_db(&app)?;
   connection
     .execute(
       "INSERT INTO vault_state (key, payload, updated_at)
-       VALUES (?1, ?2, CURRENT_TIMESTAMP)
+       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ON CONFLICT(key) DO UPDATE SET
          payload = excluded.payload,
-         updated_at = CURRENT_TIMESTAMP",
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
       params![VAULT_STATE_KEY, payload],
     )
     .map_err(|error| format!("failed to save vault state: {error}"))?;
   sync_normalized_tables(&mut connection, &payload)?;
-  Ok(())
+  vault_state_updated_at(&connection)
+}
+
+fn vault_state_updated_at(connection: &Connection) -> Result<String, String> {
+  connection
+    .query_row(
+      "SELECT updated_at FROM vault_state WHERE key = ?1",
+      params![VAULT_STATE_KEY],
+      |row| row.get::<_, String>(0),
+    )
+    .map_err(|error| format!("failed to read vault updated_at: {error}"))
 }
 
 #[tauri::command]
@@ -852,6 +912,7 @@ pub fn run() {
     })
     .invoke_handler(tauri::generate_handler![
       load_vault_state,
+      load_vault_state_snapshot,
       save_vault_state,
       vault_storage_path,
       ai_access_service_status,
@@ -1005,5 +1066,30 @@ mod tests {
     assert!(!should_block_external_relay_start(true, true, false));
     assert!(!should_block_external_relay_start(true, false, true));
     assert!(!should_block_external_relay_start(false, false, false));
+  }
+
+  #[test]
+  fn vault_state_updated_at_column_is_backfilled_for_legacy_tables() {
+    let connection = Connection::open_in_memory().expect("connection");
+    connection
+      .execute(
+        "CREATE TABLE vault_state (
+          key TEXT PRIMARY KEY NOT NULL,
+          payload TEXT NOT NULL
+        )",
+        [],
+      )
+      .expect("legacy table");
+    connection
+      .execute(
+        "INSERT INTO vault_state (key, payload) VALUES (?1, ?2)",
+        params![VAULT_STATE_KEY, "{}"],
+      )
+      .expect("legacy row");
+
+    ensure_vault_state_updated_at_column(&connection).expect("migrate");
+
+    let updated_at = vault_state_updated_at(&connection).expect("updated_at");
+    assert!(updated_at.ends_with('Z'));
   }
 }
