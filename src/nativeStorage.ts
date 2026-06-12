@@ -96,6 +96,15 @@ export interface ClaudeDesktopConfigInstallResult {
   alreadyConfigured: boolean;
 }
 
+export interface BrowserCaptureHostInstallResult {
+  manifestPath: string;
+  backupPath: string | null;
+  hostName: string;
+  hostPath: string;
+  extensionId: string;
+  alreadyConfigured: boolean;
+}
+
 export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -124,4 +133,14 @@ export async function getClaudeDesktopConfigTemplate(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("claude_desktop_config_template");
+}
+
+export async function installChromeCaptureHostManifest(
+  extensionId: string
+): Promise<BrowserCaptureHostInstallResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BrowserCaptureHostInstallResult>("install_chrome_capture_host_manifest", {
+    extensionId
+  });
 }

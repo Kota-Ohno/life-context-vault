@@ -106,7 +106,11 @@ Last updated: 2026-06-12
   - native host `lcv-capture-host`
   - capture writes `passive_capture` Source, `PassiveCaptureEvent`, and unapproved Inbox candidates
   - host refuses capture unless Passive Capture is enabled and the site is allowed
-- Added Connections UI setup guidance for extension and native host manifest installation.
+- Added Browser Capture host installer:
+  - Connections accepts the unpacked Chrome extension id and installs the Chrome Native Messaging host manifest from the desktop app
+  - extension ids are validated before writing
+  - existing host manifests are backed up before replacement
+  - manual command copy remains as fallback
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -135,6 +139,7 @@ Last updated: 2026-06-12
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
+- Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
@@ -148,6 +153,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: MCP and Remote Relay setup grids stack without page-level horizontal overflow
   - desktop `1440x980`: Connections browser extension setup card displays native host instructions without horizontal overflow
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
+  - desktop `1280x720`: Browser Capture host installer card accepts an extension id without page-level horizontal overflow
+  - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
   - desktop `1280x720`: Home first-run launchpad and Connections readiness panel have no page-level horizontal overflow
   - mobile `390x844`: Home first-run launchpad and Connections readiness panel stack to one column without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow

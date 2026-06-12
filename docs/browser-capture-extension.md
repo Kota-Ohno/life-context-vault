@@ -42,6 +42,16 @@ browser-extension/
 
 ## Install Native Host Manifest
 
+Use the Tauri desktop app for the normal path:
+
+1. Open **Connections**.
+2. Paste the generated Chrome extension id into **Chrome拡張ID**.
+3. Click **Install host**.
+
+The app writes the Native Messaging host manifest for the bundled `lcv-capture-host`, backs up any previous manifest with the same host name, and refuses invalid extension IDs.
+
+Manual fallback:
+
 ```bash
 LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest
 ```
@@ -66,7 +76,7 @@ browser-extension/native-host.dev.json
 4. Open ChatGPT, Claude, or Gemini in Chrome.
 5. Click the Life Context Vault extension.
 6. Click **Capture current chat**.
-7. Return to the app and click **Sync** if the app is already open.
+7. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
 8. Review the generated candidate in **Memory Inbox**.
 
 ## Native Message

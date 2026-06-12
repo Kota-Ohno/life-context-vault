@@ -22,6 +22,7 @@ mod vault_crypto;
 const VAULT_STATE_KEY: &str = "vault_state";
 const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
 const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
+const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
@@ -80,6 +81,17 @@ struct ClaudeDesktopConfigInstallResult {
   config_path: String,
   backup_path: Option<String>,
   server_name: String,
+  already_configured: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserCaptureHostInstallResult {
+  manifest_path: String,
+  backup_path: Option<String>,
+  host_name: String,
+  host_path: String,
+  extension_id: String,
   already_configured: bool,
 }
 
@@ -912,6 +924,149 @@ fn claude_desktop_config_template(app: AppHandle) -> Result<String, String> {
     .map_err(|error| format!("failed to serialize Claude Desktop config: {error}"))
 }
 
+fn validate_chrome_extension_id(extension_id: &str) -> Result<String, String> {
+  let normalized = extension_id.trim().to_ascii_lowercase();
+  let valid = normalized.len() == 32
+    && normalized
+      .chars()
+      .all(|character| ('a'..='p').contains(&character));
+  if valid {
+    Ok(normalized)
+  } else {
+    Err(
+      "Chrome extension id must be the 32-character id shown after loading browser-extension/ unpacked."
+        .to_string(),
+    )
+  }
+}
+
+fn chrome_capture_host_manifest_path() -> Result<PathBuf, String> {
+  #[cfg(target_os = "macos")]
+  {
+    let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    return Ok(PathBuf::from(home)
+      .join("Library")
+      .join("Application Support")
+      .join("Google")
+      .join("Chrome")
+      .join("NativeMessagingHosts")
+      .join(format!("{CAPTURE_HOST_NAME}.json")));
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    let base = env::var("XDG_CONFIG_HOME")
+      .map(PathBuf::from)
+      .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
+      .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
+    return Ok(base
+      .join("google-chrome")
+      .join("NativeMessagingHosts")
+      .join(format!("{CAPTURE_HOST_NAME}.json")));
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    Err(
+      "Chrome Native Messaging host installation is not implemented on Windows yet; \
+       use Chrome registry setup manually."
+        .to_string(),
+    )
+  }
+}
+
+fn capture_host_binary_path() -> Result<PathBuf, String> {
+  let command = mcp_stdio::resolve_sibling_binary("lcv-capture-host");
+  if !command.exists() {
+    return Err(format!(
+      "lcv-capture-host was not found at {}. Build or bundle the sidecars before installing \
+       the browser capture host.",
+      command.display()
+    ));
+  }
+  Ok(command)
+}
+
+fn capture_host_manifest_for_paths(extension_id: &str, host_path: PathBuf) -> Value {
+  json!({
+    "name": CAPTURE_HOST_NAME,
+    "description": "Life Context Vault browser capture native host",
+    "path": host_path.display().to_string(),
+    "type": "stdio",
+    "allowed_origins": [format!("chrome-extension://{extension_id}/")]
+  })
+}
+
+#[tauri::command]
+fn install_chrome_capture_host_manifest(
+  extension_id: String,
+) -> Result<BrowserCaptureHostInstallResult, String> {
+  let extension_id = validate_chrome_extension_id(&extension_id)?;
+  let manifest_path = chrome_capture_host_manifest_path()?;
+  let host_path = capture_host_binary_path()?;
+  let manifest = capture_host_manifest_for_paths(&extension_id, host_path.clone());
+
+  let existing = if manifest_path.exists() {
+    let raw = fs::read_to_string(&manifest_path)
+      .map_err(|error| format!("failed to read Chrome Native Messaging host manifest: {error}"))?;
+    serde_json::from_str::<Value>(&raw).ok()
+  } else {
+    None
+  };
+
+  if existing.as_ref() == Some(&manifest) {
+    return Ok(BrowserCaptureHostInstallResult {
+      manifest_path: manifest_path.display().to_string(),
+      backup_path: None,
+      host_name: CAPTURE_HOST_NAME.to_string(),
+      host_path: host_path.display().to_string(),
+      extension_id,
+      already_configured: true,
+    });
+  }
+
+  if let Some(parent) = manifest_path.parent() {
+    fs::create_dir_all(parent)
+      .map_err(|error| format!("failed to create Chrome Native Messaging host directory: {error}"))?;
+  }
+
+  let backup_path = if manifest_path.exists() {
+    let backup = manifest_path.with_file_name(format!(
+      "{CAPTURE_HOST_NAME}.lcv-backup-{}.json",
+      system_time_seconds(SystemTime::now())
+    ));
+    fs::copy(&manifest_path, &backup)
+      .map_err(|error| format!("failed to back up Chrome Native Messaging host manifest: {error}"))?;
+    Some(backup)
+  } else {
+    None
+  };
+
+  let payload = serde_json::to_string_pretty(&manifest)
+    .map_err(|error| format!("failed to serialize Chrome Native Messaging host manifest: {error}"))?;
+  let temp_path = manifest_path.with_file_name(format!("{CAPTURE_HOST_NAME}.json.lcv.tmp"));
+  fs::write(&temp_path, payload)
+    .map_err(|error| format!("failed to write Chrome Native Messaging host temp file: {error}"))?;
+  #[cfg(target_os = "windows")]
+  {
+    if manifest_path.exists() {
+      fs::remove_file(&manifest_path)
+        .map_err(|error| format!("failed to replace Chrome Native Messaging host manifest: {error}"))?;
+    }
+  }
+  fs::rename(&temp_path, &manifest_path)
+    .map_err(|error| format!("failed to install Chrome Native Messaging host manifest: {error}"))?;
+
+  Ok(BrowserCaptureHostInstallResult {
+    manifest_path: manifest_path.display().to_string(),
+    backup_path: backup_path.map(|path| path.display().to_string()),
+    host_name: CAPTURE_HOST_NAME.to_string(),
+    host_path: host_path.display().to_string(),
+    extension_id,
+    already_configured: false,
+  })
+}
+
 #[tauri::command]
 fn load_vault_state(app: AppHandle) -> Result<Option<String>, String> {
   load_vault_state_snapshot(app).map(|snapshot| snapshot.payload)
@@ -1131,7 +1286,8 @@ pub fn run() {
       start_ai_access_services,
       stop_ai_access_services,
       install_claude_desktop_config,
-      claude_desktop_config_template
+      claude_desktop_config_template,
+      install_chrome_capture_host_manifest
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -1374,5 +1530,40 @@ mod tests {
       .and_then(|servers| servers.get("life-context-vault"))
       .is_some());
     assert_eq!(merged.get("theme").and_then(Value::as_str), Some("system"));
+  }
+
+  #[test]
+  fn chrome_extension_id_validation_accepts_chrome_ids_only() {
+    assert_eq!(
+      validate_chrome_extension_id("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP").as_deref(),
+      Ok("abcdefghijklmnopabcdefghijklmnop")
+    );
+    assert!(validate_chrome_extension_id("REPLACE_WITH_EXTENSION_ID").is_err());
+    assert!(validate_chrome_extension_id("abcdefghijklmnopabcdefghijklmn0p").is_err());
+    assert!(validate_chrome_extension_id("abcdefghijklmnop").is_err());
+  }
+
+  #[test]
+  fn capture_host_manifest_uses_native_messaging_boundary() {
+    let manifest = capture_host_manifest_for_paths(
+      "abcdefghijklmnopabcdefghijklmnop",
+      PathBuf::from("/Applications/Life Context Vault.app/Contents/MacOS/lcv-capture-host"),
+    );
+
+    assert_eq!(manifest.get("name").and_then(Value::as_str), Some(CAPTURE_HOST_NAME));
+    assert_eq!(manifest.get("type").and_then(Value::as_str), Some("stdio"));
+    assert_eq!(
+      manifest
+        .get("allowed_origins")
+        .and_then(Value::as_array)
+        .and_then(|origins| origins.first())
+        .and_then(Value::as_str),
+      Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop/")
+    );
+    assert!(manifest
+      .get("path")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .ends_with("lcv-capture-host"));
   }
 }

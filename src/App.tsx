@@ -30,10 +30,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AiAccessServiceStatus,
+  BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getNativeVaultPath,
+  installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
   loadNativeVaultSnapshot,
   saveNativeVault,
@@ -155,6 +157,10 @@ export function App() {
   const [captureClient, setCaptureClient] = useState<ConnectorKind>("chatgpt");
   const [captureConversationId, setCaptureConversationId] = useState("demo-thread");
   const [captureText, setCaptureText] = useState("");
+  const [captureExtensionId, setCaptureExtensionId] = useState("");
+  const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
+  const [captureHostInstallResult, setCaptureHostInstallResult] =
+    useState<BrowserCaptureHostInstallResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
   const [sensitivityFilter, setSensitivityFilter] = useState<SensitivityTier | "all">("all");
@@ -592,6 +598,26 @@ export function App() {
     }
   }
 
+  async function installCaptureHostManifest() {
+    setCaptureHostInstallBusy(true);
+    setCaptureHostInstallResult(null);
+    try {
+      const result = await installChromeCaptureHostManifest(captureExtensionId);
+      setCaptureHostInstallResult(result);
+      if (!result) {
+        setNotice("Desktop appでのみChrome Native Messaging hostをインストールできます。");
+      } else if (result.alreadyConfigured) {
+        setNotice("Chrome Native Messaging hostはすでに最新です。");
+      } else {
+        setNotice("Chrome Native Messaging hostをインストールしました。拡張popupからCaptureできます。");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Chrome Native Messaging hostのインストールに失敗しました。");
+    } finally {
+      setCaptureHostInstallBusy(false);
+    }
+  }
+
   function clearVault() {
     apply(createEmptyVault(), "Vaultをクリアしました。");
     setActivePackId(null);
@@ -720,6 +746,11 @@ export function App() {
             setCaptureConversationId={setCaptureConversationId}
             captureText={captureText}
             setCaptureText={setCaptureText}
+            captureExtensionId={captureExtensionId}
+            setCaptureExtensionId={setCaptureExtensionId}
+            captureHostInstallBusy={captureHostInstallBusy}
+            captureHostInstallResult={captureHostInstallResult}
+            installCaptureHostManifest={installCaptureHostManifest}
             simulatePassiveCapture={simulatePassiveCapture}
           />
         )}
@@ -1229,6 +1260,11 @@ function ConnectionsView({
   setCaptureConversationId,
   captureText,
   setCaptureText,
+  captureExtensionId,
+  setCaptureExtensionId,
+  captureHostInstallBusy,
+  captureHostInstallResult,
+  installCaptureHostManifest,
   simulatePassiveCapture
 }: {
   connectors: ConnectorSession[];
@@ -1255,9 +1291,15 @@ function ConnectionsView({
   setCaptureConversationId: (value: string) => void;
   captureText: string;
   setCaptureText: (value: string) => void;
+  captureExtensionId: string;
+  setCaptureExtensionId: (value: string) => void;
+  captureHostInstallBusy: boolean;
+  captureHostInstallResult: BrowserCaptureHostInstallResult | null;
+  installCaptureHostManifest: () => void;
   simulatePassiveCapture: () => void;
 }) {
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
 
   return (
     <section className="view-grid connections-grid">
@@ -1570,13 +1612,59 @@ function ConnectionsView({
           <Clipboard size={18} />
         </div>
         <div className="form-stack">
-          <pre className="code-box">npm run capture:build{"\n"}LCV_EXTENSION_ID=&lt;Chrome extension id&gt; npm run extension:host-manifest</pre>
-          <p className="muted">Chromeの拡張機能画面でDeveloper modeを有効にし、`browser-extension/`をLoad unpackedしてください。拡張IDをコピーしてhost manifestを書き直すと、AIチャット画面のpopupからCaptureできます。</p>
+          <div className="service-brief">
+            <strong>Chrome Native Hostを追加</strong>
+            <span>
+              Chromeで`browser-extension/`をLoad unpackedし、表示された拡張IDを貼ると、この端末のNative Messaging hostを設定します。
+            </span>
+            <Input
+              label="Chrome拡張ID"
+              value={captureExtensionId}
+              onChange={setCaptureExtensionId}
+              placeholder="例: abcdefghijklmnopabcdefghijklmnop"
+            />
+            <div className="service-actions">
+              <button
+                className="primary-button"
+                disabled={!nativePath || !captureExtensionIdReady || captureHostInstallBusy}
+                onClick={installCaptureHostManifest}
+                type="button"
+              >
+                <Plug size={16} />
+                Install host
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  copyText(
+                    makeCaptureSetupCommand(captureExtensionId),
+                    "ブラウザ拡張セットアップコマンドをコピーしました。"
+                  )
+                }
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy fallback
+              </button>
+            </div>
+            {captureHostInstallResult && (
+              <span>
+                {captureHostInstallResult.alreadyConfigured ? "設定済み" : "追加済み"}: {captureHostInstallResult.manifestPath}
+                {captureHostInstallResult.backupPath ? ` / Backup: ${captureHostInstallResult.backupPath}` : ""}
+              </span>
+            )}
+            {!nativePath && <span>Desktop appで開くと、ここからChrome Native Hostを追加できます。</span>}
+            {captureExtensionId && !captureExtensionIdReady && (
+              <span>拡張IDはChrome拡張機能画面に表示される32文字のIDです。</span>
+            )}
+          </div>
+          <pre className="code-box">{makeCaptureSetupCommand(captureExtensionId)}</pre>
+          <p className="muted">Captureはpopup操作で明示的に実行され、Passive CaptureがStartで、対象サイトが許可済みのときだけInbox候補を作ります。</p>
           <button
             className="secondary-button"
             onClick={() =>
               copyText(
-                "npm run capture:build\nLCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest",
+                makeCaptureSetupCommand(captureExtensionId),
                 "ブラウザ拡張セットアップコマンドをコピーしました。"
               )
             }
@@ -2086,6 +2174,18 @@ function formatDateTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function isLikelyChromeExtensionId(value: string): boolean {
+  return /^[a-p]{32}$/.test(value.trim().toLowerCase());
+}
+
+function makeCaptureSetupCommand(extensionId: string): string {
+  const normalized = extensionId.trim().toLowerCase();
+  const id = isLikelyChromeExtensionId(normalized)
+    ? normalized
+    : "<Chrome extension id>";
+  return `npm run capture:build\nLCV_EXTENSION_ID=${id} npm run extension:host-manifest`;
 }
 
 function EmptyState({

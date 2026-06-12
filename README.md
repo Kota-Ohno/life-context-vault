@@ -101,10 +101,9 @@ The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dy
 
 ```bash
 npm run capture:build
-LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest
 ```
 
-Then load `browser-extension/` as an unpacked Chrome extension. See `docs/browser-capture-extension.md`.
+Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri desktop app, open **Connections**, paste the generated Chrome extension id, and use **Install host** to write the Native Messaging host manifest. The manual `LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest` command remains available as a fallback. See `docs/browser-capture-extension.md`.
 
 ## Try The Product-Grade Slice
 
