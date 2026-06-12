@@ -1559,8 +1559,40 @@ export function confirmContextPack(state: VaultState, packId: string): VaultStat
     ),
     auditEvents: [
       audit("context_pack_confirmed", "context_pack", packId, pack.maxSensitivityIncluded, {
-        requestId: pack.requestId
+        ...contextPackReceiptMetadata(state, pack),
+        deliveryStatus: "available_for_ai"
       }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+export function recordContextPackDelivery(
+  state: VaultState,
+  packId: string,
+  input: {
+    channel: "clipboard_copy" | "relay_handoff";
+    status: "copied" | "registered" | "failed" | "skipped";
+    ttlSeconds?: number | null;
+    relayExpiresAt?: number | null;
+    message?: string;
+  }
+): VaultState {
+  const pack = state.contextPacks.find((item) => item.id === packId);
+  if (!pack) return state;
+  const metadata = {
+    ...contextPackReceiptMetadata(state, pack),
+    deliveryChannel: input.channel,
+    deliveryStatus: input.status,
+    ttlSeconds: input.ttlSeconds ?? null,
+    relayExpiresAt: input.relayExpiresAt ?? null,
+    message: input.message,
+    bodyStoredInAudit: false
+  };
+  return {
+    ...state,
+    auditEvents: [
+      audit("context_pack_delivered", "context_pack", pack.id, pack.maxSensitivityIncluded, metadata),
       ...state.auditEvents
     ]
   };
@@ -1630,10 +1662,35 @@ function cancelContextPackForPolicyViolation(
       audit("context_pack_updated", "context_pack", pack.id, pack.maxSensitivityIncluded, {
         action: "policy_invalidated",
         reason,
-        requestId: pack.requestId
+        ...contextPackReceiptMetadata(state, pack)
       }),
       ...state.auditEvents
     ]
+  };
+}
+
+function contextPackReceiptMetadata(state: VaultState, pack: ContextPack): Record<string, unknown> {
+  const request = pack.requestId
+    ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+    : null;
+  return {
+    requestId: pack.requestId,
+    packId: pack.id,
+    clientId: request?.clientId ?? null,
+    clientName: request?.clientName ?? null,
+    requestStatus: request?.status ?? null,
+    taskDomain: pack.taskDomain,
+    itemCount: pack.items.length,
+    sourceSnippetCount: pack.sourceSnippets?.length ?? 0,
+    excludedCount: pack.excludedItems.length,
+    warningCount: pack.warnings.length,
+    maxSensitivityIncluded: pack.maxSensitivityIncluded,
+    confirmationStatus: pack.confirmationStatus,
+    expiresAt: pack.expiresAt ?? request?.expiresAt ?? null,
+    trustBoundary: "ContextPack only",
+    bodyStoredInAudit: false,
+    rawSourceIncluded: false,
+    unapprovedCandidateIncluded: false
   };
 }
 
@@ -1711,7 +1768,14 @@ export function denyContextPackRequest(state: VaultState, requestId: string): Va
     ),
     auditEvents: [
       audit("context_pack_denied", "context_pack_request", request.id, request.sensitivityCeiling, {
-        clientName: request.clientName
+        requestId: request.id,
+        clientId: request.clientId,
+        clientName: request.clientName,
+        deliveryStatus: "denied",
+        trustBoundary: "ContextPack only",
+        bodyStoredInAudit: false,
+        rawSourceIncluded: false,
+        unapprovedCandidateIncluded: false
       }),
       ...state.auditEvents
     ]

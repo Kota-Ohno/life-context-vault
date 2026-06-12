@@ -1175,6 +1175,102 @@ button:focus-visible {
   line-height: 1.35;
 }
 
+.audit-grid {
+  align-items: start;
+}
+
+.audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.audit-summary-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.audit-summary-grid span {
+  color: #667267;
+  font-size: 12px;
+}
+
+.audit-summary-grid strong {
+  overflow-wrap: anywhere;
+  color: #26352b;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.delivery-receipt-list {
+  display: grid;
+  gap: 10px;
+}
+
+.delivery-receipt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #dfe6dc;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.delivery-receipt.ready {
+  border-color: #b8d0bd;
+  background: #f5fbf3;
+}
+
+.delivery-receipt.attention {
+  border-color: #dfc28d;
+  background: #fffaf0;
+}
+
+.delivery-receipt.blocked {
+  border-color: #d7b8ad;
+  background: #fff6f2;
+}
+
+.delivery-receipt > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.delivery-receipt strong,
+.delivery-receipt span,
+.delivery-receipt small {
+  overflow-wrap: anywhere;
+}
+
+.delivery-receipt span {
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.delivery-receipt small {
+  color: #6b746c;
+  font-size: 12px;
+}
+
+.delivery-receipt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 360px;
+}
+
 .audit-meta {
   display: flex !important;
   flex-wrap: wrap;
@@ -1660,6 +1756,16 @@ button:focus-visible {
 
   .policy-domain-actions button {
     flex: 1 1 130px;
+  }
+
+  .audit-summary-grid,
+  .delivery-receipt {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-receipt-meta {
+    justify-content: flex-start;
+    max-width: none;
   }
 
   .nav-list {

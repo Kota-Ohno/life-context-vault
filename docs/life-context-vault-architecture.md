@@ -488,12 +488,12 @@ Record events for:
 - Candidate approved, edited, rejected, or marked sensitive.
 - Fact created, updated, expired, or deleted.
 - Context Pack generated.
-- Context Pack confirmed, edited, or cancelled.
-- LLM payload sent.
+- Context Pack confirmed, edited, cancelled, denied, copied, or handed to Relay.
+- LLM payload sent, when a provider integration can emit that event without logging raw prompt text.
 - Policy changed.
 - Backup created or restored.
 
-The audit log should store metadata and references, not raw sensitive payloads.
+The audit log should store metadata and references, not raw sensitive payloads. AI delivery receipts must record which client received or could retrieve a Context Pack, delivery channel, status, sensitivity ceiling, and item/snippet/exclusion counts, while explicitly omitting Context Pack body text, Raw Source body text, and unapproved MemoryCandidate text.
 
 ## Failure Modes
 

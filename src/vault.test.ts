@@ -14,6 +14,7 @@ import {
   makeAiContextPackPayload,
   normalizeVaultState,
   purgeExpiredPassiveCaptures,
+  recordContextPackDelivery,
   searchFacts,
   updateAccessPolicy,
   updateContextPackItemVisibility,
@@ -559,6 +560,52 @@ describe("vault flow", () => {
       eventType: "context_pack_confirmed",
       sensitivity: built.pack!.maxSensitivityIncluded
     });
+  });
+
+  it("records an AI delivery receipt without pack or raw source body text", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Passport note",
+      body: "Passport expires on 2028-05-01.\nUnrelated source-only detail: blue folders stay in the closet."
+    });
+    const passportCandidate = state.candidates.find((candidate) =>
+      candidate.proposedFactText.includes("Passport expires")
+    );
+    expect(passportCandidate).toBeTruthy();
+    state = approveCandidate(state, passportCandidate!.id);
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "When should I renew my passport?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    state = confirmContextPack(built.state, built.pack!.id);
+    state = recordContextPackDelivery(state, built.pack!.id, {
+      channel: "clipboard_copy",
+      status: "copied"
+    });
+
+    const event = state.auditEvents[0];
+    const metadata = JSON.stringify(event.metadata);
+    expect(event).toMatchObject({
+      eventType: "context_pack_delivered",
+      subjectType: "context_pack",
+      sensitivity: built.pack!.maxSensitivityIncluded
+    });
+    expect(event.metadata).toMatchObject({
+      clientName: "ChatGPT",
+      deliveryChannel: "clipboard_copy",
+      deliveryStatus: "copied",
+      itemCount: 1,
+      trustBoundary: "ContextPack only",
+      bodyStoredInAudit: false,
+      rawSourceIncluded: false,
+      unapprovedCandidateIncluded: false
+    });
+    expect(metadata).not.toContain("Passport expires on 2028-05-01");
+    expect(metadata).not.toContain("blue folders");
   });
 
   it("creates an AI-bound context pack payload without internal response fields", () => {

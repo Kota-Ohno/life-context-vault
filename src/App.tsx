@@ -105,6 +105,7 @@ import {
   makeAiContextPackPayload,
   makeDemoVault,
   purgeExpiredPassiveCaptures,
+  recordContextPackDelivery,
   saveContextPack,
   saveVault,
   searchFacts,
@@ -128,6 +129,7 @@ import {
   ConnectorSession,
   ContextPack,
   ContextPackRequest,
+  AuditEvent,
   FactLifecycleAction,
   FactMetadataUpdate,
   LifeContextDomain,
@@ -1091,6 +1093,11 @@ export function App() {
         requestId: request.id
       });
       if (handoff?.stored) {
+        if (handoff.state) {
+          nativeRevisionRef.current = handoff.updatedAt;
+          setNativeRevision(handoff.updatedAt);
+          setState(handoff.state);
+        }
         return { status: "stored" as const, ttlSeconds: handoff.ttlSeconds };
       }
       return { status: "skipped" as const };
@@ -1204,12 +1211,20 @@ export function App() {
         payloadPack = confirmedPack;
       }
     }
-    await copyText(
+    const copied = await copyText(
       JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2),
       shouldConfirm
         ? "Context Packを承認し、AI向けペイロードをコピーしました。"
         : "AI向けContext Packをコピーしました。"
     );
+    if (copied) {
+      setState((current) =>
+        recordContextPackDelivery(current, payloadPack.id, {
+          channel: "clipboard_copy",
+          status: "copied"
+        })
+      );
+    }
   }
 
   async function denyActiveRequest() {
@@ -1358,12 +1373,14 @@ export function App() {
     }
   }
 
-  async function copyText(value: string, message: string) {
+  async function copyText(value: string, message: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(value);
       setNotice(message);
+      return true;
     } catch {
       setNotice("Clipboardに書き込めませんでした。表示された内容を手動でコピーしてください。");
+      return false;
     }
   }
 
@@ -3858,34 +3875,179 @@ function SettingsView({
 }
 
 function AuditView({ events }: { events: VaultState["auditEvents"] }) {
+  const aiBoundaryEvents = events
+    .filter(isAiBoundaryAuditEvent)
+    .slice(0, 12);
+  const deliveredCount = events.filter((event) => event.eventType === "context_pack_delivered").length;
+  const confirmedCount = events.filter((event) => event.eventType === "context_pack_confirmed").length;
+  const blockedCount = events.filter(
+    (event) =>
+      event.eventType === "context_pack_denied" ||
+      (event.eventType === "context_pack_updated" && metadataString(event, "action") === "policy_invalidated")
+  ).length;
+
   return (
-    <section className="panel wide">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Audit trail</p>
-          <h3>保存されたこと、AIに渡ったこと、拒否したこと</h3>
-        </div>
-        <Clock size={18} />
-      </div>
-      <div className="table-list">
-        {events.slice(0, 80).map((event) => (
-          <div className="audit-row" key={event.id}>
-            <div>
-              <strong>{event.eventType}</strong>
-              <span>
-                {event.subjectType} / {new Date(event.occurredAt).toLocaleString()}
-              </span>
-            </div>
-            <div className="audit-meta">
-              <SensitivityBadge sensitivity={event.sensitivity} />
-              <Badge>{event.actor}</Badge>
-            </div>
+    <section className="view-grid audit-grid">
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI delivery receipts</p>
+            <h3>どのAIに何が渡ったか</h3>
           </div>
-        ))}
-        {events.length === 0 && <p className="muted">まだ監査イベントはありません。</p>}
+          <ShieldCheck size={18} />
+        </div>
+        <div className="audit-summary-grid">
+          <Metric label="AIに渡した回数" value={String(deliveredCount)} />
+          <Metric label="取得可能にしたPack" value={String(confirmedCount)} />
+          <Metric label="拒否・失効" value={String(blockedCount)} />
+        </div>
+        <div className="delivery-receipt-list">
+          {aiBoundaryEvents.map((event) => (
+            <article className={`delivery-receipt ${auditReceiptTone(event)}`} key={event.id}>
+              <div>
+                <strong>{auditReceiptTitle(event)}</strong>
+                <span>{auditReceiptBody(event)}</span>
+                <small>{formatDateTime(event.occurredAt)} / {event.subjectId}</small>
+              </div>
+              <div className="delivery-receipt-meta">
+                <SensitivityBadge sensitivity={event.sensitivity} />
+                {metadataString(event, "trustBoundary") && <Badge>{metadataString(event, "trustBoundary")}</Badge>}
+                {typeof metadataNumber(event, "itemCount") === "number" && (
+                  <Badge>{metadataNumber(event, "itemCount")} Facts</Badge>
+                )}
+                {metadataString(event, "deliveryChannel") && <Badge>{deliveryChannelLabel(metadataString(event, "deliveryChannel"))}</Badge>}
+              </div>
+            </article>
+          ))}
+          {aiBoundaryEvents.length === 0 && (
+            <p className="muted">まだAIへの配達レシートはありません。Context Packを承認またはコピーするとここに残ります。</p>
+          )}
+        </div>
+      </div>
+
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Audit trail</p>
+            <h3>保存されたこと、AIに渡ったこと、拒否したこと</h3>
+          </div>
+          <Clock size={18} />
+        </div>
+        <div className="table-list">
+          {events.slice(0, 80).map((event) => (
+            <div className="audit-row" key={event.id}>
+              <div>
+                <strong>{auditEventLabel(event)}</strong>
+                <span>
+                  {event.subjectType} / {formatDateTime(event.occurredAt)}
+                </span>
+                <span>{auditCompactMetadata(event)}</span>
+              </div>
+              <div className="audit-meta">
+                <SensitivityBadge sensitivity={event.sensitivity} />
+                <Badge>{event.actor}</Badge>
+              </div>
+            </div>
+          ))}
+          {events.length === 0 && <p className="muted">まだ監査イベントはありません。</p>}
+        </div>
       </div>
     </section>
   );
+}
+
+function isAiBoundaryAuditEvent(event: AuditEvent): boolean {
+  if (event.eventType === "context_pack_delivered") return true;
+  if (event.eventType === "context_pack_confirmed") return true;
+  if (event.eventType === "context_pack_denied") return true;
+  return event.eventType === "context_pack_updated" && metadataString(event, "action") === "policy_invalidated";
+}
+
+function auditReceiptTone(event: AuditEvent): "ready" | "attention" | "blocked" {
+  if (event.eventType === "context_pack_delivered" || event.eventType === "context_pack_confirmed") return "ready";
+  if (event.eventType === "context_pack_denied") return "blocked";
+  return "attention";
+}
+
+function auditReceiptTitle(event: AuditEvent): string {
+  const client = metadataString(event, "clientName") || "AI";
+  if (event.eventType === "context_pack_delivered") {
+    const channel = deliveryChannelLabel(metadataString(event, "deliveryChannel"));
+    return `${client}へ${channel}で渡しました`;
+  }
+  if (event.eventType === "context_pack_confirmed") return `${client}が取得できる状態にしました`;
+  if (event.eventType === "context_pack_denied") return `${client}へのContext Requestを拒否しました`;
+  return `${client}へのContext Packを送信不可にしました`;
+}
+
+function auditReceiptBody(event: AuditEvent): string {
+  const itemCount = metadataNumber(event, "itemCount");
+  const snippetCount = metadataNumber(event, "sourceSnippetCount");
+  const excludedCount = metadataNumber(event, "excludedCount");
+  const ttl = metadataNumber(event, "ttlSeconds");
+  const pieces = [
+    typeof itemCount === "number" ? `${itemCount}件のApprovedFact` : null,
+    typeof snippetCount === "number" ? `${snippetCount}件の根拠スニペット` : null,
+    typeof excludedCount === "number" ? `${excludedCount}件を除外` : null,
+    ttl ? `有効期限は約${Math.max(1, Math.round(ttl / 60))}分` : null
+  ].filter(Boolean);
+  const summary = pieces.length > 0 ? pieces.join("、") : "Context Pack本文はAuditに保存していません";
+  return `${summary}。Raw Source本文と未承認候補は含めていません。`;
+}
+
+function deliveryChannelLabel(channel: string): string {
+  if (channel === "clipboard_copy") return "コピー";
+  if (channel === "relay_handoff") return "Relay";
+  return channel || "Context Pack";
+}
+
+function auditEventLabel(event: AuditEvent): string {
+  const labels: Partial<Record<AuditEvent["eventType"], string>> = {
+    context_pack_requested: "Context Pack要求",
+    context_pack_generated: "Context Pack生成",
+    context_pack_updated: "Context Pack更新",
+    context_pack_confirmed: "Context Pack承認",
+    context_pack_delivered: "Context Pack配達",
+    context_pack_denied: "Context Request拒否",
+    candidate_generated: "候補生成",
+    candidate_reviewed: "候補レビュー",
+    fact_created: "Fact作成",
+    fact_updated: "Fact更新",
+    source_added: "Source追加",
+    source_updated: "Source更新",
+    source_deleted: "Source停止",
+    source_restored: "Source復元",
+    source_purged: "Source本文消去",
+    passive_capture_recorded: "Passive Capture記録",
+    passive_capture_purged: "Passive Capture消去",
+    policy_updated: "Policy更新",
+    memory_proposed: "Memory提案"
+  };
+  return labels[event.eventType] ?? event.eventType;
+}
+
+function auditCompactMetadata(event: AuditEvent): string {
+  const client = metadataString(event, "clientName");
+  const status = metadataString(event, "deliveryStatus") || metadataString(event, "requestStatus");
+  const itemCount = metadataNumber(event, "itemCount");
+  const invalidated = metadataNumber(event, "invalidatedPackCount");
+  const parts = [
+    client ? `AI: ${client}` : null,
+    status ? `状態: ${status}` : null,
+    typeof itemCount === "number" ? `Fact: ${itemCount}` : null,
+    typeof invalidated === "number" ? `失効Pack: ${invalidated}` : null
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "本文なしの監査メタデータ";
+}
+
+function metadataString(event: AuditEvent, key: string): string {
+  const value = event.metadata?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function metadataNumber(event: AuditEvent, key: string): number | null {
+  const value = event.metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function FactRow({

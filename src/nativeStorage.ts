@@ -185,6 +185,8 @@ export interface RelayContextPackHandoffResult {
   requestId: string;
   expiresAt: number | null;
   ttlSeconds: number | null;
+  state: VaultState | null;
+  updatedAt: string | null;
   generatedBy: "native_relay_handoff";
 }
 
@@ -531,10 +533,14 @@ export async function handoffConfirmedContextPackToRelay(input: {
 }): Promise<RelayContextPackHandoffResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<RelayContextPackHandoffResult>("handoff_confirmed_context_pack_to_relay", {
+  const result = await invoke<Omit<RelayContextPackHandoffResult, "state"> & { payload?: string | null }>("handoff_confirmed_context_pack_to_relay", {
     clientId: input.clientId,
     requestId: input.requestId
   });
+  return {
+    ...result,
+    state: result.payload ? normalizeVaultState(JSON.parse(result.payload)) : null
+  };
 }
 
 export async function denyNativeContextPackRequest(

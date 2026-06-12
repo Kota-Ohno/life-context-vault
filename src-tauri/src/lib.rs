@@ -195,6 +195,8 @@ struct RelayContextPackHandoffResult {
   request_id: String,
   expires_at: Option<u64>,
   ttl_seconds: Option<u64>,
+  payload: Option<String>,
+  updated_at: Option<String>,
   generated_by: String,
 }
 
@@ -1530,6 +1532,19 @@ pub fn confirm_context_pack_at_path(
   if let Some(request_id) = request_id.as_deref() {
     set_context_request_status(&mut vault, request_id, "fulfilled");
   }
+  let confirmed_pack = find_vault_item_by_id(&vault, "contextPacks", pack_id).unwrap_or_else(|| pack.clone());
+  let mut metadata = context_pack_receipt_metadata(
+    &vault,
+    &confirmed_pack,
+    None,
+    Some("available_for_ai"),
+    None,
+    None,
+    None,
+  );
+  if let Some(object) = metadata.as_object_mut() {
+    object.insert("generatedBy".to_string(), json!("native_vault_core"));
+  }
   push_json_array(
     &mut vault,
     "auditEvents",
@@ -1537,11 +1552,8 @@ pub fn confirm_context_pack_at_path(
       "context_pack_confirmed",
       "context_pack",
       pack_id,
-      &str_field(&pack, "maxSensitivityIncluded"),
-      json!({
-        "requestId": request_id,
-        "generatedBy": "native_vault_core"
-      }),
+      &str_field(&confirmed_pack, "maxSensitivityIncluded"),
+      metadata,
     ),
   );
   let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
@@ -1576,7 +1588,14 @@ pub fn deny_context_pack_request_at_path(
       request_id,
       &str_field(&request, "sensitivityCeiling"),
       json!({
+        "requestId": request_id,
+        "clientId": str_field(&request, "clientId"),
         "clientName": str_field(&request, "clientName"),
+        "deliveryStatus": "denied",
+        "trustBoundary": "ContextPack only",
+        "bodyStoredInAudit": false,
+        "rawSourceIncluded": false,
+        "unapprovedCandidateIncluded": false,
         "generatedBy": "native_vault_core"
       }),
     ),
@@ -5628,6 +5647,109 @@ fn audit_event(
   })
 }
 
+fn context_pack_receipt_metadata(
+  vault: &Value,
+  pack: &Value,
+  channel: Option<&str>,
+  status: Option<&str>,
+  ttl_seconds: Option<u64>,
+  relay_expires_at: Option<u64>,
+  message: Option<&str>,
+) -> Value {
+  let request = optional_str_field(pack, "requestId")
+    .and_then(|request_id| find_vault_item_by_id(vault, "contextPackRequests", &request_id));
+  let items = pack
+    .get("items")
+    .and_then(Value::as_array)
+    .map(Vec::len)
+    .unwrap_or(0);
+  let snippets = pack
+    .get("sourceSnippets")
+    .and_then(Value::as_array)
+    .map(Vec::len)
+    .unwrap_or(0);
+  let excluded = pack
+    .get("excludedItems")
+    .and_then(Value::as_array)
+    .map(Vec::len)
+    .unwrap_or(0);
+  let warnings = pack
+    .get("warnings")
+    .and_then(Value::as_array)
+    .map(Vec::len)
+    .unwrap_or(0);
+  json!({
+    "requestId": optional_str_field(pack, "requestId"),
+    "packId": str_field(pack, "id"),
+    "clientId": request.as_ref().map(|request| str_field(request, "clientId")),
+    "clientName": request.as_ref().map(|request| str_field(request, "clientName")),
+    "requestStatus": request.as_ref().map(|request| str_field(request, "status")),
+    "taskDomain": str_field(pack, "taskDomain"),
+    "itemCount": items,
+    "sourceSnippetCount": snippets,
+    "excludedCount": excluded,
+    "warningCount": warnings,
+    "maxSensitivityIncluded": str_field(pack, "maxSensitivityIncluded"),
+    "confirmationStatus": str_field(pack, "confirmationStatus"),
+    "expiresAt": optional_str_field(pack, "expiresAt")
+      .or_else(|| request.as_ref().and_then(|request| optional_str_field(request, "expiresAt"))),
+    "deliveryChannel": channel,
+    "deliveryStatus": status,
+    "ttlSeconds": ttl_seconds,
+    "relayExpiresAt": relay_expires_at,
+    "message": message,
+    "trustBoundary": "ContextPack only",
+    "bodyStoredInAudit": false,
+    "rawSourceIncluded": false,
+    "unapprovedCandidateIncluded": false,
+  })
+}
+
+fn record_context_pack_delivery_at_path(
+  path: &Path,
+  request_id: &str,
+  channel: &str,
+  status: &str,
+  ttl_seconds: Option<u64>,
+  relay_expires_at: Option<u64>,
+  message: Option<&str>,
+) -> Result<VaultCoreSettingsUpdateResult, String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let pack = vault
+    .get("contextPacks")
+    .and_then(Value::as_array)
+    .and_then(|packs| {
+      packs
+        .iter()
+        .find(|pack| optional_str_field(pack, "requestId").as_deref() == Some(request_id))
+    })
+    .cloned()
+    .ok_or_else(|| format!("ContextPack was not found for request: {request_id}"))?;
+  let metadata = context_pack_receipt_metadata(
+    &vault,
+    &pack,
+    Some(channel),
+    Some(status),
+    ttl_seconds,
+    relay_expires_at,
+    message,
+  );
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "context_pack_delivered",
+      "context_pack",
+      &str_field(&pack, "id"),
+      &str_field(&pack, "maxSensitivityIncluded"),
+      metadata,
+    ),
+  );
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+}
+
 fn empty_vault_json() -> Value {
   json!({
     "version": 2,
@@ -5758,8 +5880,8 @@ fn parse_http_json_response(response: &str) -> Result<Value, String> {
   serde_json::from_str(body).map_err(|error| format!("relay returned invalid JSON: {error}"))
 }
 
-fn mcp_status_response_for_handoff(path: &Path, request_id: &str) -> Result<Value, String> {
-  let status = get_context_request_status_at_path(path, request_id)?;
+fn mcp_status_response_for_handoff(path: &Path, request_id: &str, client_id: &str) -> Result<Value, String> {
+  let status = get_context_request_status_for_client_at_path(path, request_id, client_id)?;
   let context_pack = status
     .context_pack
     .ok_or_else(|| "ContextPackRequest is not fulfilled yet.".to_string())?;
@@ -5798,15 +5920,29 @@ fn handoff_context_pack_to_local_relay(
   if request_id.is_empty() {
     return Err("requestId is required for Relay handoff.".to_string());
   }
-  let mcp_response = mcp_status_response_for_handoff(path, request_id)?;
+  let mcp_response = mcp_status_response_for_handoff(path, request_id, client_id)?;
   let body = serde_json::to_string(&json!({
     "clientId": client_id,
     "mcpResponse": mcp_response
   }))
   .map_err(|error| format!("failed to serialize relay handoff: {error}"))?;
   let response = local_relay_json("POST", "/relay/handoff", Some(&body))?;
+  let stored = response.get("status").and_then(Value::as_str) == Some("stored");
+  let delivery = if stored {
+    Some(record_context_pack_delivery_at_path(
+      path,
+      request_id,
+      "relay_handoff",
+      "registered",
+      response.get("ttlSeconds").and_then(Value::as_u64),
+      response.get("expiresAt").and_then(Value::as_u64),
+      Some("Relay registered a short-lived Context Pack handoff."),
+    )?)
+  } else {
+    None
+  };
   Ok(RelayContextPackHandoffResult {
-    stored: response.get("status").and_then(Value::as_str) == Some("stored"),
+    stored,
     request_id: response
       .get("requestId")
       .and_then(Value::as_str)
@@ -5814,6 +5950,8 @@ fn handoff_context_pack_to_local_relay(
       .to_string(),
     expires_at: response.get("expiresAt").and_then(Value::as_u64),
     ttl_seconds: response.get("ttlSeconds").and_then(Value::as_u64),
+    payload: delivery.as_ref().map(|result| result.payload.clone()),
+    updated_at: delivery.and_then(|result| result.updated_at),
     generated_by: "native_relay_handoff".to_string(),
   })
 }
@@ -9675,7 +9813,7 @@ mod tests {
     confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
 
     let response =
-      mcp_status_response_for_handoff(&path, &built.request_id).expect("handoff response");
+      mcp_status_response_for_handoff(&path, &built.request_id, "conn_chatgpt").expect("handoff response");
     let structured = response
       .get("result")
       .and_then(|result| result.get("structuredContent"))
@@ -9697,6 +9835,89 @@ mod tests {
     );
     assert!(structured.to_string().contains("Passport expires on 2028-05-01."));
     assert!(!structured.to_string().contains("manual_entry"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn relay_delivery_receipt_omits_pack_and_source_body_text() {
+    use_test_vault_key();
+    let path = temp_vault_path("relay-delivery-receipt");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Passport reminder",
+      "Passport expires on 2028-05-01.\nUnrelated source-only detail: blue folders stay in the closet.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let delivery = record_context_pack_delivery_at_path(
+      &path,
+      &built.request_id,
+      "relay_handoff",
+      "registered",
+      Some(600),
+      Some(1_766_000_000),
+      Some("Relay registered a short-lived Context Pack handoff."),
+    )
+    .expect("delivery receipt");
+    let vault: Value = serde_json::from_str(&delivery.payload).expect("vault payload");
+    let receipt = vault
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .and_then(|events| events.first())
+      .expect("audit event");
+    let metadata = receipt.get("metadata").expect("receipt metadata");
+    let metadata_payload = metadata.to_string();
+
+    assert_eq!(
+      receipt.get("eventType").and_then(Value::as_str),
+      Some("context_pack_delivered")
+    );
+    assert_eq!(
+      metadata.get("clientName").and_then(Value::as_str),
+      Some("ChatGPT")
+    );
+    assert_eq!(
+      metadata.get("deliveryChannel").and_then(Value::as_str),
+      Some("relay_handoff")
+    );
+    assert_eq!(
+      metadata.get("deliveryStatus").and_then(Value::as_str),
+      Some("registered")
+    );
+    assert_eq!(metadata.get("itemCount").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+      metadata.get("trustBoundary").and_then(Value::as_str),
+      Some("ContextPack only")
+    );
+    assert_eq!(
+      metadata.get("bodyStoredInAudit").and_then(Value::as_bool),
+      Some(false)
+    );
+    assert_eq!(
+      metadata.get("rawSourceIncluded").and_then(Value::as_bool),
+      Some(false)
+    );
+    assert!(!metadata_payload.contains("Passport expires on 2028-05-01"));
+    assert!(!metadata_payload.contains("blue folders"));
     remove_temp_vault(&path);
   }
 

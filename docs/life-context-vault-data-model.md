@@ -533,6 +533,7 @@ type AuditEvent = {
     | "context_pack_generated"
     | "context_pack_updated"
     | "context_pack_confirmed"
+    | "context_pack_delivered"
     | "context_pack_denied"
     | "llm_payload_sent"
     | "backup_created"
@@ -556,6 +557,7 @@ type AuditEvent = {
 Required behavior:
 
 - Audit metadata must not contain raw secret values.
+- `context_pack_delivered` records AI client, delivery channel, status, sensitivity ceiling, and item/snippet/exclusion counts only. It must not store Context Pack body text, Raw Source body text, or unapproved MemoryCandidate text.
 - LLM payload events record provider, model, Context Pack ID, and payload size, not raw prompt text by default.
 - Policy decisions for sensitive context must be auditable.
 
