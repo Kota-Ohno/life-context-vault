@@ -264,6 +264,10 @@ Last updated: 2026-06-13
   - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
   - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, smoke tests, token rotation, and incident runbooks
   - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
+- Added release-gated HTTP Relay smoke:
+  - `npm run relay:smoke` starts release `lcv-relay` and `lcv-mcp` on a random loopback port with a temporary encrypted Vault
+  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, and metadata-only relay persistence
+  - `npm run product:check` now runs the smoke after release sidecar binaries are built
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -805,6 +809,14 @@ Last updated: 2026-06-13
 - Technical design: fulfilled `initialize` responses add `MCP-Session-Id`; non-initialize POSTs for a client with an active session fail closed with `400 missing_mcp_session` when the header is omitted; unknown session ids return `404 mcp_session_not_found`; `DELETE /mcp` terminates only the caller's own session.
 - Verification: Relay unit tests cover session issuance, missing-session rejection, unknown-session rejection, same-client deletion, cross-client deletion refusal, updated CORS allowed methods, and metadata-only `/relay/state` exposure. `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay` passed.
 - Review fallback: SubAgents were not used for this protocol slice; the main thread ran separate compatibility, security/privacy, operations, and maintainability passes.
+
+### Relay HTTP Smoke Slice
+
+- Product fit: product-grade checks now exercise the actual release Relay binary over HTTP, catching transport, header, session, and persistence issues that unit tests alone can miss.
+- Security/privacy: the smoke uses a temporary encrypted Vault and state file, then asserts relay state and persisted metadata do not contain MCP response bodies, tool response content, or `MCP-Session-Id` values.
+- Technical design: `scripts/run-relay-smoke.mjs` starts release `lcv-relay` on a random loopback port with static bearer enabled only for the local smoke, sends real HTTP requests with `Connection: close`, and cleans up the process plus temp directory.
+- Verification: `npm run relay:smoke` passed locally and is now included in `npm run product:check`.
+- Review fallback: SubAgents were not used for this verification-hardening slice; the main thread ran separate product, security/privacy, operations, and maintainability passes.
 
 ### Remote MCP Connection Diagnostics UX Slice
 

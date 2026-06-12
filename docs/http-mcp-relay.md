@@ -219,6 +219,18 @@ The desktop Control Center uses the same endpoint after a user confirms a Contex
 
 ## Smoke Test
 
+Automated local HTTP smoke:
+
+```bash
+npm run relay:build
+npm run mcp:build
+npm run relay:smoke
+```
+
+`npm run relay:smoke` starts `lcv-relay` on a random loopback port with a temporary encrypted Vault and metadata store. It verifies `/health`, `/mcp` method boundaries, CORS preflight headers, OAuth challenge behavior, `406`/`415` header failures, `initialize` session issuance, `MCP-Session-Id` reuse, `DELETE /mcp` termination, and metadata-only relay state persistence. `npm run product:check` runs this smoke after building release sidecars.
+
+Manual smoke:
+
 ```bash
 tmpdb="$(mktemp -t lcv-relay.XXXXXX.sqlite3)"
 npm run mcp:build

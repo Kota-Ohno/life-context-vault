@@ -68,6 +68,8 @@ run("Rust release binaries", "cargo", [
   "--bins"
 ]);
 
+run("HTTP relay smoke", "npm", ["run", "relay:smoke"]);
+
 if (includeTauriBuild) {
   run("Tauri sidecar integration build", "npm", ["run", "tauri:build"]);
 }

@@ -17,6 +17,7 @@
     "mcp:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-mcp",
     "relay:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay",
     "relay:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-relay",
+    "relay:smoke": "node scripts/run-relay-smoke.mjs",
     "agent:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-agent",
     "agent:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-agent",
     "capture:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-capture-host",
