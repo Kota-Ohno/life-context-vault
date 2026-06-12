@@ -19,7 +19,11 @@ use std::{
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+  menu::{MenuBuilder, MenuItemBuilder},
+  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+  ActivationPolicy, App, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 
 mod mcp_stdio;
 mod vault_crypto;
@@ -30,6 +34,12 @@ const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
 const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
 const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const LOGIN_ITEM_LABEL: &str = "dev.life-context-vault.ai-access";
+const MAIN_WINDOW_LABEL: &str = "main";
+const TRAY_ID: &str = "life-context-vault-tray";
+const TRAY_MENU_OPEN_ID: &str = "open-control-center";
+const TRAY_MENU_START_AI_ACCESS_ID: &str = "start-ai-access";
+const TRAY_MENU_STOP_AI_ACCESS_ID: &str = "stop-ai-access";
+const TRAY_MENU_QUIT_ID: &str = "quit-life-context-vault";
 const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
@@ -51,6 +61,28 @@ impl Default for AiAccessSupervisor {
       relay_token: random_local_token(),
       last_error: None,
     }
+  }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WindowLifecycleDecision {
+  HideToBackground,
+  StopManagedAiAccess,
+  Ignore,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WindowLifecycleEventKind {
+  CloseRequested,
+  Destroyed,
+  Other,
+}
+
+fn window_lifecycle_decision(event_kind: WindowLifecycleEventKind) -> WindowLifecycleDecision {
+  match event_kind {
+    WindowLifecycleEventKind::CloseRequested => WindowLifecycleDecision::HideToBackground,
+    WindowLifecycleEventKind::Destroyed => WindowLifecycleDecision::StopManagedAiAccess,
+    WindowLifecycleEventKind::Other => WindowLifecycleDecision::Ignore,
   }
 }
 
@@ -5086,6 +5118,99 @@ fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStat
   }
 }
 
+fn stop_managed_ai_access(app: &AppHandle) {
+  let supervisor_state = app.state::<Mutex<AiAccessSupervisor>>();
+  let Ok(mut supervisor) = supervisor_state.lock() else {
+    return;
+  };
+  stop_child(&mut supervisor.agent);
+  stop_child(&mut supervisor.relay);
+  supervisor.pairing_code = None;
+}
+
+fn show_control_center(app: &AppHandle) -> Result<(), String> {
+  app
+    .set_activation_policy(ActivationPolicy::Regular)
+    .map_err(|error| format!("failed to activate app: {error}"))?;
+  let window = app
+    .get_webview_window(MAIN_WINDOW_LABEL)
+    .ok_or_else(|| "Control Center window is not available".to_string())?;
+  window
+    .show()
+    .map_err(|error| format!("failed to show Control Center: {error}"))?;
+  let _ = window.unminimize();
+  window
+    .set_focus()
+    .map_err(|error| format!("failed to focus Control Center: {error}"))?;
+  Ok(())
+}
+
+fn start_managed_ai_access_from_tray(app: &AppHandle) {
+  let supervisor = app.state::<Mutex<AiAccessSupervisor>>();
+  let _ = start_ai_access_services(app.clone(), supervisor);
+}
+
+fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
+  match menu_id {
+    TRAY_MENU_OPEN_ID => {
+      let _ = show_control_center(app);
+    }
+    TRAY_MENU_START_AI_ACCESS_ID => {
+      start_managed_ai_access_from_tray(app);
+      let _ = show_control_center(app);
+    }
+    TRAY_MENU_STOP_AI_ACCESS_ID => {
+      stop_managed_ai_access(app);
+      let _ = show_control_center(app);
+    }
+    TRAY_MENU_QUIT_ID => {
+      stop_managed_ai_access(app);
+      app.exit(0);
+    }
+    _ => {}
+  }
+}
+
+fn configure_background_tray(app: &mut App) -> tauri::Result<()> {
+  let open = MenuItemBuilder::with_id(TRAY_MENU_OPEN_ID, "Open Control Center").build(app)?;
+  let start =
+    MenuItemBuilder::with_id(TRAY_MENU_START_AI_ACCESS_ID, "Start AI Access").build(app)?;
+  let stop = MenuItemBuilder::with_id(TRAY_MENU_STOP_AI_ACCESS_ID, "Stop AI Access").build(app)?;
+  let quit = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "Quit Life Context Vault").build(app)?;
+  let menu = MenuBuilder::new(app)
+    .item(&open)
+    .item(&start)
+    .item(&stop)
+    .separator()
+    .item(&quit)
+    .build()?;
+
+  let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+    .menu(&menu)
+    .tooltip("Life Context Vault")
+    .show_menu_on_left_click(true)
+    .on_menu_event(|app, event| {
+      handle_tray_menu_event(app, event.id().as_ref());
+    })
+    .on_tray_icon_event(|tray, event| {
+      if let TrayIconEvent::Click {
+        button: MouseButton::Left,
+        button_state: MouseButtonState::Up,
+        ..
+      } = event
+      {
+        let _ = show_control_center(tray.app_handle());
+      }
+    });
+
+  if let Some(icon) = app.default_window_icon() {
+    tray = tray.icon(icon.clone());
+  }
+
+  tray.build(app)?;
+  Ok(())
+}
+
 fn spawn_relay(app: &AppHandle, relay_token: &str) -> Result<Child, String> {
   let vault_path = vault_db_path(app)?;
   let relay_state_path = relay_state_path(app)?;
@@ -6290,15 +6415,27 @@ pub fn run() {
   tauri::Builder::default()
     .manage(Mutex::new(AiAccessSupervisor::default()))
     .on_window_event(|window, event| {
-      if matches!(
-        event,
-        WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
-      ) {
-        let supervisor = window.state::<Mutex<AiAccessSupervisor>>();
-        if let Ok(mut supervisor) = supervisor.lock() {
-          stop_child(&mut supervisor.agent);
-          stop_child(&mut supervisor.relay);
-        };
+      let decision = match event {
+        WindowEvent::CloseRequested { .. } => {
+          window_lifecycle_decision(WindowLifecycleEventKind::CloseRequested)
+        }
+        WindowEvent::Destroyed => window_lifecycle_decision(WindowLifecycleEventKind::Destroyed),
+        _ => window_lifecycle_decision(WindowLifecycleEventKind::Other),
+      };
+      match decision {
+        WindowLifecycleDecision::HideToBackground => {
+          if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+          }
+          let _ = window.hide();
+          let _ = window
+            .app_handle()
+            .set_activation_policy(ActivationPolicy::Accessory);
+        }
+        WindowLifecycleDecision::StopManagedAiAccess => {
+          stop_managed_ai_access(window.app_handle());
+        }
+        WindowLifecycleDecision::Ignore => {}
       }
     })
     .invoke_handler(tauri::generate_handler![
@@ -6335,6 +6472,7 @@ pub fn run() {
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
+      configure_background_tray(app)?;
       let url = if cfg!(debug_assertions) {
         WebviewUrl::External(
           "http://127.0.0.1:5173"
@@ -6345,7 +6483,7 @@ pub fn run() {
         WebviewUrl::App("index.html".into())
       };
       eprintln!("creating Life Context Vault main window");
-      let window = WebviewWindowBuilder::new(app, "main", url)
+      let window = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, url)
         .title("Life Context Vault")
         .inner_size(1200.0, 820.0)
         .min_inner_size(390.0, 680.0)
@@ -8834,5 +8972,21 @@ mod tests {
     assert!(desktop.contains("X-GNOME-Autostart-enabled=true"));
     assert!(!desktop.contains("LCV_VAULT_DB_KEY"));
     assert!(!desktop.contains("ContextPack"));
+  }
+
+  #[test]
+  fn close_hides_to_background_without_stopping_managed_ai_access() {
+    assert_eq!(
+      window_lifecycle_decision(WindowLifecycleEventKind::CloseRequested),
+      WindowLifecycleDecision::HideToBackground
+    );
+    assert_eq!(
+      window_lifecycle_decision(WindowLifecycleEventKind::Destroyed),
+      WindowLifecycleDecision::StopManagedAiAccess
+    );
+    assert_eq!(
+      window_lifecycle_decision(WindowLifecycleEventKind::Other),
+      WindowLifecycleDecision::Ignore
+    );
   }
 }

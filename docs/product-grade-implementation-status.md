@@ -105,7 +105,8 @@ Last updated: 2026-06-12
   - status shows Relay reachability, Agent connection, managed process state, and MCP URL
   - external relays are status-only; the app does not automatically attach the local Agent to a relay it did not start
   - `Stop managed` only stops processes started by the app
-  - closing the app window also stops app-managed Relay and Agent processes
+  - closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent running
+  - `Quit Life Context Vault` from the menu bar/system tray stops app-managed Relay and Agent before process exit
   - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
 - Added always-available AI Access operations:
   - Connections can install/remove a macOS LaunchAgent login item for Life Context Vault
@@ -214,7 +215,6 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- True headless/menu-bar background mode beyond the current cross-platform startup item helpers.
 - Hosted relay operations for the metadata-only state store: tenant isolation, backup policy, and deployment-specific rotation runbooks beyond the new retention controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
@@ -239,6 +239,7 @@ Last updated: 2026-06-12
 - Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
+- Background lifecycle unit tests proving window close hides to tray without stopping managed AI Access, while window destruction/quit still stops managed Relay and Agent
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
 - Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
@@ -277,6 +278,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
   - desktop `1280x720`: Browser Capture host installer card accepts an extension id without page-level horizontal overflow
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
+  - desktop `1280x720`: Connections background-mode automation card appears with three automation cards and no page-level horizontal overflow
+  - mobile `390x844`: Connections background-mode automation cards stack to one column without page-level or card-level horizontal overflow
   - desktop `1280x900`: Connections manual Capture can start Passive Capture, create an Inbox candidate, and keep Facts at zero
   - mobile `390x844`: Connections Capture surfaces render without page-level horizontal overflow
   - desktop `1280x920`: editable policy controls and Capture allowed-site controls render and update without page-level horizontal overflow
@@ -429,6 +432,15 @@ Last updated: 2026-06-12
 - Security/privacy: accepted; startup payloads run only the app binary and do not embed Vault keys, Relay tokens, MCP payloads, Raw Sources, or Context Pack bodies.
 - Platform design: accepted; macOS keeps LaunchAgent, Windows uses the user's Startup folder `.cmd`, and Linux uses XDG autostart `.desktop`.
 - Technical design: accepted; existing Tauri command names remain stable while OS-specific path/payload generation is isolated in testable helpers.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
+
+### Menu-Bar Background Mode Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, lifecycle, and UI passes.
+- Product fit: accepted; everyday AI access no longer depends on keeping a Control Center window visible, and the user can return from the menu bar/system tray.
+- Security/privacy: accepted; background mode does not add Vault reads, MCP tools, Relay storage, Raw Source access, or Context Pack persistence. It only changes app lifecycle handling.
+- Lifecycle: accepted; regular window close prevents window destruction and hides to background, while explicit tray Quit and real window destruction still stop app-managed Relay and Agent.
+- UX: accepted; Connections explains that closing the window keeps AI Access running and that full exit is available through `Quit Life Context Vault`.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
 
 ### First-Run AI Access UX Slice

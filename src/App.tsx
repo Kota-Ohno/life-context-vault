@@ -2679,6 +2679,24 @@ function ConnectionsView({
                   : "必要なときだけ手動でStartします。"}
               </span>
             </div>
+            <div className="automation-card">
+              <div className="automation-card-heading">
+                <div>
+                  <strong>Control Centerの常駐</strong>
+                  <p>
+                    {nativePath
+                      ? "ウィンドウを閉じてもVault管理面はmenu bar/trayに残り、AI Accessを止めません。"
+                      : "Desktop appで開くと、Control Centerを閉じてもmenu bar/trayから戻せます。"}
+                  </p>
+                </div>
+                <Badge>{nativePath ? "on" : "desktop"}</Badge>
+              </div>
+              <span>
+                {nativePath
+                  ? "完全に終了するときはmenu bar/trayのQuit Life Context Vaultを使います。"
+                  : "ブラウザ表示では常駐動作とAI Access起動は使えません。"}
+              </span>
+            </div>
           </div>
           {aiServiceStatus?.lastError && <p className="warning-text">{aiServiceStatus.lastError}</p>}
           {!nativePath && <p className="muted">Desktop appで起動すると、ここからRelayとAgentを管理できます。</p>}
@@ -4091,7 +4109,7 @@ function aiAccessReadinessCopy(
     return {
       badge: "Ready",
       title: "AIがContext Packを要求できる状態です",
-      body: "RelayとLocal Agentが接続済みです。",
+      body: "RelayとLocal Agentが接続済みです。Control Centerは閉じても常駐します。",
       detail:
         "外部AIへ渡る境界はContext Packだけです。未承認候補、Raw Source、Vault全体はこの接続から直接渡しません。",
       tone: "ready"
@@ -4120,7 +4138,7 @@ function aiAccessReadinessCopy(
   return {
     badge: "Not started",
     title: "AI Access Serviceはまだ停止しています",
-    body: "Start AI AccessでRelayとLocal Agentをまとめて起動します。",
+    body: "Start AI AccessでRelayとLocal Agentをまとめて起動します。閉じた後はmenu bar/trayから戻せます。",
     detail:
       "最初は背景情報を承認してから起動すると、AIに渡すContext Packの確認まで一気に試せます。",
     tone: "neutral"
