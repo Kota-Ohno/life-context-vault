@@ -42,6 +42,7 @@ For day-to-day use, the same **Connections** screen can install a macOS LaunchAg
 
 ```bash
 LCV_RELAY_TOKEN=dev-local-token \
+LCV_RELAY_ENABLE_STATIC_TOKEN=1 \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
 LCV_RELAY_TENANT_ID=local \
@@ -73,14 +74,14 @@ LCV_VAULT_DB_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/
 src-tauri/target/release/lcv-agent
 ```
 
-Development requests may still include the static fallback token:
+Development requests may include the static fallback token only when `LCV_RELAY_ENABLE_STATIC_TOKEN=1`:
 
 ```text
 Authorization: Bearer dev-local-token
 Content-Type: application/json
 ```
 
-Remote clients should use OAuth discovery instead of the static token.
+Remote clients should use OAuth discovery instead of the static token. Public or shared deployments should leave `LCV_RELAY_ENABLE_STATIC_TOKEN` unset.
 
 ## Endpoints
 
@@ -103,9 +104,9 @@ Remote clients should use OAuth discovery instead of the static token.
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
-`GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires loopback access or `LCV_RELAY_ADMIN_TOKEN`.
+`GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 
-`POST /relay/handoff` stores a short-lived, memory-only MCP response for an already confirmed Context Pack. It requires loopback access or `LCV_RELAY_ADMIN_TOKEN`.
+`POST /relay/handoff` stores a short-lived, memory-only MCP response for an already confirmed Context Pack. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 
 ## Relay State Store
 
@@ -151,8 +152,8 @@ If `LCV_RELAY_STATE_PATH` is not set, the relay stores this metadata at the plat
 Hosted Remote MCP flows sometimes need the desktop Agent to complete approval after the relay has already accepted the external AI request. For that handoff, `lcv-relay` keeps a memory-only cache of confirmed MCP responses:
 
 - The endpoint is `POST /relay/handoff`.
-- The caller must be loopback or provide `LCV_RELAY_ADMIN_TOKEN`.
-- The body can be the MCP JSON-RPC response directly, or `{ "clientId": "...", "mcpResponse": { ... } }`.
+- The caller must be non-browser loopback or provide `LCV_RELAY_ADMIN_TOKEN`.
+- The body must include the requesting MCP client id: `{ "clientId": "...", "mcpResponse": { ... } }`.
 - The MCP response is accepted only when `structuredContent.status` is `fulfilled` and `structuredContent.contextPack.trustBoundary` is exactly `ContextPack only`.
 - The default TTL is 10 minutes.
 - `LCV_RELAY_HANDOFF_TTL_SECONDS` can override the TTL; `LCV_RELAY_HANDOFF_TTL_DAYS` is also accepted for deployment tests.
@@ -164,7 +165,9 @@ When the Agent path is offline, `life_context.get_request_status` can return a s
 ## Safety Boundary
 
 - Default bind is `127.0.0.1:8765`.
-- Binding outside loopback requires explicit `LCV_RELAY_TOKEN`.
+- Binding outside loopback requires an HTTPS `LCV_RELAY_BASE_URL`, `LCV_RELAY_ADMIN_TOKEN`, and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`.
+- Static bearer fallback is disabled by default and is intended only for local development when `LCV_RELAY_ENABLE_STATIC_TOKEN=1`.
+- Loopback admin routes reject browser-originated requests unless an explicit admin token is supplied.
 - OAuth access tokens are opaque, in-memory, and short-lived.
 - OAuth client registrations are durable, but access tokens and authorization codes are not persisted.
 - OAuth tool access uses minimum scopes:
@@ -172,9 +175,10 @@ When the Agent path is offline, `life_context.get_request_status` can return a s
   - `life_context.propose_memory` -> `memory.propose`
   - `life_context.get_policy_summary` -> `policy.read`
   - `life_context.get_request_status` -> `request.status`
+- OAuth approval requires a server-side pending authorization session. `/oauth/approve` cannot mint a code from query parameters alone.
 - The relay does not implement its own Vault reads. It forwards through `lcv-agent` to `lcv-mcp`, or through direct sidecar fallback only when explicitly allowed for local development.
 - The relay does not store Context Pack bodies or MCP request bodies.
-- Confirmed Context Pack handoff bodies are memory-only, TTL-bound, admin-gated, and excluded from relay state persistence and backups.
+- Confirmed Context Pack handoff bodies are memory-only, TTL-bound, admin-gated, client-bound, and excluded from relay state persistence and backups.
 - Sensitive Context Packs remain queued for first-party app confirmation.
 - Memory proposals remain unapproved `MemoryCandidate` records.
 
@@ -186,6 +190,7 @@ npm run mcp:build
 npm run relay:build
 npm run agent:build
 LCV_RELAY_TOKEN=dev-local-token \
+LCV_RELAY_ENABLE_STATIC_TOKEN=1 \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
 LCV_RELAY_TENANT_ID=local \

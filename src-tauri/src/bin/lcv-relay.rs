@@ -82,6 +82,7 @@ struct RelayConfig {
   base_url: String,
   token: String,
   admin_token: Option<String>,
+  allow_static_bearer: bool,
   tenant_id: String,
   mcp_command: PathBuf,
   vault_db_path: Option<String>,
@@ -94,16 +95,29 @@ impl RelayConfig {
   fn from_env() -> Result<Self, String> {
     let bind = env::var("LCV_RELAY_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     let token = env::var("LCV_RELAY_TOKEN").unwrap_or_else(|_| DEFAULT_TOKEN.to_string());
-    if !is_loopback_bind(&bind) && env::var("LCV_RELAY_TOKEN").is_err() {
-      return Err("LCV_RELAY_TOKEN is required when binding outside loopback".to_string());
-    }
-    let tenant_id = relay_tenant_id_from_env(&bind)?;
     let base_url = env::var("LCV_RELAY_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
+    let admin_token = env::var("LCV_RELAY_ADMIN_TOKEN").ok();
+    let allow_direct_sidecar = env::var("LCV_RELAY_ALLOW_DIRECT_SIDECAR")
+      .map(|value| value != "0")
+      .unwrap_or(true);
+    let allow_static_bearer = env::var("LCV_RELAY_ENABLE_STATIC_TOKEN")
+      .map(|value| value == "1")
+      .unwrap_or(false);
+    validate_relay_surface(
+      &bind,
+      &base_url,
+      admin_token.as_ref(),
+      allow_direct_sidecar,
+      allow_static_bearer,
+      env::var("LCV_RELAY_TOKEN").is_ok(),
+    )?;
+    let tenant_id = relay_tenant_id_from_env(&bind)?;
     Ok(Self {
       bind,
       base_url,
       token,
-      admin_token: env::var("LCV_RELAY_ADMIN_TOKEN").ok(),
+      admin_token,
+      allow_static_bearer,
       tenant_id,
       mcp_command: env::var("LCV_MCP_COMMAND")
         .map(PathBuf::from)
@@ -113,9 +127,7 @@ impl RelayConfig {
         .map(PathBuf::from)
         .ok()
         .or_else(default_relay_state_path),
-      allow_direct_sidecar: env::var("LCV_RELAY_ALLOW_DIRECT_SIDECAR")
-        .map(|value| value != "0")
-        .unwrap_or(true),
+      allow_direct_sidecar,
       retention: RelayRetentionPolicy::from_env(),
     })
   }
@@ -213,6 +225,35 @@ fn env_usize(name: &str, default_value: usize, max_value: usize) -> usize {
     .unwrap_or(default_value)
 }
 
+fn validate_relay_surface(
+  bind: &str,
+  base_url: &str,
+  admin_token: Option<&String>,
+  allow_direct_sidecar: bool,
+  allow_static_bearer: bool,
+  static_token_set: bool,
+) -> Result<(), String> {
+  if is_loopback_bind(bind) {
+    return Ok(());
+  }
+  if !base_url.starts_with("https://") {
+    return Err("LCV_RELAY_BASE_URL must be https:// when binding outside loopback".to_string());
+  }
+  if admin_token.is_none() {
+    return Err("LCV_RELAY_ADMIN_TOKEN is required when binding outside loopback".to_string());
+  }
+  if allow_direct_sidecar {
+    return Err("LCV_RELAY_ALLOW_DIRECT_SIDECAR=0 is required when binding outside loopback".to_string());
+  }
+  if allow_static_bearer && !static_token_set {
+    return Err(
+      "LCV_RELAY_TOKEN is required when explicitly enabling static bearer outside loopback"
+        .to_string(),
+    );
+  }
+  Ok(())
+}
+
 fn relay_tenant_id_from_env(bind: &str) -> Result<String, String> {
   resolve_relay_tenant_id(bind, env::var("LCV_RELAY_TENANT_ID").ok().as_deref())
 }
@@ -288,6 +329,7 @@ struct RelayStateInner {
   registered_clients: HashMap<String, RegisteredClient>,
   request_events: Vec<RelayRequestEvent>,
   handoffs: HashMap<String, RelayHandoff>,
+  pending_authorizations: HashMap<String, PendingAuthorization>,
   auth_codes: HashMap<String, AuthCode>,
   access_tokens: HashMap<String, AccessToken>,
   pairing_sessions: HashMap<String, PairingSession>,
@@ -314,6 +356,18 @@ struct AuthCode {
   code_challenge: String,
   code_challenge_method: String,
   scopes: Vec<String>,
+  expires_at: SystemTime,
+}
+
+#[derive(Clone, Debug)]
+struct PendingAuthorization {
+  id: String,
+  client_id: String,
+  redirect_uri: String,
+  code_challenge: String,
+  code_challenge_method: String,
+  scopes: Vec<String>,
+  state: Option<String>,
   expires_at: SystemTime,
 }
 
@@ -541,6 +595,7 @@ impl RelayState {
         registered_clients,
         request_events: persisted.request_events,
         handoffs: HashMap::new(),
+        pending_authorizations: HashMap::new(),
         auth_codes: HashMap::new(),
         access_tokens: HashMap::new(),
         pairing_sessions: HashMap::new(),
@@ -589,6 +644,22 @@ impl RelayState {
   fn insert_auth_code(&self, code: String, auth_code: AuthCode) {
     let mut inner = self.inner.lock().expect("relay state");
     inner.auth_codes.insert(code, auth_code);
+  }
+
+  fn insert_pending_authorization(
+    &self,
+    authorization: PendingAuthorization,
+  ) -> PendingAuthorization {
+    let mut inner = self.inner.lock().expect("relay state");
+    inner
+      .pending_authorizations
+      .insert(authorization.id.clone(), authorization.clone());
+    authorization
+  }
+
+  fn consume_pending_authorization(&self, id: &str) -> Option<PendingAuthorization> {
+    let mut inner = self.inner.lock().expect("relay state");
+    inner.pending_authorizations.remove(id)
   }
 
   fn consume_auth_code(&self, code: &str) -> Option<AuthCode> {
@@ -642,10 +713,16 @@ impl RelayState {
     handoff
   }
 
-  fn handoff_response(&self, request_id: &str) -> Option<Value> {
+  fn handoff_response(&self, request_id: &str, client_id: &str) -> Option<Value> {
     let mut inner = self.inner.lock().expect("relay state");
     prune_handoffs(&mut inner.handoffs, SystemTime::now());
-    inner.handoffs.get(request_id).map(|handoff| handoff.body.clone())
+    inner.handoffs.get(request_id).and_then(|handoff| {
+      if handoff.client_id.as_deref() == Some(client_id) {
+        Some(handoff.body.clone())
+      } else {
+        None
+      }
+    })
   }
 
   fn store_status(&self) -> Value {
@@ -1054,7 +1131,13 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     .and_then(Value::as_str)
     .filter(|value| !value.trim().is_empty())
     .map(str::to_string);
-  let handoff = state.store_handoff(request_id.clone(), client_id, mcp_response);
+  let Some(client_id) = client_id else {
+    return json_response(400, json!({
+      "error": "missing_client_id",
+      "message": "handoff body must include clientId so cached Context Packs remain bound to the requesting AI client."
+    }));
+  };
+  let handoff = state.store_handoff(request_id.clone(), Some(client_id), mcp_response);
   json_response(200, json!({
     "status": "stored",
     "requestId": request_id,
@@ -1090,30 +1173,48 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
       "message": "code_challenge is required."
     }));
   }
+  let code_challenge_method = query
+    .get("code_challenge_method")
+    .map(String::as_str)
+    .unwrap_or("S256");
+  if !code_challenge_method.eq_ignore_ascii_case("S256")
+    && !code_challenge_method.eq_ignore_ascii_case("plain")
+  {
+    return json_response(400, json!({
+      "error": "invalid_request",
+      "message": "unsupported code_challenge_method"
+    }));
+  }
+  let scopes = match parse_requested_scopes(query.get("scope").map(String::as_str).unwrap_or_default()) {
+    Ok(scopes) => scopes,
+    Err(message) => {
+      return json_response(400, json!({
+        "error": "invalid_scope",
+        "message": message
+      }));
+    }
+  };
+  let pending = state.insert_pending_authorization(PendingAuthorization {
+    id: random_token("oauth_session"),
+    client_id: client_id.clone(),
+    redirect_uri: redirect_uri.clone(),
+    code_challenge: query
+      .get("code_challenge")
+      .cloned()
+      .unwrap_or_default(),
+    code_challenge_method: code_challenge_method.to_string(),
+    scopes,
+    state: query.get("state").filter(|value| !value.is_empty()).cloned(),
+    expires_at: seconds_from_now(AUTH_CODE_TTL_SECONDS),
+  });
 
   if env::var("LCV_RELAY_AUTO_APPROVE").ok().as_deref() == Some("1") {
-    return issue_auth_code_redirect(&query, state);
+    return issue_auth_code_redirect(pending, state);
   }
 
   let approve_url = format!(
     "/oauth/approve?{}",
-    form_encode(&[
-      ("client_id", client_id.as_str()),
-      ("redirect_uri", redirect_uri.as_str()),
-      (
-        "code_challenge",
-        query.get("code_challenge").map(String::as_str).unwrap_or_default(),
-      ),
-      (
-        "code_challenge_method",
-        query
-          .get("code_challenge_method")
-          .map(String::as_str)
-          .unwrap_or("S256"),
-      ),
-      ("scope", query.get("scope").map(String::as_str).unwrap_or_default()),
-      ("state", query.get("state").map(String::as_str).unwrap_or_default()),
-    ])
+    form_encode(&[("session", pending.id.as_str())])
   );
   HttpResponse::html(
     200,
@@ -1127,7 +1228,7 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
        <p><a href=\"{}\" style=\"display:inline-block;background:#26352b;color:white;padding:10px 14px;border-radius:8px;text-decoration:none\">Authorize</a></p>\
        </main>",
       html_escape(&client.client_name),
-      html_escape(query.get("scope").map(String::as_str).unwrap_or("default")),
+      html_escape(&pending.scopes.join(" ")),
       approve_url
     ),
   )
@@ -1137,40 +1238,64 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
 
 fn oauth_approve(request: &HttpRequest, state: &RelayState) -> HttpResponse {
   let query = parse_query(&request.query);
-  issue_auth_code_redirect(&query, state)
-}
-
-fn issue_auth_code_redirect(query: &HashMap<String, String>, state: &RelayState) -> HttpResponse {
-  let client_id = query.get("client_id").cloned().unwrap_or_default();
-  let redirect_uri = query.get("redirect_uri").cloned().unwrap_or_default();
-  let code_challenge = query.get("code_challenge").cloned().unwrap_or_default();
-  if client_id.is_empty() || redirect_uri.is_empty() || code_challenge.is_empty() {
+  let session_id = query.get("session").cloned().unwrap_or_default();
+  let Some(pending) = state.consume_pending_authorization(&session_id) else {
     return json_response(400, json!({
       "error": "invalid_request",
-      "message": "client_id, redirect_uri, and code_challenge are required."
+      "message": "authorization session is missing or already used."
+    }));
+  };
+  if SystemTime::now() > pending.expires_at {
+    return json_response(400, json!({
+      "error": "invalid_request",
+      "message": "authorization session expired."
+    }));
+  }
+  let Some(client) = state.client(&pending.client_id) else {
+    return json_response(400, json!({
+      "error": "invalid_client"
+    }));
+  };
+  if !client
+    .redirect_uris
+    .iter()
+    .any(|uri| uri == &pending.redirect_uri)
+  {
+    return json_response(400, json!({
+      "error": "invalid_redirect_uri"
+    }));
+  }
+  issue_auth_code_redirect(pending, state)
+}
+
+fn issue_auth_code_redirect(pending: PendingAuthorization, state: &RelayState) -> HttpResponse {
+  if pending.client_id.is_empty()
+    || pending.redirect_uri.is_empty()
+    || pending.code_challenge.is_empty()
+    || pending.scopes.is_empty()
+  {
+    return json_response(400, json!({
+      "error": "invalid_request",
+      "message": "authorization session is incomplete."
     }));
   }
   let code = random_token("code");
-  let scope_text = query.get("scope").map(String::as_str).unwrap_or_default();
   state.insert_auth_code(
     code.clone(),
     AuthCode {
-      client_id,
-      redirect_uri: redirect_uri.clone(),
-      code_challenge,
-      code_challenge_method: query
-        .get("code_challenge_method")
-        .cloned()
-        .unwrap_or_else(|| "S256".to_string()),
-      scopes: normalize_scopes(scope_text),
+      client_id: pending.client_id,
+      redirect_uri: pending.redirect_uri.clone(),
+      code_challenge: pending.code_challenge,
+      code_challenge_method: pending.code_challenge_method,
+      scopes: pending.scopes,
       expires_at: seconds_from_now(AUTH_CODE_TTL_SECONDS),
     },
   );
 
-  let mut redirect = format!("{}?code={}", redirect_uri, url_encode(&code));
-  if let Some(state_value) = query.get("state").filter(|value| !value.is_empty()) {
+  let mut redirect = format!("{}?code={}", pending.redirect_uri, url_encode(&code));
+  if let Some(state_value) = pending.state.filter(|value| !value.is_empty()) {
     redirect.push_str("&state=");
-    redirect.push_str(&url_encode(state_value));
+    redirect.push_str(&url_encode(&state_value));
   }
   HttpResponse::redirect(&redirect)
 }
@@ -1316,7 +1441,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     }
     Err(agent_error) => {
       if !config.allow_direct_sidecar {
-        if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body) {
+        if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body, &client_id) {
           record_relay_event(
             state,
             Some(client_id),
@@ -1376,7 +1501,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       HttpResponse::empty(202).with_cors()
     }
     Err(error) => {
-      if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body) {
+      if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body, &client_id) {
         record_relay_event(
           state,
           Some(client_id),
@@ -1459,9 +1584,9 @@ fn request_status_request_id_from_mcp_body(body: &str) -> Option<String> {
     .map(str::to_string)
 }
 
-fn handoff_response_for_mcp_request(state: &RelayState, body: &str) -> Option<Value> {
+fn handoff_response_for_mcp_request(state: &RelayState, body: &str, client_id: &str) -> Option<Value> {
   let request_id = request_status_request_id_from_mcp_body(body)?;
-  state.handoff_response(&request_id)
+  state.handoff_response(&request_id, client_id)
 }
 
 fn validate_handoff_mcp_response(response: &Value) -> Result<String, String> {
@@ -1761,7 +1886,7 @@ fn mcp_authorized_client(
   let Some(token) = bearer_token(request) else {
     return None;
   };
-  if token == config.token {
+  if config.allow_static_bearer && token == config.token {
     return Some("static-dev-token".to_string());
   }
   let Some(access_token) = state.access_token(token) else {
@@ -1779,7 +1904,7 @@ fn mcp_authorized_client(
 
 fn admin_authorized(request: &HttpRequest, config: &RelayConfig) -> bool {
   if is_loopback_bind(&config.bind) && config.admin_token.is_none() {
-    return true;
+    return request.header("Origin").is_none() && request.header("Referer").is_none();
   }
   match (&config.admin_token, bearer_token(request)) {
     (Some(expected), Some(actual)) => expected == actual,
@@ -1809,17 +1934,21 @@ fn verify_pkce(challenge: &str, method: &str, verifier: &str) -> bool {
   URL_SAFE_NO_PAD.encode(digest) == challenge
 }
 
-fn normalize_scopes(scope_text: &str) -> Vec<String> {
-  let requested: Vec<String> = scope_text
-    .split_whitespace()
-    .filter(|scope| SUPPORTED_SCOPES.contains(scope))
-    .map(str::to_string)
-    .collect();
-  if requested.is_empty() {
-    SUPPORTED_SCOPES.iter().map(|scope| scope.to_string()).collect()
-  } else {
-    requested
+fn parse_requested_scopes(scope_text: &str) -> Result<Vec<String>, String> {
+  let tokens: Vec<&str> = scope_text.split_whitespace().collect();
+  if tokens.is_empty() {
+    return Err("At least one supported scope is required.".to_string());
   }
+  let mut requested = Vec::new();
+  for scope in tokens {
+    if !SUPPORTED_SCOPES.contains(&scope) {
+      return Err(format!("Unsupported scope: {scope}"));
+    }
+    if !requested.iter().any(|existing| existing == scope) {
+      requested.push(scope.to_string());
+    }
+  }
+  Ok(requested)
 }
 
 fn parse_query(query: &str) -> HashMap<String, String> {
@@ -1944,6 +2073,7 @@ mod tests {
       base_url: "http://127.0.0.1:8765".to_string(),
       token: "test-token".to_string(),
       admin_token: None,
+      allow_static_bearer: true,
       tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       mcp_command: PathBuf::from("lcv-mcp"),
       vault_db_path: None,
@@ -1976,6 +2106,18 @@ mod tests {
       mcp_authorized_client(
         &request,
         &RelayConfig {
+          allow_static_bearer: false,
+          ..test_config()
+        },
+        &RelayState::new(),
+        "context_pack.request"
+      ),
+      None
+    );
+    assert_eq!(
+      mcp_authorized_client(
+        &request,
+        &RelayConfig {
           token: "wrong-token".to_string(),
           ..test_config()
         },
@@ -1987,10 +2129,73 @@ mod tests {
   }
 
   #[test]
-  fn non_loopback_bind_requires_explicit_token() {
+  fn loopback_bind_detection_is_explicit() {
     assert!(is_loopback_bind("127.0.0.1:8765"));
     assert!(is_loopback_bind("localhost:8765"));
     assert!(!is_loopback_bind("0.0.0.0:8765"));
+  }
+
+  #[test]
+  fn public_relay_surface_requires_https_admin_and_agent_only_path() {
+    let admin_token = "admin-secret".to_string();
+    assert!(validate_relay_surface(
+      "127.0.0.1:8765",
+      "http://127.0.0.1:8765",
+      None,
+      true,
+      false,
+      false
+    )
+    .is_ok());
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "http://relay.example.com",
+      Some(&admin_token),
+      false,
+      false,
+      false
+    )
+    .expect_err("public relay must require https")
+    .contains("https://"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      None,
+      false,
+      false,
+      false
+    )
+    .expect_err("public relay must require admin token")
+    .contains("ADMIN_TOKEN"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      Some(&admin_token),
+      true,
+      false,
+      false
+    )
+    .expect_err("public relay must disable direct sidecar")
+    .contains("ALLOW_DIRECT_SIDECAR=0"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      Some(&admin_token),
+      false,
+      true,
+      false
+    )
+    .expect_err("explicit static bearer requires token")
+    .contains("LCV_RELAY_TOKEN"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      Some(&admin_token),
+      false,
+      false,
+      false
+    )
+    .is_ok());
   }
 
   #[test]
@@ -2023,6 +2228,98 @@ mod tests {
     assert!(body.contains("token_endpoint"));
     assert!(body.contains("registration_endpoint"));
     assert!(body.contains("S256"));
+  }
+
+  #[test]
+  fn oauth_approve_requires_pending_authorization_session() {
+    let state = RelayState::new();
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/approve".to_string(),
+      query: form_encode(&[
+        ("client_id", "client_attacker"),
+        ("redirect_uri", "https://example.com/callback"),
+        ("code_challenge", "challenge"),
+        ("scope", "request.status"),
+      ]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    let response = oauth_approve(&request, &state);
+    assert_eq!(response.status, 400);
+    let body = String::from_utf8(response.body).expect("approve body");
+    assert!(body.contains("authorization session"));
+  }
+
+  #[test]
+  fn oauth_authorize_rejects_empty_scope_and_approve_consumes_session() {
+    let state = RelayState::new();
+    let client = state
+      .register_client(
+        "Test Client".to_string(),
+        vec!["https://client.example/callback".to_string()],
+      )
+      .expect("client registration");
+    let verifier = "correct-horse-battery-staple";
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+
+    let empty_scope = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/authorize".to_string(),
+      query: form_encode(&[
+        ("response_type", "code"),
+        ("client_id", client.client_id.as_str()),
+        ("redirect_uri", "https://client.example/callback"),
+        ("code_challenge", &challenge),
+      ]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    assert_eq!(
+      oauth_authorize(&empty_scope, &test_config(), &state).status,
+      400
+    );
+
+    let authorize = HttpRequest {
+      query: form_encode(&[
+        ("response_type", "code"),
+        ("client_id", client.client_id.as_str()),
+        ("redirect_uri", "https://client.example/callback"),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "request.status"),
+        ("state", "client-state"),
+      ]),
+      ..empty_scope
+    };
+    let response = oauth_authorize(&authorize, &test_config(), &state);
+    assert_eq!(response.status, 200);
+    let session_id = {
+      let inner = state.inner.lock().expect("relay state");
+      inner
+        .pending_authorizations
+        .keys()
+        .next()
+        .cloned()
+        .expect("pending authorization")
+    };
+    let approve = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/approve".to_string(),
+      query: form_encode(&[("session", session_id.as_str())]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    let approved = oauth_approve(&approve, &state);
+    assert_eq!(approved.status, 302);
+    let location = approved
+      .headers
+      .iter()
+      .find(|(name, _)| name == "Location")
+      .map(|(_, value)| value.clone())
+      .expect("redirect location");
+    assert!(location.contains("code="));
+    assert!(location.contains("state=client-state"));
   }
 
   #[test]
@@ -2186,7 +2483,7 @@ mod tests {
     let state = RelayState::new();
     state.store_handoff(
       "req_cached".to_string(),
-      Some("client_chatgpt".to_string()),
+      Some("static-dev-token".to_string()),
       test_handoff_response("req_cached"),
     );
     let request = HttpRequest {
@@ -2218,6 +2515,34 @@ mod tests {
         .and_then(Value::as_str),
       Some("fulfilled_handoff_cache")
     );
+  }
+
+  #[test]
+  fn relay_handoff_cache_is_bound_to_client_id() {
+    let state = RelayState::new();
+    state.store_handoff(
+      "req_other_client".to_string(),
+      Some("client_chatgpt".to_string()),
+      test_handoff_response("req_other_client"),
+    );
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![("Authorization".to_string(), "Bearer test-token".to_string())],
+      body: r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"life_context.get_request_status","arguments":{"requestId":"req_other_client"}}}"#.to_string(),
+    };
+    let response = handle_mcp_request(
+      &request,
+      &RelayConfig {
+        allow_direct_sidecar: false,
+        ..test_config()
+      },
+      &state,
+    );
+    assert_eq!(response.status, 202);
+    let body = String::from_utf8(response.body).expect("pending body");
+    assert!(body.contains("pending_agent_offline"));
   }
 
   #[test]

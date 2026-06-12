@@ -4210,21 +4210,16 @@ fn extract_image_ocr_document_with_config(
   bytes: &[u8],
   warnings: &mut Vec<String>,
 ) -> Result<String, String> {
-  let extension = Path::new(file_name)
-    .extension()
-    .and_then(|value| value.to_str())
-    .filter(|value| {
-      value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric())
-    })
-    .unwrap_or("img");
-  let input_path = env::temp_dir().join(format!("{}_input.{extension}", new_id("lcv_ocr")));
-  fs::write(&input_path, bytes)
-    .map_err(|error| format!("OCR入力ファイルを準備できませんでした: {error}"))?;
+  let (temp_dir, input_path) = write_ocr_temp_input(file_name, bytes)?;
 
   let input_path_text = input_path.display().to_string();
   let mut command = Command::new(&config.command);
+  command.env_clear();
+  if let Some(path) = env::var_os("PATH") {
+    command.env("PATH", path);
+  }
+  command.env("LC_ALL", "C.UTF-8");
+  command.env("LANG", "C.UTF-8");
   for arg in &config.args {
     command.arg(
       arg
@@ -4236,15 +4231,10 @@ fn extract_image_ocr_document_with_config(
   command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
   let output = run_command_with_timeout(&mut command, config.timeout);
-  let _ = fs::remove_file(&input_path);
+  let _ = fs::remove_dir_all(&temp_dir);
   let output = output?;
   if !output.status.success() {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    return Err(if stderr.is_empty() {
-      "OCR Providerが本文抽出に失敗しました。".to_string()
-    } else {
-      format!("OCR Providerが本文抽出に失敗しました: {stderr}")
-    });
+    return Err("OCR Providerが本文抽出に失敗しました。コマンド、引数、対応画像形式を確認してください。".to_string());
   }
   let text = String::from_utf8(output.stdout)
     .map_err(|_| "OCR Providerの出力をUTF-8として読めませんでした。".to_string())?;
@@ -4253,6 +4243,43 @@ fn extract_image_ocr_document_with_config(
     config.label()
   ));
   Ok(text)
+}
+
+fn write_ocr_temp_input(file_name: &str, bytes: &[u8]) -> Result<(PathBuf, PathBuf), String> {
+  let extension = Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    .filter(|value| {
+      value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric())
+    })
+    .unwrap_or("img");
+  let temp_dir = env::temp_dir().join(new_id("lcv_ocr"));
+  fs::create_dir(&temp_dir)
+    .map_err(|error| format!("OCR一時ディレクトリを準備できませんでした: {error}"))?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700));
+  }
+  let input_path = temp_dir.join(format!("input.{extension}"));
+  {
+    let mut file = fs::OpenOptions::new()
+      .write(true)
+      .create_new(true)
+      .open(&input_path)
+      .map_err(|error| format!("OCR入力ファイルを準備できませんでした: {error}"))?;
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
+    file
+      .write_all(bytes)
+      .map_err(|error| format!("OCR入力ファイルを書き込めませんでした: {error}"))?;
+  }
+  Ok((temp_dir, input_path))
 }
 
 fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {

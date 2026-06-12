@@ -1,6 +1,6 @@
 # Life Context Vault Product-Grade Implementation Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 ## Implemented In This Slice
 
@@ -639,6 +639,14 @@ Last updated: 2026-06-12
 - Security/privacy: shared status returns only the AI-bound Context Pack payload and strips local answer/audit internals; shared proposal never creates ApprovedFacts.
 - Technical design: `propose_memory_at_path` and `get_context_request_status_at_path` are path-based Vault Core APIs used by the stdio MCP sidecar.
 - Review disposition: old sidecar-local memory proposal assembly and request-status Pack sanitization were removed after shared Core APIs landed.
+
+### Relay Auth And OCR Hardening Slice
+
+- Product fit: public Remote MCP access now defaults to the OAuth + local Agent approval path that matches the everyday-AI product promise, while static bearer access is explicitly limited to local development.
+- Security/privacy: `/oauth/approve` now requires a server-side pending authorization session, static bearer MCP access is off unless `LCV_RELAY_ENABLE_STATIC_TOKEN=1`, browser-originated loopback admin calls are rejected without an admin token, and cached handoffs are bound to the requesting AI client id.
+- Security/privacy: local OCR provider execution now uses a private per-request temporary directory, clears inherited process environment variables except a minimal locale/path allowlist, and returns generic provider errors without echoing stderr into the app.
+- Operations: hosted Relay deployment docs now require HTTPS base URL, admin token, direct sidecar disabled, and OAuth-only client access; accidental public static bearer fallback is treated as a misconfiguration.
+- Verification: relay tests cover pending OAuth authorization sessions, empty-scope rejection, static bearer disabling, and client-bound handoff cache behavior. Native document extraction tests cover the OCR command path.
 
 ## Independent Review Passes
 

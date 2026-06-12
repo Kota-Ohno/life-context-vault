@@ -17,7 +17,6 @@ Set these for any public or shared deployment:
 ```bash
 LCV_RELAY_BIND=0.0.0.0:8765
 LCV_RELAY_BASE_URL=https://relay.example.com
-LCV_RELAY_TOKEN=<long-random-static-dev-fallback-token>
 LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token>
 LCV_RELAY_TENANT_ID=<tenant-or-environment-id>
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=0
@@ -25,6 +24,8 @@ LCV_RELAY_STATE_PATH=/data/relay-state.json
 ```
 
 The public endpoint must terminate HTTPS before traffic reaches the container. `LCV_RELAY_BASE_URL` must be the public HTTPS origin because OAuth metadata, connector URLs, and Agent WebSocket URLs are derived from it.
+
+Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STATIC_TOKEN=1` in public or shared deployments; real clients should use OAuth Authorization Code + PKCE.
 
 ## Recommended Runtime Settings
 
@@ -39,7 +40,7 @@ Mount `/data` as a durable encrypted volume or platform-managed persistent disk.
 
 ## Data Boundary
 
-The hosted relay must not be configured with `LCV_MCP_COMMAND`, `LCV_VAULT_DB_PATH`, or `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1`.
+The hosted relay must not be configured with `LCV_MCP_COMMAND`, `LCV_VAULT_DB_PATH`, `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1`, or `LCV_RELAY_ENABLE_STATIC_TOKEN=1`.
 
 The relay persists:
 
@@ -56,7 +57,7 @@ The relay does not persist:
 - Context Pack bodies.
 - OAuth access tokens or authorization codes.
 
-Confirmed Context Pack handoff bodies are memory-only, admin-gated, and TTL-bound. `/relay/state` exposes only handoff metadata.
+Confirmed Context Pack handoff bodies are memory-only, admin-gated, client-bound, and TTL-bound. `/relay/state` exposes only handoff metadata.
 
 ## Smoke Test
 
@@ -91,7 +92,7 @@ Rotate `LCV_RELAY_ADMIN_TOKEN` when an operator leaves, an admin workstation is 
 4. Confirm `/pairing/start` accepts the new token.
 5. Record the rotation in the deployment incident log.
 
-Rotate `LCV_RELAY_TOKEN` when static bearer fallback was used outside local development or may have leaked. Prefer OAuth for real clients.
+If static bearer fallback was enabled outside local development, treat it as a deployment misconfiguration: disable `LCV_RELAY_ENABLE_STATIC_TOKEN`, remove `LCV_RELAY_TOKEN` from the public environment, restart the relay, and require OAuth clients to reconnect.
 
 ## Incident Runbook
 
@@ -99,7 +100,7 @@ If request metadata or OAuth client registrations may be exposed:
 
 1. Stop the public relay.
 2. Preserve `/data/relay-state.json` and backups for investigation.
-3. Rotate `LCV_RELAY_TOKEN` and `LCV_RELAY_ADMIN_TOKEN`.
+3. Rotate `LCV_RELAY_ADMIN_TOKEN` and remove any accidental static bearer fallback settings.
 4. Delete or expire OAuth client registrations if client trust is uncertain.
 5. Restart the relay and require clients to reconnect.
 6. Notify affected users that Relay metadata may have been exposed, while confirming that Vault content and Context Pack bodies are not persisted by the relay.
