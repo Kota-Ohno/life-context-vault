@@ -125,6 +125,10 @@ In the desktop product path, review actions enter through typed Vault Core comma
 - Secret-never-send candidates: cannot be approved as Facts.
 - Every review action writes an audit event and refreshes normalized Candidate/Fact/FTS projection before returning.
 
+### Fact Lifecycle
+
+Fact lifecycle actions are also typed Vault Core commands in the desktop path. Keeping a review-needed Fact makes it `active` again and removes Source-deletion review metadata. Hiding, deleting, or moving a Fact back to review removes it from active retrieval and cancels existing Context Packs that included it, so external AI clients cannot reuse stale Pack contents after the user changes memory visibility.
+
 ### Source Ingestion
 
 Source ingestion handles user-supplied background, conversations, notes, and files.

@@ -88,6 +88,13 @@ export type FactStatus =
   | "user_hidden"
   | "deleted";
 
+export type FactLifecycleAction =
+  | "keep_active"
+  | "mark_needs_review"
+  | "hide"
+  | "delete"
+  | "restore";
+
 export type RawSource = {
   id: string;
   kind: SourceKind;

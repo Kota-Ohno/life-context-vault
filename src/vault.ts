@@ -9,6 +9,7 @@ import {
   ContextPack,
   ContextPackItem,
   ContextPackRequest,
+  FactLifecycleAction,
   LifeContextDomain,
   MemoryCandidate,
   PassiveCaptureEvent,
@@ -540,6 +541,75 @@ export function updateSourceLifecycle(
       ...state.auditEvents
     ]
   };
+}
+
+export function updateFactLifecycle(
+  state: VaultState,
+  factId: string,
+  action: FactLifecycleAction
+): VaultState {
+  const fact = state.facts.find((item) => item.id === factId);
+  if (!fact) return state;
+
+  const now = nowIso();
+  const nextStatus = factStatusForAction(action);
+  const isRemovingFromActiveContext = ["mark_needs_review", "hide", "delete"].includes(action);
+  const affectedFactIds = new Set([factId]);
+  const nextFacts = state.facts.map((item) => {
+    if (item.id !== factId) return item;
+    const updated: ApprovedFact = {
+      ...item,
+      status: nextStatus,
+      updatedAt: now
+    };
+    if (nextStatus === "active") {
+      const { reviewReason: _reviewReason, reviewSourceId: _reviewSourceId, ...restored } = updated;
+      return restored;
+    }
+    if (nextStatus === "needs_review") {
+      return {
+        ...updated,
+        reviewReason: updated.reviewReason ?? "source_deleted"
+      };
+    }
+    return updated;
+  });
+  const nextPacks = isRemovingFromActiveContext
+    ? invalidatePacksForFacts(state.contextPacks, affectedFactIds)
+    : state.contextPacks;
+  const invalidatedRequestIds = new Set(
+    nextPacks
+      .filter((pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus)
+      .map((pack) => pack.requestId)
+      .filter((requestId): requestId is string => Boolean(requestId))
+  );
+  const nextRequests = isRemovingFromActiveContext
+    ? state.contextPackRequests.map((request) =>
+        invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+      )
+    : state.contextPackRequests;
+
+  return {
+    ...state,
+    facts: nextFacts,
+    contextPacks: nextPacks,
+    contextPackRequests: nextRequests,
+    auditEvents: [
+      audit("fact_updated", "fact", factId, fact.sensitivity, {
+        action,
+        status: nextStatus,
+        invalidatedPackCount: invalidatedRequestIds.size
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+function factStatusForAction(action: FactLifecycleAction): ApprovedFact["status"] {
+  if (action === "keep_active" || action === "restore") return "active";
+  if (action === "hide") return "user_hidden";
+  if (action === "delete") return "deleted";
+  return "needs_review";
 }
 
 function invalidatePacksForFacts(

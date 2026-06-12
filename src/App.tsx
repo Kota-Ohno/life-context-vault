@@ -8,6 +8,7 @@ import {
   CircleDot,
   Clock,
   Download,
+  EyeOff,
   FileText,
   Home,
   Inbox,
@@ -24,6 +25,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
   X
 } from "lucide-react";
@@ -51,6 +53,7 @@ import {
   stopAiAccessServices,
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
+  updateNativeFactLifecycle,
   updateNativePassiveCaptureSettings,
   updateNativeSourceLifecycle,
   uninstallLoginItem
@@ -85,6 +88,7 @@ import {
   searchFacts,
   sensitivityLabel,
   updateAccessPolicy,
+  updateFactLifecycle,
   updatePassiveCaptureSettings,
   updateCandidateStatus,
   updateSourceLifecycle
@@ -98,6 +102,7 @@ import {
   ConnectorSession,
   ContextPack,
   ContextPackRequest,
+  FactLifecycleAction,
   LifeContextDomain,
   MemoryCandidate,
   PassiveCaptureSettings,
@@ -495,6 +500,10 @@ export function App() {
     () => state.facts.filter((fact) => fact.status === "active"),
     [state.facts]
   );
+  const reviewFacts = useMemo(
+    () => state.facts.filter((fact) => fact.status === "needs_review"),
+    [state.facts]
+  );
   const currentPack = useMemo(
     () => state.contextPacks.find((pack) => pack.id === activePackId) ?? null,
     [activePackId, state.contextPacks]
@@ -647,6 +656,33 @@ export function App() {
     apply(
       updateSourceLifecycle(state, sourceId, action),
       sourceLifecycleNotice(action, linkedFactCount(state, sourceId), 0)
+    );
+  }
+
+  async function changeFactLifecycle(factId: string, action: FactLifecycleAction) {
+    const fact = state.facts.find((item) => item.id === factId);
+    if (!fact) {
+      setNotice("Factが見つかりませんでした。");
+      return;
+    }
+    if (nativePath) {
+      try {
+        const updated = await updateNativeFactLifecycle({ factId, action });
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(factLifecycleNotice(updated.action, updated.invalidatedPackCount));
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでFactを更新できませんでした。");
+        return;
+      }
+    }
+    apply(
+      updateFactLifecycle(state, factId, action),
+      factLifecycleNotice(action, activeFactPackCount(state, factId))
     );
   }
 
@@ -1136,7 +1172,7 @@ export function App() {
           <NavButton icon={<FileText size={18} />} label="Sources" active={view === "sources"} onClick={() => setView("sources")} />
           <NavButton icon={<Plug size={18} />} label="Connections" active={view === "connections"} onClick={() => setView("connections")} />
           <NavButton icon={<MessageSquare size={18} />} label="Requests" active={view === "requests"} onClick={() => setView("requests")} badge={state.contextPackRequests.filter((request) => request.status === "pending_user_confirmation").length} />
-          <NavButton icon={<Search size={18} />} label="Search" active={view === "search"} onClick={() => setView("search")} />
+          <NavButton icon={<Search size={18} />} label="Search" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
           <NavButton icon={<Activity size={18} />} label="Audit" active={view === "audit"} onClick={() => setView("audit")} />
           <NavButton icon={<Settings size={18} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
         </nav>
@@ -1289,6 +1325,9 @@ export function App() {
             sensitivityFilter={sensitivityFilter}
             setSensitivityFilter={setSensitivityFilter}
             results={searchResults}
+            reviewFacts={reviewFacts}
+            sources={state.sources}
+            changeFactLifecycle={changeFactLifecycle}
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
@@ -2623,6 +2662,9 @@ function SearchView({
   sensitivityFilter,
   setSensitivityFilter,
   results,
+  reviewFacts,
+  sources,
+  changeFactLifecycle,
   searchMode,
   searchError,
   nativePath
@@ -2634,6 +2676,9 @@ function SearchView({
   sensitivityFilter: SensitivityTier | "all";
   setSensitivityFilter: (value: SensitivityTier | "all") => void;
   results: ApprovedFact[];
+  reviewFacts: ApprovedFact[];
+  sources: VaultState["sources"];
+  changeFactLifecycle: (factId: string, action: FactLifecycleAction) => void;
   searchMode: SearchMode;
   searchError: string | null;
   nativePath: string | null;
@@ -2641,6 +2686,32 @@ function SearchView({
   const modeCopy = searchModeCopy(searchMode, Boolean(nativePath));
   return (
     <section className="panel wide">
+      {reviewFacts.length > 0 && (
+        <div className="memory-review-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <p className="eyebrow">Needs review</p>
+              <h3>AIに使う前に確認が必要なFact</h3>
+            </div>
+            <Badge>{reviewFacts.length}件</Badge>
+          </div>
+          <div className="trust-note">
+            <ShieldAlert size={16} />
+            <span>Sourceが停止または本文消去されたFactです。保持するとContext Pack候補へ戻り、非表示/削除すると既存Packも無効化されます。</span>
+          </div>
+          <div className="domain-list">
+            {reviewFacts.map((fact) => (
+              <FactRow
+                fact={fact}
+                key={fact.id}
+                sources={sources}
+                variant="review"
+                changeFactLifecycle={changeFactLifecycle}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       <div className="search-controls">
         <Input label="検索" value={query} onChange={setQuery} placeholder="背景、期限、契約、制約など" />
         <label>
@@ -2674,7 +2745,13 @@ function SearchView({
       </div>
       <div className="domain-list">
         {results.map((fact) => (
-          <FactRow fact={fact} key={fact.id} />
+          <FactRow
+            fact={fact}
+            key={fact.id}
+            sources={sources}
+            variant="active"
+            changeFactLifecycle={changeFactLifecycle}
+          />
         ))}
         {results.length === 0 && <p className="muted">一致するApprovedFactがありません。</p>}
       </div>
@@ -2805,14 +2882,59 @@ function AuditView({ events }: { events: VaultState["auditEvents"] }) {
   );
 }
 
-function FactRow({ fact }: { fact: ApprovedFact }) {
+function FactRow({
+  fact,
+  sources = [],
+  variant = "readonly",
+  changeFactLifecycle
+}: {
+  fact: ApprovedFact;
+  sources?: VaultState["sources"];
+  variant?: "readonly" | "active" | "review";
+  changeFactLifecycle?: (factId: string, action: FactLifecycleAction) => void;
+}) {
+  const sourceNames = fact.sourceIds
+    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Unknown source")
+    .slice(0, 2)
+    .join(", ");
   return (
     <div className="fact-row">
       <div>
         <strong>{fact.factText}</strong>
-        <span>{domainLabel(fact.domain)} / {fact.confidence}</span>
+        <span>{domainLabel(fact.domain)} / {fact.confidence} / {factStatusLabel(fact.status)}</span>
+        {sourceNames && <span>{sourceNames}</span>}
       </div>
-      <SensitivityBadge sensitivity={fact.sensitivity} />
+      <div className="fact-actions">
+        <SensitivityBadge sensitivity={fact.sensitivity} />
+        {variant === "review" && changeFactLifecycle && (
+          <>
+            <button className="primary-button" onClick={() => changeFactLifecycle(fact.id, "keep_active")} type="button">
+              <CheckCircle2 size={16} />
+              保持
+            </button>
+            <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
+              <EyeOff size={16} />
+              非表示
+            </button>
+            <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
+              <Trash2 size={16} />
+              削除
+            </button>
+          </>
+        )}
+        {variant === "active" && changeFactLifecycle && (
+          <>
+            <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
+              <EyeOff size={16} />
+              非表示
+            </button>
+            <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
+              <Trash2 size={16} />
+              削除
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -2926,6 +3048,37 @@ function sourceLifecycleNotice(
 
 function linkedFactCount(state: VaultState, sourceId: string): number {
   return state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).length;
+}
+
+function factStatusLabel(status: ApprovedFact["status"]): string {
+  const labels: Record<ApprovedFact["status"], string> = {
+    active: "使用中",
+    superseded: "置き換え済み",
+    expired: "期限切れ",
+    needs_review: "再確認待ち",
+    user_hidden: "非表示",
+    deleted: "削除済み"
+  };
+  return labels[status];
+}
+
+function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: number): string {
+  if (action === "keep_active" || action === "restore") {
+    return "Factを保持し、Context Pack候補へ戻しました。";
+  }
+  if (action === "hide") {
+    return `FactをAI候補から非表示にしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  }
+  if (action === "delete") {
+    return `Factを削除済みにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  }
+  return `Factを再確認待ちにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
+function activeFactPackCount(state: VaultState, factId: string): number {
+  return state.contextPacks.filter((pack) =>
+    pack.confirmationStatus !== "cancelled" && pack.items.some((item) => item.factId === factId)
+  ).length;
 }
 
 function searchModeCopy(

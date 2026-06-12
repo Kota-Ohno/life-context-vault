@@ -516,6 +516,27 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.fact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+  min-width: min(100%, 360px);
+}
+
+.memory-review-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e0e5dd;
+}
+
+.compact-heading {
+  margin-bottom: 0;
+}
+
 .source-row {
   align-items: stretch;
 }
@@ -1269,6 +1290,11 @@ button:focus-visible {
   }
 
   .source-actions {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .fact-actions {
     justify-content: flex-start;
     min-width: 0;
   }

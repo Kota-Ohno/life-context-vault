@@ -200,6 +200,18 @@ struct NativeSourceLifecycleResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeFactLifecycleResult {
+  payload: String,
+  updated_at: Option<String>,
+  fact_id: String,
+  action: String,
+  status: String,
+  invalidated_pack_count: usize,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -262,6 +274,15 @@ pub struct VaultCoreSourceLifecycleResult {
   pub action: String,
   pub affected_candidate_count: usize,
   pub affected_fact_count: usize,
+  pub invalidated_pack_count: usize,
+}
+
+pub struct VaultCoreFactLifecycleResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub fact_id: String,
+  pub action: String,
+  pub status: String,
   pub invalidated_pack_count: usize,
 }
 
@@ -1856,6 +1877,76 @@ pub fn update_source_lifecycle_at_path(
   })
 }
 
+pub fn update_fact_lifecycle_at_path(
+  path: &Path,
+  fact_id: &str,
+  action: &str,
+) -> Result<VaultCoreFactLifecycleResult, String> {
+  let fact_id = fact_id.trim();
+  if fact_id.is_empty() {
+    return Err("factId is required.".to_string());
+  }
+  let action = fact_lifecycle_action(action)?;
+  let status = fact_status_for_action(action);
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let sensitivity = {
+    let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
+      return Err("Vault has no facts array.".to_string());
+    };
+    let Some(fact) = facts
+      .iter_mut()
+      .find(|fact| str_field(fact, "id") == fact_id)
+    else {
+      return Err(format!("ApprovedFact was not found: {fact_id}"));
+    };
+    let sensitivity = str_field(fact, "sensitivity");
+    fact["status"] = Value::String(status.to_string());
+    fact["updatedAt"] = Value::String(now.clone());
+    if status == "active" {
+      if let Some(object) = fact.as_object_mut() {
+        object.remove("reviewReason");
+        object.remove("reviewSourceId");
+      }
+    } else if status == "needs_review" && str_field(fact, "reviewReason").is_empty() {
+      fact["reviewReason"] = Value::String("source_deleted".to_string());
+    }
+    sensitivity
+  };
+  let invalidated_pack_count = if matches!(action, "mark_needs_review" | "hide" | "delete") {
+    invalidate_context_packs_for_facts(&mut vault, &[fact_id.to_string()])
+  } else {
+    0
+  };
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "fact_updated",
+      "fact",
+      fact_id,
+      &sensitivity,
+      json!({
+        "action": action,
+        "status": status,
+        "invalidatedPackCount": invalidated_pack_count,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreFactLifecycleResult {
+    payload,
+    updated_at,
+    fact_id: fact_id.to_string(),
+    action: action.to_string(),
+    status: status.to_string(),
+    invalidated_pack_count,
+  })
+}
+
 pub fn approve_candidate_at_path(
   path: &Path,
   candidate_id: &str,
@@ -3118,6 +3209,26 @@ fn source_lifecycle_action(action: &str) -> Result<&'static str, String> {
   }
 }
 
+fn fact_lifecycle_action(action: &str) -> Result<&'static str, String> {
+  match action {
+    "keep_active" => Ok("keep_active"),
+    "mark_needs_review" => Ok("mark_needs_review"),
+    "hide" => Ok("hide"),
+    "delete" => Ok("delete"),
+    "restore" => Ok("restore"),
+    _ => Err(format!("unsupported fact lifecycle action: {action}")),
+  }
+}
+
+fn fact_status_for_action(action: &str) -> &'static str {
+  match action {
+    "keep_active" | "restore" => "active",
+    "hide" => "user_hidden",
+    "delete" => "deleted",
+    _ => "needs_review",
+  }
+}
+
 fn json_array_contains_string(value: &Value, needle: &str) -> bool {
   value
     .as_array()
@@ -4368,6 +4479,25 @@ fn update_native_source_lifecycle(
 }
 
 #[tauri::command]
+fn update_native_fact_lifecycle(
+  app: AppHandle,
+  fact_id: String,
+  action: String,
+) -> Result<NativeFactLifecycleResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_fact_lifecycle_at_path(&path, &fact_id, &action)?;
+  Ok(NativeFactLifecycleResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    fact_id: result.fact_id,
+    action: result.action,
+    status: result.status,
+    invalidated_pack_count: result.invalidated_pack_count,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -4490,6 +4620,7 @@ pub fn run() {
       update_native_passive_capture_settings,
       update_native_access_policy,
       update_native_source_lifecycle,
+      update_native_fact_lifecycle,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -5075,6 +5206,102 @@ mod tests {
       )
       .expect("normalized source body");
     assert!(normalized_body.is_empty());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_fact_lifecycle_hide_invalidates_pack_and_search() {
+    use_test_vault_key();
+    let path = temp_vault_path("fact-hide");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Insurance note",
+      "Need to renew insurance by 2027-02-01.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let fact_id = reviewed.fact_id.expect("fact id");
+    create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about insurance renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+
+    let result = update_fact_lifecycle_at_path(&path, &fact_id, "hide").expect("hide fact");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|fact| str_field(fact, "id") == fact_id))
+      .expect("fact");
+    let pack = saved
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+
+    assert_eq!(result.status, "user_hidden");
+    assert_eq!(result.invalidated_pack_count, 1);
+    assert_eq!(fact.get("status").and_then(Value::as_str), Some("user_hidden"));
+    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let search = search_facts_in_connection(&connection, "insurance", None, None, 20).expect("search facts");
+    assert!(search.is_empty());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_fact_lifecycle_keep_active_restores_review_fact() {
+    use_test_vault_key();
+    let path = temp_vault_path("fact-keep-active");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Lease note",
+      "Need to renew lease by 2027-01-15.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let fact_id = reviewed.fact_id.expect("fact id");
+    update_source_lifecycle_at_path(&path, &source_result.source_id, "soft_delete")
+      .expect("soft delete source");
+
+    let result = update_fact_lifecycle_at_path(&path, &fact_id, "keep_active")
+      .expect("keep fact active");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|fact| str_field(fact, "id") == fact_id))
+      .expect("fact");
+
+    assert_eq!(result.status, "active");
+    assert_eq!(fact.get("status").and_then(Value::as_str), Some("active"));
+    assert!(fact.get("reviewReason").is_none());
+    assert!(fact.get("reviewSourceId").is_none());
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    assert_eq!(search.len(), 1);
     remove_temp_vault(&path);
   }
 

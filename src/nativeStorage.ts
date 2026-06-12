@@ -1,6 +1,7 @@
 import {
   ApprovedFact,
   CandidateStatus,
+  FactLifecycleAction,
   LifeContextDomain,
   SensitivityTier,
   SourceLifecycleAction,
@@ -185,6 +186,16 @@ interface NativeSourceLifecyclePayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeFactLifecyclePayload {
+  payload: string;
+  updatedAt: string | null;
+  factId: string;
+  action: FactLifecycleAction;
+  status: ApprovedFact["status"];
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -238,6 +249,16 @@ export interface NativeSourceLifecycleResult {
   action: SourceLifecycleAction;
   affectedCandidateCount: number;
   affectedFactCount: number;
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeFactLifecycleResult {
+  state: VaultState;
+  updatedAt: string | null;
+  factId: string;
+  action: FactLifecycleAction;
+  status: ApprovedFact["status"];
   invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
@@ -503,6 +524,27 @@ export async function updateNativeSourceLifecycle(input: {
     action: result.action,
     affectedCandidateCount: result.affectedCandidateCount,
     affectedFactCount: result.affectedFactCount,
+    invalidatedPackCount: result.invalidatedPackCount,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeFactLifecycle(input: {
+  factId: string;
+  action: FactLifecycleAction;
+}): Promise<NativeFactLifecycleResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeFactLifecyclePayload>("update_native_fact_lifecycle", {
+    factId: input.factId,
+    action: input.action
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    factId: result.factId,
+    action: result.action,
+    status: result.status,
     invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };

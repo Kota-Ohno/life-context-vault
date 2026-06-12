@@ -615,6 +615,8 @@ Retrieval defaults:
 - Include: `active`
 - Exclude unless explicitly requested: `needs_review`, `expired`, `superseded`, `user_hidden`
 - Always exclude: `deleted`
+- Hiding, deleting, or moving an active Fact to `needs_review` must invalidate existing ContextPacks that include that Fact.
+- Keeping a `needs_review` Fact returns it to `active`, but does not resurrect previously invalidated ContextPacks.
 
 ## Conflict Model
 
