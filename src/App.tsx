@@ -2292,6 +2292,28 @@ function SourcesView({
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
   editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
 }) {
+  const [isDragActive, setIsDragActive] = useState(false);
+  function handleDropZoneDrag(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    setIsDragActive(true);
+  }
+
+  function handleDropZoneLeave(event: React.DragEvent<HTMLLabelElement>) {
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) return;
+    setIsDragActive(false);
+  }
+
+  function handleDropZoneDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void handleFileUpload(file);
+  }
+
   return (
     <section className="view-grid">
       <div className="panel">
@@ -2322,10 +2344,20 @@ function SourcesView({
             <h3>文書を追加</h3>
           </div>
         </div>
-        <label className="drop-zone">
+        <label
+          aria-label={`文書を追加: ${sourceLabel}`}
+          className={isDragActive ? "drop-zone drag-active" : "drop-zone"}
+          onDragEnter={handleDropZoneDrag}
+          onDragLeave={handleDropZoneLeave}
+          onDragOver={handleDropZoneDrag}
+          onDrop={handleDropZoneDrop}
+        >
           <Upload size={24} />
+          <strong>{isDragActive ? "ここにドロップ" : "ファイルを選択 / ドロップ"}</strong>
           <span>{sourceLabel}</span>
+          <small>1ファイルずつ追加します</small>
           <input
+            aria-label="文書ファイルを選択"
             accept={sourceAccept}
             type="file"
             onChange={(event) => {

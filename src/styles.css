@@ -1414,7 +1414,35 @@ button:focus-visible {
   border-radius: 8px;
   background: #fbfcfa;
   color: #3e4c43;
+  cursor: pointer;
   text-align: center;
+}
+
+.drop-zone:hover,
+.drop-zone:focus-within {
+  border-color: #5f7f65;
+  background: #f3f8ee;
+}
+
+.drop-zone.drag-active {
+  border-style: solid;
+  border-color: #2d6b42;
+  background: #eef8ef;
+  color: #233d2b;
+}
+
+.drop-zone strong,
+.drop-zone span,
+.drop-zone small {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.drop-zone span,
+.drop-zone small {
+  color: #5d6a61;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .drop-zone input {

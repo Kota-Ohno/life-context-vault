@@ -709,13 +709,19 @@ Last updated: 2026-06-13
 - Technical design: the browser fallback records delivery receipts through `recordContextPackDelivery`; native Relay handoff records the same receipt in Vault Core and returns the updated encrypted Vault snapshot to Control Center.
 - Verification: `npm run product:check` passed. Added tests prove delivery receipts omit Pack body text and Raw Source body text while preserving AI name, delivery channel, status, and item count. Browser checks at desktop `1280x720` and mobile `390x844` confirmed the Audit receipts render without horizontal overflow; screenshot capture was unavailable because the Browser screenshot API timed out.
 
+### Source Upload Drag And Drop Slice
+
+- Product fit: Sources now supports the expected "select or drop a file" path, reducing friction in the first 10-minute value flow for non-developer users who start from documents.
+- UX/accessibility: the existing file input remains available with an explicit accessible label, while the drop zone exposes a drag-active state, focus state, accepted-format copy, and a one-file-at-a-time expectation without hiding the native picker.
+- Verification: `npm run product:check` passed. Browser checks at desktop `1280x720` and mobile `390x844` confirmed the Sources upload zone renders with no horizontal overflow, keeps the file input within the panel, and exposes the expected ARIA labels.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
 
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
-- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, and Audit shows AI delivery receipts without storing Pack bodies.
+- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, and Sources accepts file selection or drag-and-drop without losing the native picker.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish, public Origin allowlists, detailed OAuth challenge headers, and `GET /mcp` semantics remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: full continuous browser Capture, bundled/non-developer OCR setup, and stronger upload drag/drop accessibility remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: full continuous browser Capture and bundled/non-developer OCR setup remain product-hardening work after the core AI access boundary.
