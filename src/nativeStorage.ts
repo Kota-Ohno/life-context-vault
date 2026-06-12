@@ -30,3 +30,34 @@ export async function getNativeVaultPath(): Promise<string | null> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("vault_storage_path");
 }
+
+export interface AiAccessServiceStatus {
+  managedByApp: boolean;
+  relayManagedRunning: boolean;
+  agentManagedRunning: boolean;
+  relayReachable: boolean;
+  agentConnected: boolean;
+  relayUrl: string;
+  mcpServerUrl: string;
+  relayStateStatusUrl: string;
+  pairingCode: string | null;
+  lastError: string | null;
+}
+
+export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<AiAccessServiceStatus>("ai_access_service_status");
+}
+
+export async function startAiAccessServices(): Promise<AiAccessServiceStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<AiAccessServiceStatus>("start_ai_access_services");
+}
+
+export async function stopAiAccessServices(): Promise<AiAccessServiceStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<AiAccessServiceStatus>("stop_ai_access_services");
+}

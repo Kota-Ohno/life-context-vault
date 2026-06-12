@@ -3,3 +3,4 @@ dist/
 .DS_Store
 npm-debug.log*
 browser-extension/native-host.dev.json
+src-tauri/binaries/

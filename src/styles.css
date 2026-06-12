@@ -318,6 +318,13 @@ button:focus-visible {
   background: #fee8df;
 }
 
+.primary-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .large-number {
   margin: 4px 0;
   font-size: 52px;
@@ -467,6 +474,49 @@ button:focus-visible {
 
 .setup-grid.remote-relay-setup {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.service-console {
+  display: grid;
+  gap: 14px;
+}
+
+.service-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.service-status-grid div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.service-status-grid span {
+  color: #667267;
+  font-size: 12px;
+}
+
+.service-status-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.warning-text {
+  margin: 0;
+  color: #8b2f1d;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .setup-step {
@@ -778,6 +828,7 @@ button:focus-visible {
   .home-grid,
   .ask-layout,
   .policy-grid,
+  .service-status-grid,
   .setup-grid,
   .setup-grid.remote-relay-setup,
   .search-controls {

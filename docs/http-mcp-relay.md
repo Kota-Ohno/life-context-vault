@@ -12,9 +12,27 @@ The relay is a local-first stepping stone toward hosted Remote MCP. It accepts M
 ## Build
 
 ```bash
+npm run sidecars:prepare
 npm run relay:build
 npm run agent:build
 ```
+
+`npm run tauri:bundle` prepares and embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` into the macOS app bundle.
+
+## App-Managed Service
+
+In the Tauri desktop app, open **Connections** and use **Start AI Access**. The app will:
+
+- Start the bundled `lcv-relay` on `127.0.0.1:8765` if no local relay is reachable.
+- Request a pairing code from `/pairing/start`.
+- Start the bundled `lcv-agent` with the returned WebSocket URL.
+- Show Relay and Agent status in the Control Center.
+
+If another relay is already running on the same port, the app treats it as external: it shows status but will not automatically attach the local Agent to that process. Use the manual pairing commands for that relay, or stop it before starting the app-managed service.
+
+**Stop managed** only stops processes started by the app and does not kill external relay processes.
+
+Closing the app window also stops app-managed Relay and Agent processes.
 
 ## Run Locally
 
@@ -168,6 +186,6 @@ Remaining production work:
 
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
-- Installer-managed Agent launch and reconnect.
+- OS login item / background service integration for automatic Agent launch after reboot.
 - Hosted relay storage operations, rotation, and tenant isolation for the same metadata-only state model.
 - Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.

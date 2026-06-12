@@ -72,6 +72,14 @@ Last updated: 2026-06-12
   - recent relay request audit metadata is persisted without MCP bodies or Context Pack bodies
   - `GET /relay/state` exposes metadata-only relay status for local Control Center and smoke checks
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
+- Added app-managed AI Access Service in the Tauri Control Center:
+  - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
+  - app requests a pairing code and connects Agent automatically
+  - status shows Relay reachability, Agent connection, managed process state, and MCP URL
+  - external relays are status-only; the app does not automatically attach the local Agent to a relay it did not start
+  - `Stop managed` only stops processes started by the app
+  - closing the app window also stops app-managed Relay and Agent processes
+  - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -84,7 +92,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Installer-managed local Agent launch, reconnect, and background status.
+- OS login item / background service integration for automatic Agent launch after reboot.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
@@ -100,13 +108,16 @@ Last updated: 2026-06-12
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
 - `npm run agent:build`
+- `npm run sidecars:prepare`
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
+- Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
+- Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
 - Browser UI checks:
   - desktop `1440x980`: Connections MCP setup card displays without horizontal overflow
   - mobile `390x844`: Connections MCP setup card and code blocks fit without page-level horizontal overflow
@@ -140,6 +151,15 @@ Last updated: 2026-06-12
 - Technical design: relay state writes use a temp file plus replace step, and failed registration persistence rolls back the in-memory client so a 500 response does not leave a process-only client behind.
 - UX: Connections now distinguishes what the Relay keeps from what it refuses to keep, including a visible `/relay/state` status URL for local inspection.
 - Verification: desktop `1440x980` and mobile `390x844` Browser checks found no page-level horizontal overflow in the updated Remote Relay setup section.
+
+### App-Managed AI Access Service Slice
+
+- Product fit: everyday AI access no longer depends on copying three terminal commands; the desktop Control Center can start Relay, create pairing, and connect Agent.
+- Security/privacy: app-managed startup preserves the same Relay boundary. The app does not add raw Vault reads or new externally exposed tools.
+- Technical design: helper binaries are prepared as Tauri external binaries and resolved from the app bundle, while manual target/release binaries still work in development.
+- UX: Connections now leads with service status and direct controls, keeping manual commands as fallback.
+- Lifecycle: app-managed Relay and Agent are stopped by **Stop managed** and on app window close; external relays are observed but not killed or auto-attached.
+- Verification: bundled Relay and Agent launched from `Life Context Vault.app/Contents/MacOS` and served MCP `tools/list` through the Agent WebSocket path.
 
 ## Independent Review Passes
 

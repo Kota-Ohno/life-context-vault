@@ -6,6 +6,7 @@ use std::{
   process::{Command, Stdio},
 };
 
+#[allow(dead_code)]
 pub fn forward_to_stdio_mcp(
   body: &str,
   mcp_command: &PathBuf,
@@ -67,11 +68,58 @@ pub fn forward_to_stdio_mcp(
 pub fn resolve_sibling_binary(name: &str) -> PathBuf {
   if let Ok(current) = env::current_exe() {
     if let Some(parent) = current.parent() {
-      let sibling = parent.join(format!("{name}{}", env::consts::EXE_SUFFIX));
-      if sibling.exists() {
-        return sibling;
+      for candidate in binary_candidates(parent, name) {
+        if candidate.exists() {
+          return candidate;
+        }
+      }
+      if let Some(contents_dir) = parent.parent() {
+        let resources = contents_dir.join("Resources");
+        for candidate in binary_candidates(&resources, name) {
+          if candidate.exists() {
+            return candidate;
+          }
+        }
       }
     }
   }
   PathBuf::from(format!("{name}{}", env::consts::EXE_SUFFIX))
+}
+
+fn binary_candidates(parent: &std::path::Path, name: &str) -> Vec<PathBuf> {
+  let mut candidates = vec![parent.join(format!("{name}{}", env::consts::EXE_SUFFIX))];
+  if let Some(triple) = host_triple() {
+    candidates.push(parent.join(format!("{name}-{triple}{}", env::consts::EXE_SUFFIX)));
+  }
+  candidates
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn host_triple() -> Option<&'static str> {
+  Some("aarch64-apple-darwin")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn host_triple() -> Option<&'static str> {
+  Some("x86_64-apple-darwin")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn host_triple() -> Option<&'static str> {
+  Some("x86_64-unknown-linux-gnu")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn host_triple() -> Option<&'static str> {
+  Some("x86_64-pc-windows-msvc")
+}
+
+#[cfg(not(any(
+  all(target_os = "macos", target_arch = "aarch64"),
+  all(target_os = "macos", target_arch = "x86_64"),
+  all(target_os = "linux", target_arch = "x86_64"),
+  all(target_os = "windows", target_arch = "x86_64")
+)))]
+fn host_triple() -> Option<&'static str> {
+  None
 }

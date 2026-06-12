@@ -1,11 +1,61 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use serde_json::Value;
-use std::{fs, path::PathBuf};
-use tauri::{ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use sha2::{Digest, Sha256};
+use std::{
+  fs,
+  io::{Read, Write},
+  net::TcpStream,
+  path::PathBuf,
+  process::{Child, Command, Stdio},
+  sync::Mutex,
+  thread,
+  time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tauri::{ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+mod mcp_stdio;
 mod vault_crypto;
 
 const VAULT_STATE_KEY: &str = "vault_state";
+const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
+const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
+
+struct AiAccessSupervisor {
+  relay: Option<Child>,
+  agent: Option<Child>,
+  pairing_code: Option<String>,
+  relay_token: String,
+  last_error: Option<String>,
+}
+
+impl Default for AiAccessSupervisor {
+  fn default() -> Self {
+    Self {
+      relay: None,
+      agent: None,
+      pairing_code: None,
+      relay_token: random_local_token(),
+      last_error: None,
+    }
+  }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiAccessServiceStatus {
+  managed_by_app: bool,
+  relay_managed_running: bool,
+  agent_managed_running: bool,
+  relay_reachable: bool,
+  agent_connected: bool,
+  relay_url: String,
+  mcp_server_url: String,
+  relay_state_status_url: String,
+  pairing_code: Option<String>,
+  last_error: Option<String>,
+}
 
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
@@ -15,6 +65,10 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   fs::create_dir_all(&dir)
     .map_err(|error| format!("failed to create app data dir: {error}"))?;
   Ok(dir.join("vault.sqlite3"))
+}
+
+fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
+  vault_db_path(app).map(|path| path.with_file_name("relay-state.json"))
 }
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
@@ -481,6 +535,177 @@ fn json_field(value: &Value, key: &str) -> String {
     .unwrap_or_else(|| "null".to_string())
 }
 
+fn random_local_token() -> String {
+  let mut bytes = [0u8; 32];
+  #[cfg(unix)]
+  {
+    if fs::File::open("/dev/urandom")
+      .and_then(|mut file| file.read_exact(&mut bytes))
+      .is_ok()
+    {
+      return format!("lcv_{}", URL_SAFE_NO_PAD.encode(bytes));
+    }
+  }
+
+  let mut hasher = Sha256::new();
+  hasher.update(
+    SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|duration| duration.as_nanos().to_le_bytes())
+      .unwrap_or_default(),
+  );
+  hasher.update(std::process::id().to_le_bytes());
+  format!("lcv_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
+fn refresh_child(child: &mut Option<Child>) -> bool {
+  let Some(process) = child.as_mut() else {
+    return false;
+  };
+  match process.try_wait() {
+    Ok(None) => true,
+    Ok(Some(_)) | Err(_) => {
+      *child = None;
+      false
+    }
+  }
+}
+
+fn stop_child(child: &mut Option<Child>) {
+  if let Some(mut process) = child.take() {
+    let _ = process.kill();
+    let _ = process.wait();
+  }
+}
+
+fn local_relay_json(method: &str, path: &str, body: Option<&str>) -> Result<Value, String> {
+  let body = body.unwrap_or("");
+  let mut stream = TcpStream::connect(LOCAL_RELAY_BIND)
+    .map_err(|error| format!("failed to connect local relay: {error}"))?;
+  stream
+    .set_read_timeout(Some(Duration::from_secs(2)))
+    .map_err(|error| format!("failed to set relay read timeout: {error}"))?;
+  stream
+    .set_write_timeout(Some(Duration::from_secs(2)))
+    .map_err(|error| format!("failed to set relay write timeout: {error}"))?;
+
+  let request = format!(
+    "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n{body}",
+    host = LOCAL_RELAY_BIND,
+    length = body.as_bytes().len()
+  );
+  stream
+    .write_all(request.as_bytes())
+    .map_err(|error| format!("failed to write relay request: {error}"))?;
+
+  let mut response = String::new();
+  stream
+    .read_to_string(&mut response)
+    .map_err(|error| format!("failed to read relay response: {error}"))?;
+  parse_http_json_response(&response)
+}
+
+fn parse_http_json_response(response: &str) -> Result<Value, String> {
+  let (head, body) = response
+    .split_once("\r\n\r\n")
+    .ok_or_else(|| "relay returned malformed HTTP response".to_string())?;
+  let status = head
+    .lines()
+    .next()
+    .and_then(|line| line.split_whitespace().nth(1))
+    .and_then(|code| code.parse::<u16>().ok())
+    .ok_or_else(|| "relay response did not include a valid status".to_string())?;
+  if !(200..300).contains(&status) {
+    return Err(format!("relay returned HTTP {status}: {body}"));
+  }
+  if body.trim().is_empty() {
+    return Ok(Value::Null);
+  }
+  serde_json::from_str(body).map_err(|error| format!("relay returned invalid JSON: {error}"))
+}
+
+fn relay_reachable() -> bool {
+  local_relay_json("GET", "/health", None).is_ok()
+}
+
+fn agent_connected() -> bool {
+  local_relay_json("GET", "/agent/status", None)
+    .ok()
+    .and_then(|value| value.get("connected").and_then(Value::as_bool))
+    .unwrap_or(false)
+}
+
+fn wait_for_condition(mut predicate: impl FnMut() -> bool) -> bool {
+  for _ in 0..30 {
+    if predicate() {
+      return true;
+    }
+    thread::sleep(Duration::from_millis(100));
+  }
+  false
+}
+
+fn should_block_external_relay_start(
+  relay_reachable: bool,
+  relay_managed_running: bool,
+  agent_connected: bool,
+) -> bool {
+  relay_reachable && !relay_managed_running && !agent_connected
+}
+
+fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStatus {
+  let relay_managed_running = refresh_child(&mut supervisor.relay);
+  let agent_managed_running = refresh_child(&mut supervisor.agent);
+  AiAccessServiceStatus {
+    managed_by_app: true,
+    relay_managed_running,
+    agent_managed_running,
+    relay_reachable: relay_reachable(),
+    agent_connected: agent_connected(),
+    relay_url: LOCAL_RELAY_BASE_URL.to_string(),
+    mcp_server_url: format!("{LOCAL_RELAY_BASE_URL}/mcp"),
+    relay_state_status_url: format!("{LOCAL_RELAY_BASE_URL}/relay/state"),
+    pairing_code: supervisor.pairing_code.clone(),
+    last_error: supervisor.last_error.clone(),
+  }
+}
+
+fn spawn_relay(app: &AppHandle, relay_token: &str) -> Result<Child, String> {
+  let vault_path = vault_db_path(app)?;
+  let relay_state_path = relay_state_path(app)?;
+  let relay_command = mcp_stdio::resolve_sibling_binary("lcv-relay");
+  let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
+  Command::new(&relay_command)
+    .env("LCV_RELAY_TOKEN", relay_token)
+    .env("LCV_RELAY_BIND", LOCAL_RELAY_BIND)
+    .env("LCV_RELAY_BASE_URL", LOCAL_RELAY_BASE_URL)
+    .env("LCV_RELAY_STATE_PATH", relay_state_path)
+    .env("LCV_RELAY_ALLOW_DIRECT_SIDECAR", "0")
+    .env("LCV_MCP_COMMAND", mcp_command)
+    .env("LCV_VAULT_DB_PATH", vault_path)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|error| format!("failed to start local relay at {}: {error}", relay_command.display()))
+}
+
+fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<Child, String> {
+  let vault_path = vault_db_path(app)?;
+  let agent_command = mcp_stdio::resolve_sibling_binary("lcv-agent");
+  let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
+  Command::new(&agent_command)
+    .env("LCV_AGENT_RELAY_WS", agent_websocket_url)
+    .env("LCV_AGENT_RECONNECT", "1")
+    .env("LCV_MCP_COMMAND", mcp_command)
+    .env("LCV_VAULT_DB_PATH", vault_path)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|error| format!("failed to start local agent at {}: {error}", agent_command.display()))
+}
+
 #[tauri::command]
 fn load_vault_state(app: AppHandle) -> Result<Option<String>, String> {
   let connection = open_vault_db(&app)?;
@@ -516,13 +741,122 @@ fn vault_storage_path(app: AppHandle) -> Result<String, String> {
   vault_db_path(&app).map(|path| path.display().to_string())
 }
 
+#[tauri::command]
+fn ai_access_service_status(
+  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
+) -> Result<AiAccessServiceStatus, String> {
+  let mut supervisor = supervisor
+    .lock()
+    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
+  Ok(supervisor_status(&mut supervisor))
+}
+
+#[tauri::command]
+fn start_ai_access_services(
+  app: AppHandle,
+  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
+) -> Result<AiAccessServiceStatus, String> {
+  let mut supervisor = supervisor
+    .lock()
+    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
+
+  let relay_managed_running = refresh_child(&mut supervisor.relay);
+  let relay_is_reachable = relay_reachable();
+  if !relay_is_reachable {
+    if !relay_managed_running {
+      supervisor.relay = Some(spawn_relay(&app, &supervisor.relay_token).map_err(|error| {
+        supervisor.last_error = Some(error.clone());
+        error
+      })?);
+    }
+    if !wait_for_condition(relay_reachable) {
+      let error = "local relay did not become reachable".to_string();
+      supervisor.last_error = Some(error.clone());
+      return Err(error);
+    }
+  } else if should_block_external_relay_start(
+    relay_is_reachable,
+    relay_managed_running,
+    agent_connected(),
+  ) {
+    let error = format!(
+      "another relay is already running at {LOCAL_RELAY_BASE_URL}; use manual pairing for that relay or stop it before starting the app-managed AI Access Service"
+    );
+    supervisor.last_error = Some(error.clone());
+    return Err(error);
+  }
+
+  if !agent_connected() {
+    if refresh_child(&mut supervisor.agent) {
+      stop_child(&mut supervisor.agent);
+    }
+    let pairing = local_relay_json("POST", "/pairing/start", None).map_err(|error| {
+      supervisor.last_error = Some(error.clone());
+      error
+    })?;
+    let pairing_code = pairing
+      .get("pairingCode")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "relay pairing response did not include pairingCode".to_string())?
+      .to_string();
+    let agent_websocket_url = pairing
+      .get("agentWebSocketUrl")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "relay pairing response did not include agentWebSocketUrl".to_string())?
+      .to_string();
+    supervisor.pairing_code = Some(pairing_code);
+    supervisor.agent = Some(spawn_agent(&app, &agent_websocket_url).map_err(|error| {
+      supervisor.last_error = Some(error.clone());
+      error
+    })?);
+    if !wait_for_condition(agent_connected) {
+      let error = "local agent did not connect to relay".to_string();
+      supervisor.last_error = Some(error.clone());
+      return Err(error);
+    }
+  }
+
+  supervisor.last_error = None;
+  Ok(supervisor_status(&mut supervisor))
+}
+
+#[tauri::command]
+fn stop_ai_access_services(
+  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
+) -> Result<AiAccessServiceStatus, String> {
+  let mut supervisor = supervisor
+    .lock()
+    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
+  stop_child(&mut supervisor.agent);
+  stop_child(&mut supervisor.relay);
+  supervisor.pairing_code = None;
+  supervisor.last_error = None;
+  Ok(supervisor_status(&mut supervisor))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .manage(Mutex::new(AiAccessSupervisor::default()))
+    .on_window_event(|window, event| {
+      if matches!(
+        event,
+        WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
+      ) {
+        let supervisor = window.state::<Mutex<AiAccessSupervisor>>();
+        if let Ok(mut supervisor) = supervisor.lock() {
+          stop_child(&mut supervisor.agent);
+          stop_child(&mut supervisor.relay);
+        };
+      }
+    })
     .invoke_handler(tauri::generate_handler![
       load_vault_state,
       save_vault_state,
-      vault_storage_path
+      vault_storage_path,
+      ai_access_service_status,
+      start_ai_access_services,
+      stop_ai_access_services
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -643,5 +977,33 @@ mod tests {
     assert_eq!(candidate_count, 1);
     assert_eq!(fact_count, 1);
     assert_eq!(fts_count, 1);
+  }
+
+  #[test]
+  fn relay_http_parser_accepts_json_success() {
+    let parsed = parse_http_json_response(
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}",
+    )
+    .expect("relay response");
+
+    assert_eq!(parsed.get("status").and_then(Value::as_str), Some("ok"));
+  }
+
+  #[test]
+  fn relay_http_parser_rejects_error_status() {
+    let error = parse_http_json_response(
+      "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{\"error\":\"boom\"}",
+    )
+    .expect_err("error status");
+
+    assert!(error.contains("HTTP 500"));
+  }
+
+  #[test]
+  fn external_relay_without_agent_is_not_auto_attached() {
+    assert!(should_block_external_relay_start(true, false, false));
+    assert!(!should_block_external_relay_start(true, true, false));
+    assert!(!should_block_external_relay_start(true, false, true));
+    assert!(!should_block_external_relay_start(false, false, false));
   }
 }

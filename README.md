@@ -36,6 +36,7 @@ npm run tauri:bundle
 ```bash
 npm test
 npm run build
+npm run sidecars:prepare
 npm run mcp:build
 npm run relay:build
 npm run agent:build
@@ -60,6 +61,7 @@ npm run tauri:bundle
 - Tauri desktop wrapper with SQLCipher-backed encrypted native persistence
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
 - Local MCP stdio sidecar for same-device AI clients
+- App-managed AI Access Service that starts/stops the bundled HTTP MCP relay and local Vault Agent
 - OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge, with metadata-only relay state persistence for Remote-MCP-style testing
 - Chrome browser capture extension and Native Messaging host
 
@@ -90,6 +92,8 @@ npm run agent:build
 ```
 
 Then open **Connections** and copy the relay, pairing, and local Agent commands.
+
+In the Tauri desktop app, open **Connections** and use **Start AI Access** to launch the bundled Relay and Agent. The manual relay, pairing, and Agent commands remain as a fallback.
 
 The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, persists OAuth client registrations plus request metadata only, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
 

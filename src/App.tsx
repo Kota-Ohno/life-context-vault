@@ -25,7 +25,15 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { getNativeVaultPath, loadNativeVault, saveNativeVault } from "./nativeStorage";
+import {
+  AiAccessServiceStatus,
+  getAiAccessServiceStatus,
+  getNativeVaultPath,
+  loadNativeVault,
+  saveNativeVault,
+  startAiAccessServices,
+  stopAiAccessServices
+} from "./nativeStorage";
 import {
   addSourceWithCandidates,
   addPassiveCaptureEvent,
@@ -137,6 +145,8 @@ export function App() {
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupText, setBackupText] = useState("");
   const [notice, setNotice] = useState("");
+  const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
+  const [aiServiceBusy, setAiServiceBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +177,34 @@ export function App() {
   useEffect(() => {
     if (!storageReady) return;
     setState((current) => purgeExpiredPassiveCaptures(current));
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    let cancelled = false;
+    async function refreshStatus() {
+      try {
+        const status = await getAiAccessServiceStatus();
+        if (!cancelled) setAiServiceStatus(status);
+      } catch (error) {
+        if (!cancelled) {
+          setAiServiceStatus((current) =>
+            current
+              ? {
+                  ...current,
+                  lastError: error instanceof Error ? error.message : "AI Access Service status failed"
+                }
+              : current
+          );
+        }
+      }
+    }
+    void refreshStatus();
+    const interval = window.setInterval(refreshStatus, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, [storageReady]);
 
   const activeCandidates = useMemo(
@@ -353,6 +391,44 @@ export function App() {
     }
   }
 
+  async function refreshAiAccess() {
+    try {
+      const status = await getAiAccessServiceStatus();
+      setAiServiceStatus(status);
+      setNotice(status ? "AI Access Serviceの状態を更新しました。" : "Desktop appでのみAI Access Serviceを管理できます。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "AI Access Serviceの状態確認に失敗しました。");
+    }
+  }
+
+  async function startAiAccess() {
+    setAiServiceBusy(true);
+    try {
+      const status = await startAiAccessServices();
+      setAiServiceStatus(status);
+      setNotice(status?.agentConnected ? "AI Access Serviceを起動しました。" : "AI Access Serviceの起動を開始しました。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "AI Access Serviceの起動に失敗しました。");
+      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+    } finally {
+      setAiServiceBusy(false);
+    }
+  }
+
+  async function stopAiAccess() {
+    setAiServiceBusy(true);
+    try {
+      const status = await stopAiAccessServices();
+      setAiServiceStatus(status);
+      setNotice("AI Access Serviceを停止しました。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "AI Access Serviceの停止に失敗しました。");
+      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+    } finally {
+      setAiServiceBusy(false);
+    }
+  }
+
   function clearVault() {
     apply(createEmptyVault(), "Vaultをクリアしました。");
     setActivePackId(null);
@@ -455,6 +531,11 @@ export function App() {
             captureSettings={state.passiveCaptureSettings}
             updateCapture={updateCapture}
             nativePath={nativePath}
+            aiServiceStatus={aiServiceStatus}
+            aiServiceBusy={aiServiceBusy}
+            startAiAccess={startAiAccess}
+            stopAiAccess={stopAiAccess}
+            refreshAiAccess={refreshAiAccess}
             copyText={copyText}
             captureClient={captureClient}
             setCaptureClient={setCaptureClient}
@@ -859,6 +940,11 @@ function ConnectionsView({
   captureSettings,
   updateCapture,
   nativePath,
+  aiServiceStatus,
+  aiServiceBusy,
+  startAiAccess,
+  stopAiAccess,
+  refreshAiAccess,
   copyText,
   captureClient,
   setCaptureClient,
@@ -873,6 +959,11 @@ function ConnectionsView({
   captureSettings: PassiveCaptureSettings;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   nativePath: string | null;
+  aiServiceStatus: AiAccessServiceStatus | null;
+  aiServiceBusy: boolean;
+  startAiAccess: () => void;
+  stopAiAccess: () => void;
+  refreshAiAccess: () => void;
   copyText: (value: string, message: string) => void;
   captureClient: ConnectorKind;
   setCaptureClient: (value: ConnectorKind) => void;
@@ -921,6 +1012,55 @@ function ConnectionsView({
               </article>
             );
           })}
+        </div>
+      </div>
+
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI Access Service</p>
+            <h3>普段使うAIへVaultを開く</h3>
+          </div>
+          <Activity size={18} />
+        </div>
+        <div className="service-console">
+          <div className="service-status-grid">
+            <Metric label="Relay" value={aiServiceStatus?.relayReachable ? "reachable" : "offline"} />
+            <Metric label="Agent" value={aiServiceStatus?.agentConnected ? "connected" : "offline"} />
+            <Metric label="Managed" value={serviceManagedCopy(aiServiceStatus)} />
+            <Metric label="MCP URL" value={aiServiceStatus?.mcpServerUrl ?? localRelayUrl} />
+          </div>
+          <div className="service-actions">
+            <button
+              className="primary-button"
+              disabled={!nativePath || aiServiceBusy}
+              onClick={startAiAccess}
+              type="button"
+            >
+              <PlayCircle size={16} />
+              Start AI Access
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!nativePath || aiServiceBusy}
+              onClick={refreshAiAccess}
+              type="button"
+            >
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+            <button
+              className="danger-button"
+              disabled={!nativePath || aiServiceBusy || (!aiServiceStatus?.relayManagedRunning && !aiServiceStatus?.agentManagedRunning)}
+              onClick={stopAiAccess}
+              type="button"
+            >
+              <PauseCircle size={16} />
+              Stop managed
+            </button>
+          </div>
+          {aiServiceStatus?.lastError && <p className="warning-text">{aiServiceStatus.lastError}</p>}
+          {!nativePath && <p className="muted">Desktop appで起動すると、ここからRelayとAgentを管理できます。</p>}
         </div>
       </div>
 
@@ -1538,6 +1678,15 @@ function connectionCopy(connector: ConnectorSession): string {
     return "AIチャット画面の会話断片をローカルに取り込み、未承認候補だけをInboxへ出します。";
   }
   return "MCPが使えないAI向けに、確認済みContext Packを手動で渡します。";
+}
+
+function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
+  if (!status) return "desktop only";
+  if (status.relayManagedRunning && status.agentManagedRunning) return "relay + agent";
+  if (status.relayManagedRunning) return "relay";
+  if (status.agentManagedRunning) return "agent";
+  if (status.relayReachable || status.agentConnected) return "external";
+  return "stopped";
 }
 
 function makeClaudeDesktopConfig(nativePath: string | null): string {
