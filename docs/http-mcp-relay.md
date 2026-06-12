@@ -117,6 +117,7 @@ Request metadata is pruned by both count and time:
 - `LCV_RELAY_REQUEST_EVENT_RETENTION_SECONDS` can override days for smoke tests or tightly controlled deployments.
 - OAuth client registrations remain durable by default.
 - `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS` can expire old OAuth client registrations when a hosted or shared relay needs stricter rotation.
+- `LCV_RELAY_STATE_BACKUP_COUNT` keeps compact metadata-only state backups next to the state file. Default is `3`; `0` disables backups.
 
 Tenant isolation is explicit:
 
@@ -206,5 +207,5 @@ Remaining production work:
 
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
-- Hosted relay storage backup policy, rotation runbooks, and deployment-specific incident procedures for the same metadata-only state model.
+- Hosted relay deployment-specific rotation runbooks and incident procedures for the same metadata-only state model.
 - Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.

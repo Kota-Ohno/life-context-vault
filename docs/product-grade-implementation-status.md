@@ -97,6 +97,7 @@ Last updated: 2026-06-12
 - Added Relay state retention controls:
   - request metadata is pruned by both maximum count and default 30-day retention
   - OAuth client registrations remain durable by default but can be expired through `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS`
+  - relay state persistence keeps metadata-only backup generations using `LCV_RELAY_STATE_BACKUP_COUNT`, defaulting to 3 and allowing 0 to disable backups
   - `/relay/state` exposes retention settings without exposing MCP bodies, Raw Sources, Vault content, or Context Pack bodies
 - Added Relay tenant isolation controls:
   - loopback development defaults to `LCV_RELAY_TENANT_ID=local`
@@ -221,7 +222,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Hosted relay operations for the metadata-only state store: backup policy and deployment-specific rotation/incident runbooks beyond the new retention and tenant controls.
+- Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, and backup controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
@@ -243,6 +244,7 @@ Last updated: 2026-06-12
 - stdio MCP binary smoke test for shared-core `life_context.request_context_pack` returning a `ContextPack only` payload
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
+- Relay state backup tests proving metadata-only backup generations are rotated without storing Context Pack bodies
 - Relay tenant tests proving non-loopback binds require tenant id, mismatched tenant state is refused, and legacy tenantless metadata migrates to the configured tenant
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
@@ -459,6 +461,14 @@ Last updated: 2026-06-12
 - Hosted operations: accepted; non-loopback binds require an explicit tenant id, and state files configured for a different tenant are refused instead of silently reused.
 - Compatibility: accepted; old tenantless local state migrates to the configured tenant, preserving existing local development state.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
+
+### Relay State Backup Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate hosted-ops, security/privacy, durability, and compatibility passes.
+- Product fit: accepted; hosted and local Relay metadata can recover recent OAuth client/request metadata state without changing the Vault data boundary.
+- Security/privacy: accepted; backups contain the same metadata-only state as the primary relay state file and still exclude MCP bodies, Raw Sources, Vault content, Context Pack bodies, access tokens, and authorization codes.
+- Durability: accepted; the previous state file is copied to `.bak1` before replacement, older backups rotate up to the configured generation count, and `LCV_RELAY_STATE_BACKUP_COUNT=0` can disable the behavior.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `npm run tauri:build`, and `git diff --check` passed.
 
 ### First-Run AI Access UX Slice
 

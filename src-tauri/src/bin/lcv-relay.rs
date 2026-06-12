@@ -29,6 +29,8 @@ const AUTH_CODE_TTL_SECONDS: u64 = 300;
 const PAIRING_TTL_SECONDS: u64 = 600;
 const MAX_RELAY_REQUEST_EVENTS: usize = 500;
 const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+const DEFAULT_RELAY_STATE_BACKUP_COUNT: usize = 3;
+const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
@@ -132,6 +134,7 @@ impl RelayConfig {
 struct RelayRetentionPolicy {
   request_event_retention_seconds: u64,
   client_registration_retention_seconds: Option<u64>,
+  state_backup_count: usize,
 }
 
 impl RelayRetentionPolicy {
@@ -146,6 +149,11 @@ impl RelayRetentionPolicy {
         "LCV_RELAY_CLIENT_RETENTION_SECONDS",
         "LCV_RELAY_CLIENT_RETENTION_DAYS",
       ),
+      state_backup_count: env_usize(
+        "LCV_RELAY_STATE_BACKUP_COUNT",
+        DEFAULT_RELAY_STATE_BACKUP_COUNT,
+        MAX_RELAY_STATE_BACKUP_COUNT,
+      ),
     }
   }
 }
@@ -155,6 +163,7 @@ impl Default for RelayRetentionPolicy {
     Self {
       request_event_retention_seconds: DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
       client_registration_retention_seconds: None,
+      state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
     }
   }
 }
@@ -186,6 +195,14 @@ fn env_optional_duration_seconds(seconds_name: &str, days_name: &str) -> Option<
         .filter(|value| *value > 0)
         .map(|days| days.saturating_mul(24 * 60 * 60))
     })
+}
+
+fn env_usize(name: &str, default_value: usize, max_value: usize) -> usize {
+  env::var(name)
+    .ok()
+    .and_then(|value| value.parse::<usize>().ok())
+    .map(|value| value.min(max_value))
+    .unwrap_or(default_value)
 }
 
 fn relay_tenant_id_from_env(bind: &str) -> Result<String, String> {
@@ -407,6 +424,36 @@ fn normalize_persisted_relay_state_tenant(
   Ok(())
 }
 
+fn relay_state_backup_path(path: &PathBuf, generation: usize) -> PathBuf {
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("relay-state.json");
+  path.with_file_name(format!("{file_name}.bak{generation}"))
+}
+
+fn rotate_relay_state_backups(path: &PathBuf, backup_count: usize) -> Result<(), String> {
+  if backup_count == 0 || !path.exists() {
+    return Ok(());
+  }
+  for generation in (2..=backup_count).rev() {
+    let from = relay_state_backup_path(path, generation - 1);
+    let to = relay_state_backup_path(path, generation);
+    if to.exists() {
+      fs::remove_file(&to)
+        .map_err(|error| format!("failed to remove relay state backup: {error}"))?;
+    }
+    if from.exists() {
+      fs::rename(&from, &to)
+        .map_err(|error| format!("failed to rotate relay state backup: {error}"))?;
+    }
+  }
+  let first_backup = relay_state_backup_path(path, 1);
+  fs::copy(path, &first_backup)
+    .map_err(|error| format!("failed to back up relay state store: {error}"))?;
+  Ok(())
+}
+
 impl RelayState {
   #[cfg(test)]
   fn new() -> Self {
@@ -593,6 +640,7 @@ impl RelayState {
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
+        "stateBackupCount": self.retention.state_backup_count,
         "maxRequestEvents": MAX_RELAY_REQUEST_EVENTS
       },
       "recentRequestEvents": recent_events
@@ -748,6 +796,7 @@ impl RelayState {
     );
     fs::write(&temp_path, payload)
       .map_err(|error| format!("failed to write relay state temp store: {error}"))?;
+    rotate_relay_state_backups(path, self.retention.state_backup_count)?;
     #[cfg(target_os = "windows")]
     {
       match fs::rename(&temp_path, path) {
@@ -1868,6 +1917,66 @@ mod tests {
   }
 
   #[test]
+  fn relay_state_persist_rotates_metadata_backups() {
+    let dir = env::temp_dir().join(format!(
+      "lcv-relay-state-backup-test-{}",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("test dir");
+    let path = dir.join("relay-state.json");
+    let state = RelayState::load_with_retention(
+      Some(path.clone()),
+      RelayRetentionPolicy {
+        request_event_retention_seconds: DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
+        client_registration_retention_seconds: None,
+        state_backup_count: 2,
+      },
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
+    )
+    .expect("relay state");
+
+    state
+      .register_client(
+        "First Client".to_string(),
+        vec!["http://127.0.0.1/first".to_string()],
+      )
+      .expect("first client");
+    assert!(!relay_state_backup_path(&path, 1).exists());
+
+    state
+      .register_client(
+        "Second Client".to_string(),
+        vec!["http://127.0.0.1/second".to_string()],
+      )
+      .expect("second client");
+    let backup = fs::read_to_string(relay_state_backup_path(&path, 1)).expect("backup");
+    assert!(backup.contains("First Client"));
+    assert!(!backup.contains("Second Client"));
+    assert!(backup.contains("\"tenant_id\": \"local\""));
+    assert!(!backup.contains("ContextPack"));
+
+    state
+      .register_client(
+        "Third Client".to_string(),
+        vec!["http://127.0.0.1/third".to_string()],
+      )
+      .expect("third client");
+    assert!(relay_state_backup_path(&path, 2).exists());
+    let status = state.store_status();
+    assert_eq!(
+      status
+        .get("retention")
+        .and_then(|retention| retention.get("stateBackupCount"))
+        .and_then(Value::as_u64),
+      Some(2)
+    );
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
   fn relay_state_refuses_mismatched_tenant_store() {
     let dir = env::temp_dir().join(format!(
       "lcv-relay-state-tenant-mismatch-test-{}",
@@ -1936,6 +2045,7 @@ mod tests {
       RelayRetentionPolicy {
         request_event_retention_seconds: u64::MAX,
         client_registration_retention_seconds: None,
+        state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
       },
       "tenant-migrated".to_string(),
     )
@@ -1995,6 +2105,7 @@ mod tests {
       RelayRetentionPolicy {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
+        state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
@@ -2045,6 +2156,7 @@ mod tests {
       RelayRetentionPolicy {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
+        state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
@@ -2056,6 +2168,7 @@ mod tests {
       RelayRetentionPolicy {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: Some(60),
+        state_backup_count: DEFAULT_RELAY_STATE_BACKUP_COUNT,
       },
       DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
