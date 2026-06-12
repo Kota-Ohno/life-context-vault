@@ -94,6 +94,10 @@ Last updated: 2026-06-12
   - OAuth dynamic client registrations are persisted in a relay state store
   - recent relay request audit metadata is persisted without MCP bodies or Context Pack bodies
   - `GET /relay/state` exposes metadata-only relay status for local Control Center and smoke checks
+- Added Relay state retention controls:
+  - request metadata is pruned by both maximum count and default 30-day retention
+  - OAuth client registrations remain durable by default but can be expired through `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS`
+  - `/relay/state` exposes retention settings without exposing MCP bodies, Raw Sources, Vault content, or Context Pack bodies
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
 - Added app-managed AI Access Service in the Tauri Control Center:
   - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
@@ -210,7 +214,7 @@ Last updated: 2026-06-12
 
 - Public HTTPS deployment and durable hosted relay domain.
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
-- Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
+- Hosted relay operations for the metadata-only state store: tenant isolation, backup policy, and deployment-specific rotation runbooks beyond the new retention controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
@@ -231,6 +235,7 @@ Last updated: 2026-06-12
 - MCP sidecar smoke test for external `request_context_pack` persistence and `get_request_status` lookup against the same encrypted Vault
 - stdio MCP binary smoke test for shared-core `life_context.request_context_pack` returning a `ContextPack only` payload
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
+- Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
@@ -396,6 +401,15 @@ Last updated: 2026-06-12
 - Technical design: relay state writes use a temp file plus replace step, and failed registration persistence rolls back the in-memory client so a 500 response does not leave a process-only client behind.
 - UX: Connections now distinguishes what the Relay keeps from what it refuses to keep, including a visible `/relay/state` status URL for local inspection.
 - Verification: desktop `1440x980` and mobile `390x844` Browser checks found no page-level horizontal overflow in the updated Remote Relay setup section.
+
+### Relay Retention Controls Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, operations, and technical passes.
+- Product fit: accepted; Relay metadata can now survive normal use without unbounded growth while preserving durable OAuth clients by default.
+- Security/privacy: accepted; retention prunes only metadata already allowed in Relay state and does not add any persisted MCP request body, Vault content, Raw Source text, or Context Pack body.
+- Operations: accepted; request-event retention defaults to 30 days, supports seconds/days environment overrides, and client-registration TTL remains opt-in for stricter hosted deployments.
+- Technical design: accepted; pruning runs on load, event recording, and persistence, with `/relay/state` exposing retention settings for local inspection.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `cargo test --manifest-path src-tauri/Cargo.toml`, `git diff --check`, and `npm run tauri:build` passed.
 
 ### App-Managed AI Access Service Slice
 

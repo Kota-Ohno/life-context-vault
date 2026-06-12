@@ -108,6 +108,14 @@ Remote clients should use OAuth discovery instead of the static token.
 - OAuth dynamic client registrations.
 - Recent MCP request metadata: request id, client id, required scope, JSON-RPC method, MCP tool name, status, transport, and timestamp.
 
+Request metadata is pruned by both count and time:
+
+- `MAX_RELAY_REQUEST_EVENTS` keeps at most 500 recent request metadata rows.
+- `LCV_RELAY_REQUEST_EVENT_RETENTION_DAYS` defaults to `30`.
+- `LCV_RELAY_REQUEST_EVENT_RETENTION_SECONDS` can override days for smoke tests or tightly controlled deployments.
+- OAuth client registrations remain durable by default.
+- `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS` can expire old OAuth client registrations when a hosted or shared relay needs stricter rotation.
+
 It does not persist:
 
 - MCP request bodies.

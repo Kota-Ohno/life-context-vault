@@ -28,6 +28,7 @@ const OAUTH_TOKEN_TTL_SECONDS: u64 = 3600;
 const AUTH_CODE_TTL_SECONDS: u64 = 300;
 const PAIRING_TTL_SECONDS: u64 = 600;
 const MAX_RELAY_REQUEST_EVENTS: usize = 500;
+const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
   "memory.propose",
@@ -44,7 +45,8 @@ fn main() {
 
 fn run() -> Result<(), String> {
   let config = Arc::new(RelayConfig::from_env()?);
-  let state = RelayState::load(config.relay_state_path.clone())?;
+  let state =
+    RelayState::load_with_retention(config.relay_state_path.clone(), config.retention)?;
   eprintln!("Life Context Vault relay listening on {}", config.base_url);
   let listener = TcpListener::bind(&config.bind)
     .map_err(|error| format!("failed to bind {}: {error}", config.bind))?;
@@ -77,6 +79,7 @@ struct RelayConfig {
   vault_db_path: Option<String>,
   relay_state_path: Option<PathBuf>,
   allow_direct_sidecar: bool,
+  retention: RelayRetentionPolicy,
 }
 
 impl RelayConfig {
@@ -103,6 +106,7 @@ impl RelayConfig {
       allow_direct_sidecar: env::var("LCV_RELAY_ALLOW_DIRECT_SIDECAR")
         .map(|value| value != "0")
         .unwrap_or(true),
+      retention: RelayRetentionPolicy::from_env(),
     })
   }
 
@@ -115,6 +119,66 @@ impl RelayConfig {
       self.base_url.clone()
     }
   }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RelayRetentionPolicy {
+  request_event_retention_seconds: u64,
+  client_registration_retention_seconds: Option<u64>,
+}
+
+impl RelayRetentionPolicy {
+  fn from_env() -> Self {
+    Self {
+      request_event_retention_seconds: env_duration_seconds(
+        "LCV_RELAY_REQUEST_EVENT_RETENTION_SECONDS",
+        "LCV_RELAY_REQUEST_EVENT_RETENTION_DAYS",
+        DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
+      ),
+      client_registration_retention_seconds: env_optional_duration_seconds(
+        "LCV_RELAY_CLIENT_RETENTION_SECONDS",
+        "LCV_RELAY_CLIENT_RETENTION_DAYS",
+      ),
+    }
+  }
+}
+
+impl Default for RelayRetentionPolicy {
+  fn default() -> Self {
+    Self {
+      request_event_retention_seconds: DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS,
+      client_registration_retention_seconds: None,
+    }
+  }
+}
+
+fn env_duration_seconds(seconds_name: &str, days_name: &str, default_seconds: u64) -> u64 {
+  env::var(seconds_name)
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok())
+    .filter(|value| *value > 0)
+    .or_else(|| {
+      env::var(days_name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|days| days.saturating_mul(24 * 60 * 60))
+    })
+    .unwrap_or(default_seconds)
+}
+
+fn env_optional_duration_seconds(seconds_name: &str, days_name: &str) -> Option<u64> {
+  env::var(seconds_name)
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok())
+    .filter(|value| *value > 0)
+    .or_else(|| {
+      env::var(days_name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|days| days.saturating_mul(24 * 60 * 60))
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -152,6 +216,7 @@ fn default_relay_state_path() -> Option<PathBuf> {
 struct RelayState {
   inner: Arc<Mutex<RelayStateInner>>,
   store_path: Option<PathBuf>,
+  retention: RelayRetentionPolicy,
 }
 
 struct RelayStateInner {
@@ -228,13 +293,51 @@ enum PairingStatus {
   Expired,
 }
 
+fn prune_persisted_relay_state(
+  persisted: &mut PersistedRelayState,
+  retention: RelayRetentionPolicy,
+  now_seconds: u64,
+) {
+  prune_request_events(
+    &mut persisted.request_events,
+    retention.request_event_retention_seconds,
+    now_seconds,
+  );
+  if let Some(client_ttl) = retention.client_registration_retention_seconds {
+    let cutoff = now_seconds.saturating_sub(client_ttl);
+    persisted
+      .registered_clients
+      .retain(|client| client.created_at >= cutoff);
+  }
+}
+
+fn prune_request_events(
+  request_events: &mut Vec<RelayRequestEvent>,
+  retention_seconds: u64,
+  now_seconds: u64,
+) {
+  let cutoff = now_seconds.saturating_sub(retention_seconds);
+  request_events.retain(|event| event.occurred_at >= cutoff);
+  if request_events.len() > MAX_RELAY_REQUEST_EVENTS {
+    request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
+  }
+}
+
 impl RelayState {
   #[cfg(test)]
   fn new() -> Self {
     Self::from_persisted(None, PersistedRelayState::empty())
   }
 
+  #[cfg(test)]
   fn load(store_path: Option<PathBuf>) -> Result<Self, String> {
+    Self::load_with_retention(store_path, RelayRetentionPolicy::default())
+  }
+
+  fn load_with_retention(
+    store_path: Option<PathBuf>,
+    retention: RelayRetentionPolicy,
+  ) -> Result<Self, String> {
     let persisted = match &store_path {
       Some(path) if path.exists() => {
         let raw = fs::read_to_string(path)
@@ -244,10 +347,22 @@ impl RelayState {
       }
       _ => PersistedRelayState::empty(),
     };
-    Ok(Self::from_persisted(store_path, persisted))
+    Ok(Self::from_persisted_with_retention(
+      store_path, persisted, retention,
+    ))
   }
 
-  fn from_persisted(store_path: Option<PathBuf>, mut persisted: PersistedRelayState) -> Self {
+  #[cfg(test)]
+  fn from_persisted(store_path: Option<PathBuf>, persisted: PersistedRelayState) -> Self {
+    Self::from_persisted_with_retention(store_path, persisted, RelayRetentionPolicy::default())
+  }
+
+  fn from_persisted_with_retention(
+    store_path: Option<PathBuf>,
+    mut persisted: PersistedRelayState,
+    retention: RelayRetentionPolicy,
+  ) -> Self {
+    prune_persisted_relay_state(&mut persisted, retention, system_time_seconds(SystemTime::now()));
     persisted.request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
     let registered_clients = persisted
       .registered_clients
@@ -267,6 +382,7 @@ impl RelayState {
         agent_connected_at: None,
       })),
       store_path,
+      retention,
     }
   }
 
@@ -324,15 +440,29 @@ impl RelayState {
     {
       let mut inner = self.inner.lock().expect("relay state");
       inner.request_events.insert(0, event);
-      if inner.request_events.len() > MAX_RELAY_REQUEST_EVENTS {
-        inner.request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
-      }
+      prune_request_events(
+        &mut inner.request_events,
+        self.retention.request_event_retention_seconds,
+        system_time_seconds(SystemTime::now()),
+      );
     }
     self.persist()
   }
 
   fn store_status(&self) -> Value {
-    let inner = self.inner.lock().expect("relay state");
+    let mut inner = self.inner.lock().expect("relay state");
+    let now_seconds = system_time_seconds(SystemTime::now());
+    prune_request_events(
+      &mut inner.request_events,
+      self.retention.request_event_retention_seconds,
+      now_seconds,
+    );
+    if let Some(client_ttl) = self.retention.client_registration_retention_seconds {
+      let cutoff = now_seconds.saturating_sub(client_ttl);
+      inner
+        .registered_clients
+        .retain(|_, client| client.created_at >= cutoff);
+    }
     let recent_events: Vec<Value> = inner
       .request_events
       .iter()
@@ -354,6 +484,11 @@ impl RelayState {
       "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
       "registeredClientCount": inner.registered_clients.len(),
       "requestEventCount": inner.request_events.len(),
+      "retention": {
+        "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
+        "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
+        "maxRequestEvents": MAX_RELAY_REQUEST_EVENTS
+      },
       "recentRequestEvents": recent_events
     })
   }
@@ -473,7 +608,18 @@ impl RelayState {
       return Ok(());
     };
     let snapshot = {
-      let inner = self.inner.lock().expect("relay state");
+      let mut inner = self.inner.lock().expect("relay state");
+      prune_request_events(
+        &mut inner.request_events,
+        self.retention.request_event_retention_seconds,
+        system_time_seconds(SystemTime::now()),
+      );
+      if let Some(client_ttl) = self.retention.client_registration_retention_seconds {
+        let cutoff = system_time_seconds(SystemTime::now()).saturating_sub(client_ttl);
+        inner
+          .registered_clients
+          .retain(|_, client| client.created_at >= cutoff);
+      }
       PersistedRelayState {
         version: 1,
         registered_clients: inner.registered_clients.values().cloned().collect(),
@@ -1457,6 +1603,7 @@ mod tests {
       vault_db_path: None,
       relay_state_path: None,
       allow_direct_sidecar: true,
+      retention: RelayRetentionPolicy::default(),
     }
   }
 
@@ -1565,7 +1712,7 @@ mod tests {
         tool_name: Some("life_context.propose_memory".to_string()),
         status: "fulfilled".to_string(),
         transport: "agent_websocket".to_string(),
-        occurred_at: 123,
+        occurred_at: system_time_seconds(SystemTime::now()),
       })
       .expect("record relay event");
 
@@ -1586,6 +1733,102 @@ mod tests {
     assert!(raw.contains("life_context.propose_memory"));
     assert!(!raw.contains("Tone preference"));
     let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn relay_state_prunes_request_events_by_retention_policy() {
+    let now = system_time_seconds(SystemTime::now());
+    let state = RelayState::from_persisted_with_retention(
+      None,
+      PersistedRelayState {
+        version: 1,
+        registered_clients: Vec::new(),
+        request_events: vec![
+          RelayRequestEvent {
+            id: "evt_old".to_string(),
+            client_id: Some("client_old".to_string()),
+            required_scope: "context_pack.request".to_string(),
+            method: "tools/call".to_string(),
+            tool_name: Some("life_context.request_context_pack".to_string()),
+            status: "fulfilled".to_string(),
+            transport: "agent_websocket".to_string(),
+            occurred_at: now.saturating_sub(120),
+          },
+          RelayRequestEvent {
+            id: "evt_recent".to_string(),
+            client_id: Some("client_recent".to_string()),
+            required_scope: "policy.read".to_string(),
+            method: "tools/list".to_string(),
+            tool_name: None,
+            status: "fulfilled".to_string(),
+            transport: "agent_websocket".to_string(),
+            occurred_at: now.saturating_sub(5),
+          },
+        ],
+      },
+      RelayRetentionPolicy {
+        request_event_retention_seconds: 60,
+        client_registration_retention_seconds: None,
+      },
+    );
+
+    let status = state.store_status();
+    assert_eq!(
+      status.get("requestEventCount").and_then(Value::as_u64),
+      Some(1)
+    );
+    assert_eq!(
+      status
+        .get("recentRequestEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("id"))
+        .and_then(Value::as_str),
+      Some("evt_recent")
+    );
+  }
+
+  #[test]
+  fn relay_state_prunes_clients_only_when_client_ttl_is_set() {
+    let now = system_time_seconds(SystemTime::now());
+    let old_client = RegisteredClient {
+      client_id: "client_old".to_string(),
+      client_name: "Old Client".to_string(),
+      redirect_uris: vec!["http://127.0.0.1/old".to_string()],
+      created_at: now.saturating_sub(120),
+    };
+    let recent_client = RegisteredClient {
+      client_id: "client_recent".to_string(),
+      client_name: "Recent Client".to_string(),
+      redirect_uris: vec!["http://127.0.0.1/recent".to_string()],
+      created_at: now.saturating_sub(5),
+    };
+    let persisted = PersistedRelayState {
+      version: 1,
+      registered_clients: vec![old_client, recent_client],
+      request_events: Vec::new(),
+    };
+
+    let durable_state = RelayState::from_persisted_with_retention(
+      None,
+      persisted.clone(),
+      RelayRetentionPolicy {
+        request_event_retention_seconds: 60,
+        client_registration_retention_seconds: None,
+      },
+    );
+    assert!(durable_state.client("client_old").is_some());
+
+    let pruned_state = RelayState::from_persisted_with_retention(
+      None,
+      persisted,
+      RelayRetentionPolicy {
+        request_event_retention_seconds: 60,
+        client_registration_retention_seconds: Some(60),
+      },
+    );
+    assert!(pruned_state.client("client_old").is_none());
+    assert!(pruned_state.client("client_recent").is_some());
   }
 
   #[test]
