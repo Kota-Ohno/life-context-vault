@@ -4,10 +4,10 @@ use std::{
   env,
   io::{self, BufRead, Write},
   path::{Path, PathBuf},
-  time::{SystemTime, UNIX_EPOCH},
 };
-use chrono::{SecondsFormat, Utc};
-use life_context_vault_lib::create_context_pack_request_at_path;
+use life_context_vault_lib::{
+  create_context_pack_request_at_path, get_context_request_status_at_path, propose_memory_at_path,
+};
 
 #[path = "../vault_crypto.rs"]
 mod vault_crypto;
@@ -171,18 +171,16 @@ fn tools() -> Value {
 }
 
 fn call_tool(name: &str, arguments: &Value) -> Result<Value, (i64, String)> {
-  let mut vault = load_vault().map_err(|error| (-32000, error))?;
   let result = match name {
     "life_context.request_context_pack" => request_context_pack(arguments),
-    "life_context.propose_memory" => propose_memory(&mut vault, arguments),
-    "life_context.get_policy_summary" => get_policy_summary(&vault),
-    "life_context.get_request_status" => get_request_status(&vault, arguments),
+    "life_context.propose_memory" => propose_memory(arguments),
+    "life_context.get_policy_summary" => {
+      let vault = load_vault().map_err(|error| (-32000, error))?;
+      get_policy_summary(&vault)
+    }
+    "life_context.get_request_status" => get_request_status(arguments),
     _ => Err((-32602, format!("Unknown tool: {name}"))),
   }?;
-
-  if result.get("mutated").and_then(Value::as_bool).unwrap_or(false) {
-    save_vault(&vault).map_err(|error| (-32000, error))?;
-  }
 
   Ok(tool_result(result))
 }
@@ -228,58 +226,23 @@ fn request_context_pack_at_path(path: &Path, arguments: &Value) -> Result<Value,
   }
 }
 
-fn propose_memory(vault: &mut Value, arguments: &Value) -> Result<Value, (i64, String)> {
+fn propose_memory(arguments: &Value) -> Result<Value, (i64, String)> {
+  let path = vault_db_path().map_err(|error| (-32000, error))?;
+  propose_memory_at_path_for_mcp(&path, arguments)
+}
+
+fn propose_memory_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
   let text = required_str(arguments, "text")?;
   let client_name = optional_str(arguments, "clientName").unwrap_or("Local MCP Client");
-  let source_id = new_id("src");
-  let candidate_id = new_id("cand");
-  let now = now_iso();
-  let sensitivity = detect_sensitivity(text);
-  let sanitized = sanitize_secret_material(text);
-  let source = json!({
-    "id": source_id,
-    "kind": "mcp_proposal",
-    "title": format!("{client_name} memory proposal"),
-    "origin": "local_mcp",
-    "body": sanitized,
-    "createdAt": now,
-    "capturedAt": now,
-    "defaultSensitivity": sensitivity,
-    "processingStatus": "ready",
-    "deletionState": "active"
-  });
-  let candidate = json!({
-    "id": candidate_id,
-    "sourceIds": [source_id],
-    "sourceChunkIds": [],
-    "proposedFactText": normalized(&sanitized),
-    "domain": classify_domain(text),
-    "candidateType": candidate_type(text),
-    "detectedSensitivity": sensitivity,
-    "confidence": "medium",
-    "reasonToRemember": "MCPクライアントから提案された生活文脈候補です。承認されるまでAIの確定文脈には使われません。",
-    "status": if sensitivity == "sensitive" { "blocked_sensitive" } else { "new" },
-    "createdAt": now,
-    "createsFactIds": []
-  });
-
-  push_array(vault, "sources", source);
-  push_array(vault, "candidates", candidate);
-  audit(
-    vault,
-    "memory_proposed",
-    "candidate",
-    &candidate_id,
-    sensitivity,
-    json!({ "clientName": client_name, "transport": "local_mcp" }),
-  );
+  let result = propose_memory_at_path(path, "conn_local_mcp", client_name, "local_mcp", text)
+    .map_err(|error| (-32000, error))?;
 
   Ok(json!({
-    "mutated": true,
-    "status": "candidate_created",
-    "candidateId": candidate_id,
-    "sourceId": source_id,
-    "detectedSensitivity": sensitivity,
+    "mutated": false,
+    "status": result.status,
+    "candidateId": result.candidate_id,
+    "sourceId": result.source_id,
+    "detectedSensitivity": result.detected_sensitivity,
     "message": "Memory proposal was added to the Inbox. It is not an ApprovedFact."
   }))
 }
@@ -298,44 +261,37 @@ fn get_policy_summary(vault: &Value) -> Result<Value, (i64, String)> {
   }))
 }
 
-fn get_request_status(vault: &Value, arguments: &Value) -> Result<Value, (i64, String)> {
+fn get_request_status(arguments: &Value) -> Result<Value, (i64, String)> {
+  let path = vault_db_path().map_err(|error| (-32000, error))?;
+  get_request_status_at_path_for_mcp(&path, arguments)
+}
+
+fn get_request_status_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
   let request_id = required_str(arguments, "requestId")?;
-  let request = array(vault, "contextPackRequests")
-    .iter()
-    .find(|request| get_str(request, "id") == request_id)
-    .cloned();
-  let Some(request) = request else {
+  let result = get_context_request_status_at_path(path, request_id)
+    .map_err(|error| (-32000, error))?;
+  if result.status == "not_found" {
     return Ok(json!({
       "mutated": false,
       "status": "not_found",
       "requestId": request_id,
       "message": "No ContextPackRequest was found for this id."
     }));
-  };
-  let pack = array(vault, "contextPacks")
-    .iter()
-    .find(|pack| get_str(pack, "requestId") == request_id)
-    .cloned();
-  let confirmed = pack
-    .as_ref()
-    .map(|pack| get_str(pack, "confirmationStatus") == "confirmed")
-    .unwrap_or(false)
-    || get_str(&request, "status") == "fulfilled";
-
-  if confirmed {
+  }
+  if result.context_pack.is_some() {
     Ok(json!({
       "mutated": false,
       "status": "fulfilled",
       "requestId": request_id,
-      "contextPack": pack.as_ref().map(safe_pack_for_client),
+      "contextPack": result.context_pack,
       "message": "The Context Pack has been confirmed and can be used for this answer."
     }))
   } else {
     Ok(json!({
       "mutated": false,
-      "status": get_str(&request, "status"),
+      "status": result.status,
       "requestId": request_id,
-      "expiresAt": get_str(&request, "expiresAt"),
+      "expiresAt": result.expires_at,
       "message": "The request is not yet fulfilled."
     }))
   }
@@ -376,27 +332,6 @@ fn load_vault() -> Result<Value, String> {
   Ok(payload
     .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     .unwrap_or_else(empty_vault))
-}
-
-fn save_vault(vault: &Value) -> Result<(), String> {
-  let path = vault_db_path()?;
-  if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent)
-      .map_err(|error| format!("failed to create vault directory: {error}"))?;
-  }
-  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
-  ensure_vault_state_table(&connection)?;
-  connection
-    .execute(
-      "INSERT INTO vault_state (key, payload, updated_at)
-       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       ON CONFLICT(key) DO UPDATE SET
-         payload = excluded.payload,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-      params![VAULT_STATE_KEY, vault.to_string()],
-    )
-    .map_err(|error| format!("failed to save vault state: {error}"))?;
-  Ok(())
 }
 
 fn ensure_vault_state_table(connection: &Connection) -> Result<(), String> {
@@ -492,45 +427,6 @@ fn empty_vault() -> Value {
   })
 }
 
-fn safe_pack_for_client(pack: &Value) -> Value {
-  json!({
-    "trustBoundary": "ContextPack only",
-    "id": get_str(pack, "id"),
-    "requestId": optional_value(pack, "requestId"),
-    "taskText": get_str(pack, "taskText"),
-    "taskDomain": get_str(pack, "taskDomain"),
-    "generatedAt": get_str(pack, "generatedAt"),
-    "expiresAt": optional_value(pack, "expiresAt"),
-    "maxSensitivityIncluded": get_str(pack, "maxSensitivityIncluded"),
-    "items": pack.get("items").cloned().unwrap_or_else(|| json!([])),
-    "sourceSnippets": pack.get("sourceSnippets").cloned().unwrap_or_else(|| json!([])),
-    "warnings": pack.get("warnings").cloned().unwrap_or_else(|| json!([])),
-    "excludedItems": pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
-    "confirmationStatus": get_str(pack, "confirmationStatus")
-  })
-}
-
-fn audit(
-  vault: &mut Value,
-  event_type: &str,
-  subject_type: &str,
-  subject_id: &str,
-  sensitivity: &str,
-  metadata: Value,
-) {
-  let event = json!({
-    "id": new_id("audit"),
-    "eventType": event_type,
-    "actor": "connector",
-    "subjectType": subject_type,
-    "subjectId": subject_id,
-    "occurredAt": now_iso(),
-    "sensitivity": sensitivity,
-    "metadata": metadata
-  });
-  push_array(vault, "auditEvents", event);
-}
-
 fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, (i64, String)> {
   value
     .get(key)
@@ -543,6 +439,7 @@ fn optional_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
   value.get(key).and_then(Value::as_str).filter(|text| !text.trim().is_empty())
 }
 
+#[cfg(test)]
 fn array(value: &Value, key: &str) -> Vec<Value> {
   value
     .get(key)
@@ -551,6 +448,7 @@ fn array(value: &Value, key: &str) -> Vec<Value> {
     .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn push_array(value: &mut Value, key: &str, item: Value) {
   if !value.get(key).map(Value::is_array).unwrap_or(false) {
     value[key] = json!([]);
@@ -560,116 +458,10 @@ fn push_array(value: &mut Value, key: &str, item: Value) {
   }
 }
 
-fn get_str<'a>(value: &'a Value, key: &str) -> &'a str {
-  value.get(key).and_then(Value::as_str).unwrap_or_default()
-}
-
-fn optional_value(value: &Value, key: &str) -> Value {
-  value.get(key).cloned().unwrap_or(Value::Null)
-}
-
-fn classify_domain(text: &str) -> &'static str {
-  let lower = text.to_lowercase();
-  if contains_any(&lower, &["health", "medical", "doctor", "disability", "care", "病院", "健康", "障害", "介護"]) {
-    "health_and_care"
-  } else if contains_any(&lower, &["finance", "benefit", "pension", "tax", "bank", "payment", "money", "給付", "年金", "税", "銀行", "支払"]) {
-    "finance_and_benefits"
-  } else if contains_any(&lower, &["work", "job", "school", "employer", "student", "勤務", "仕事", "学校", "転職", "職場"]) {
-    "work_and_education"
-  } else if contains_any(&lower, &["family", "partner", "child", "household", "家族", "配偶者", "子ども", "世帯"]) {
-    "relationships_and_household"
-  } else if contains_any(&lower, &["home", "address", "lease", "rent", "utility", "housing", "住所", "住居", "賃貸", "家"]) {
-    "home_and_places"
-  } else if contains_any(&lower, &["contract", "policy", "insurance", "warranty", "契約", "保険", "保証"]) {
-    "contracts_and_policies"
-  } else if contains_any(&lower, &["deadline", "submit", "renew", "procedure", "form", "期限", "提出", "更新", "手続"]) {
-    "procedures_and_obligations"
-  } else if contains_any(&lower, &["goal", "priority", "preference", "tone", "目標", "優先", "好み", "口調"]) {
-    "values_goals_and_preferences"
-  } else if contains_any(&lower, &["routine", "schedule", "habit", "commute", "予定", "習慣", "通勤"]) {
-    "routines_and_logistics"
-  } else if contains_any(&lower, &["move", "moving", "travel", "plan", "引っ越", "旅行", "予定", "計画"]) {
-    "life_events_and_plans"
-  } else {
-    "documents_and_evidence"
-  }
-}
-
-fn detect_sensitivity(text: &str) -> &'static str {
-  let lower = text.to_lowercase();
-  if contains_any(&lower, &["password", "passcode", "api key", "token", "secret", "private key", "recovery code", "パスワード", "秘密鍵", "my number", "national id", "bank account", "口座番号", "マイナンバー"]) {
-    "secret_never_send"
-  } else if contains_any(&lower, &["health", "medical", "doctor", "diagnosis", "disability", "benefit", "legal", "minor", "病院", "診断", "障害", "給付", "法律", "未成年"]) {
-    "sensitive"
-  } else if contains_any(&lower, &["finance", "tax", "pension", "insurance", "contract", "rent", "salary", "payment", "税", "年金", "保険", "契約", "家賃", "給与", "支払"]) {
-    "private_consequential"
-  } else if contains_any(&lower, &["name", "address", "phone", "email", "family", "名前", "住所", "電話", "メール", "家族"]) {
-    "personal"
-  } else {
-    "public"
-  }
-}
-
-fn candidate_type(text: &str) -> &'static str {
-  let lower = text.to_lowercase();
-  if contains_any(&lower, &["deadline", "due", "renew", "expires", "期限", "締切", "更新"]) {
-    "deadline"
-  } else if contains_any(&lower, &["must", "need to", "required", "submit", "notify", "必要", "提出", "連絡"]) {
-    "obligation"
-  } else if contains_any(&lower, &["tone", "preference", "好み", "口調"]) {
-    "preference"
-  } else if contains_any(&lower, &["goal", "priority", "目標", "優先"]) {
-    "goal"
-  } else if contains_any(&lower, &["moving", "move", "job change", "travel", "引っ越", "転職", "旅行"]) {
-    "life_event"
-  } else {
-    "note"
-  }
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-  needles.iter().any(|needle| text.contains(needle))
-}
-
-fn sanitize_secret_material(text: &str) -> String {
-  let mut sanitized = Vec::new();
-  for token in text.split_whitespace() {
-    let lower = token.to_lowercase();
-    if lower.contains("password")
-      || lower.contains("token")
-      || lower.contains("secret")
-      || lower.contains("api_key")
-      || lower.contains("apikey")
-      || lower.contains("パスワード")
-      || lower.contains("秘密鍵")
-    {
-      sanitized.push("[REDACTED_SECRET]".to_string());
-    } else {
-      sanitized.push(token.to_string());
-    }
-  }
-  sanitized.join(" ")
-}
-
-fn normalized(text: &str) -> String {
-  text.split_whitespace().collect::<Vec<&str>>().join(" ")
-}
-
-fn new_id(prefix: &str) -> String {
-  let nanos = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|duration| duration.as_nanos())
-    .unwrap_or_default();
-  format!("{prefix}_{nanos}")
-}
-
-fn now_iso() -> String {
-  Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::time::{SystemTime, UNIX_EPOCH};
 
   fn test_vault_path(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -695,6 +487,19 @@ mod tests {
         params![VAULT_STATE_KEY, vault.to_string()],
       )
       .expect("write test vault");
+  }
+
+  fn read_test_vault(path: &Path) -> Value {
+    let connection = vault_crypto::open_encrypted_vault_connection(path).expect("open saved vault");
+    ensure_vault_state_table(&connection).expect("vault_state table");
+    let payload: String = connection
+      .query_row(
+        "SELECT payload FROM vault_state WHERE key = ?1",
+        params![VAULT_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("saved payload");
+    serde_json::from_str::<Value>(&payload).expect("saved json")
   }
 
   #[test]
@@ -731,18 +536,7 @@ mod tests {
 
     assert_eq!(result.get("status").and_then(Value::as_str), Some("pending_user_confirmation"));
     assert!(result.get("contextPack").is_none());
-    let saved = {
-      let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open saved vault");
-      ensure_vault_state_table(&connection).expect("vault_state table");
-      let payload: String = connection
-        .query_row(
-          "SELECT payload FROM vault_state WHERE key = ?1",
-          params![VAULT_STATE_KEY],
-          |row| row.get(0),
-        )
-        .expect("saved payload");
-      serde_json::from_str::<Value>(&payload).expect("saved json")
-    };
+    let saved = read_test_vault(&path);
     assert_eq!(array(&saved, "contextPackRequests").len(), 1);
     assert_eq!(array(&saved, "contextPacks").len(), 1);
     let _ = std::fs::remove_file(path);
@@ -824,10 +618,11 @@ mod tests {
 
   #[test]
   fn memory_proposal_creates_candidate_not_fact() {
-    let mut vault = empty_vault();
+    let path = test_vault_path("memory-proposal");
+    write_test_vault(&path, &empty_vault());
 
-    let result = propose_memory(
-      &mut vault,
+    let result = propose_memory_at_path_for_mcp(
+      &path,
       &json!({
         "text": "Tone preference: concise and calm",
         "clientName": "Codex"
@@ -836,37 +631,76 @@ mod tests {
     .expect("propose memory");
 
     assert_eq!(result.get("status").and_then(Value::as_str), Some("candidate_created"));
-    assert_eq!(array(&vault, "candidates").len(), 1);
-    assert_eq!(array(&vault, "facts").len(), 0);
+    let saved = read_test_vault(&path);
+    assert_eq!(array(&saved, "candidates").len(), 1);
+    assert_eq!(array(&saved, "facts").len(), 0);
+    assert_eq!(
+      array(&saved, "candidates")[0].get("status").and_then(Value::as_str),
+      Some("new")
+    );
+    let _ = std::fs::remove_file(path);
   }
 
   #[test]
-  fn safe_pack_for_client_declares_context_pack_boundary() {
-    let pack = json!({
-      "id": "pack_1",
-      "requestId": "req_1",
-      "taskText": "Help me plan",
-      "taskDomain": "life_events_and_plans",
-      "generatedAt": "2026-06-12T00:00:00.000Z",
-      "expiresAt": "2026-06-12T00:10:00.000Z",
-      "maxSensitivityIncluded": "personal",
-      "items": [],
-      "sourceSnippets": [],
-      "warnings": [],
-      "excludedItems": [],
-      "confirmationStatus": "confirmed",
-      "localAnswer": "internal-only answer",
-      "auditEventId": "audit_1"
-    });
+  fn request_status_returns_confirmed_pack_without_internal_fields() {
+    let path = test_vault_path("request-status");
+    let mut vault = empty_vault();
+    push_array(
+      &mut vault,
+      "contextPackRequests",
+      json!({
+        "id": "req_confirmed",
+        "clientId": "conn_local_mcp",
+        "clientName": "Claude Desktop",
+        "taskText": "Help me plan",
+        "purpose": "MCP client requested life context",
+        "requestedDomains": ["life_events_and_plans"],
+        "sensitivityCeiling": "personal",
+        "approvalMode": "explicit_sensitive",
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "expiresAt": "2099-06-12T00:10:00.000Z",
+        "status": "fulfilled"
+      }),
+    );
+    push_array(
+      &mut vault,
+      "contextPacks",
+      json!({
+        "id": "pack_confirmed",
+        "requestId": "req_confirmed",
+        "taskText": "Help me plan",
+        "taskDomain": "life_events_and_plans",
+        "riskLevel": "low",
+        "generatedAt": "2026-06-12T00:00:00.000Z",
+        "expiresAt": "2099-06-12T00:10:00.000Z",
+        "maxSensitivityIncluded": "personal",
+        "items": [],
+        "sourceSnippets": [],
+        "warnings": [],
+        "excludedItems": [],
+        "confirmationStatus": "confirmed",
+        "localAnswer": "internal-only",
+        "auditEventId": "audit_internal"
+      }),
+    );
+    write_test_vault(&path, &vault);
 
-    let safe = safe_pack_for_client(&pack);
+    let result = get_request_status_at_path_for_mcp(
+      &path,
+      &json!({
+        "requestId": "req_confirmed"
+      }),
+    )
+    .expect("request status");
 
+    assert_eq!(result.get("status").and_then(Value::as_str), Some("fulfilled"));
+    let pack = result.get("contextPack").expect("context pack");
     assert_eq!(
-      safe.get("trustBoundary").and_then(Value::as_str),
+      pack.get("trustBoundary").and_then(Value::as_str),
       Some("ContextPack only")
     );
-    assert!(safe.get("sourceSnippets").is_some());
-    assert!(safe.get("localAnswer").is_none());
-    assert!(safe.get("auditEventId").is_none());
+    assert!(pack.get("localAnswer").is_none());
+    assert!(pack.get("auditEventId").is_none());
+    let _ = std::fs::remove_file(path);
   }
 }

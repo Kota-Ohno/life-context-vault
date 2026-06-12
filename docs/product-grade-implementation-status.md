@@ -65,6 +65,7 @@ Last updated: 2026-06-12
   - `life_context.get_policy_summary`
   - `life_context.get_request_status`
   - private consequential and sensitive packs are queued for confirmation instead of returned directly
+  - `request_context_pack`, `propose_memory`, and `get_request_status` now use shared Rust Vault Core APIs
 - Added Connections UI setup guidance for Claude Desktop-style MCP configuration.
 - Added top-bar native Vault Sync action so the app can reload MCP-written requests or memory proposals while open.
 - Added OAuth-capable HTTP MCP relay and local Vault Agent:
@@ -136,7 +137,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD beyond the current native Context Pack generation/search commands.
+- Rust-owned Vault Core write-side CRUD beyond the current native Context Pack generation/search/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -165,6 +166,7 @@ Last updated: 2026-06-12
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
+- MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
@@ -199,7 +201,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, and shared Rust-owned Context Pack generation are present, while most write-side CRUD still uses the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Context Pack generation, MCP memory proposal, and MCP request status are present, while app-side document/manual CRUD still uses the JSON snapshot projected into tables.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -268,7 +270,7 @@ Last updated: 2026-06-12
 - Security/privacy: native tests cover ApprovedFact-only inclusion, unapproved Candidate exclusion, Raw Source body exclusion from snippets, and sensitivity-ceiling exclusions.
 - Technical design: ranking now reads normalized SQLite facts and sources, then writes the request and pack back through the encrypted Vault save path so projection state remains current.
 - Review disposition: a DB-read error in source-deleted warning generation was initially swallowed; fixed to propagate the error instead of silently omitting the warning.
-- Follow-up: local MCP should continue moving `propose_memory` and status helpers toward shared Vault Core CRUD, but Pack generation itself is now shared.
+- Follow-up: app-side document/manual Source ingestion and browser capture should continue moving toward shared Vault Core CRUD.
 
 ### Shared MCP Context Pack Core Slice
 
@@ -276,6 +278,13 @@ Last updated: 2026-06-12
 - Security/privacy: sidecar tests cover both sensitive Pack queuing without returning items and low-risk Pack return without Raw Source body leakage.
 - Technical design: `create_context_pack_request_at_path` is the path-based Vault Core API used by both Tauri commands and the stdio MCP sidecar.
 - Review disposition: old sidecar-only ranking and Pack assembly helpers were removed after the shared path landed, leaving one generation source of truth for request_context_pack.
+
+### Shared MCP Proposal And Status Slice
+
+- Product fit: everyday AI clients now propose memory candidates and retrieve confirmed request status through the same Vault Core boundary rather than sidecar-only JSON mutation.
+- Security/privacy: shared status returns only the AI-bound Context Pack payload and strips local answer/audit internals; shared proposal never creates ApprovedFacts.
+- Technical design: `propose_memory_at_path` and `get_context_request_status_at_path` are path-based Vault Core APIs used by the stdio MCP sidecar.
+- Review disposition: old sidecar-local memory proposal assembly and request-status Pack sanitization were removed after shared Core APIs landed.
 
 ## Independent Review Passes
 

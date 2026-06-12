@@ -152,6 +152,22 @@ pub struct VaultCoreContextPackResult {
   pub context_pack: Option<Value>,
 }
 
+pub struct VaultCoreMemoryProposalResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub status: String,
+  pub candidate_id: String,
+  pub source_id: String,
+  pub detected_sensitivity: String,
+}
+
+pub struct VaultCoreRequestStatusResult {
+  pub status: String,
+  pub request_id: String,
+  pub expires_at: Option<String>,
+  pub context_pack: Option<Value>,
+}
+
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -1079,12 +1095,7 @@ pub fn create_context_pack_request_at_path(
   approval_mode: Option<&str>,
 ) -> Result<VaultCoreContextPackResult, String> {
   let mut connection = open_vault_db_at_path(path)?;
-  let snapshot = load_vault_state_snapshot_from_connection(&connection)?;
-  let mut vault = snapshot
-    .payload
-    .as_deref()
-    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
-    .unwrap_or_else(empty_vault_json);
+  let mut vault = load_vault_json_from_connection(&connection)?;
   let (request_id, pack_id) = create_native_context_pack_request_in_connection(
     &connection,
     &mut vault,
@@ -1109,13 +1120,11 @@ pub fn create_context_pack_request_at_path(
     None
   };
 
-  let payload = vault.to_string();
-  let save_result = save_vault_state_payload(&mut connection, &payload, None)?;
-  let saved_snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
 
   Ok(VaultCoreContextPackResult {
-    payload: saved_snapshot.payload.unwrap_or(payload),
-    updated_at: save_result.updated_at,
+    payload,
+    updated_at,
     request_id,
     pack_id,
     request_status,
@@ -1123,6 +1132,158 @@ pub fn create_context_pack_request_at_path(
     max_sensitivity_included,
     confirmation_status,
     context_pack,
+  })
+}
+
+fn load_vault_json_from_connection(connection: &Connection) -> Result<Value, String> {
+  let snapshot = load_vault_state_snapshot_from_connection(connection)?;
+  Ok(snapshot
+    .payload
+    .as_deref()
+    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+    .unwrap_or_else(empty_vault_json))
+}
+
+fn save_vault_json_with_projection(
+  connection: &mut Connection,
+  vault: &Value,
+) -> Result<(String, Option<String>), String> {
+  let payload = vault.to_string();
+  let save_result = save_vault_state_payload(connection, &payload, None)?;
+  let saved_snapshot = load_vault_state_snapshot_from_connection(connection)?;
+  Ok((saved_snapshot.payload.unwrap_or(payload), save_result.updated_at))
+}
+
+pub fn propose_memory_at_path(
+  path: &Path,
+  client_id: &str,
+  client_name: &str,
+  origin: &str,
+  text: &str,
+) -> Result<VaultCoreMemoryProposalResult, String> {
+  let text = text.trim();
+  if text.is_empty() {
+    return Err("text is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let source_id = new_id("src");
+  let candidate_id = new_id("cand");
+  let sensitivity = detect_sensitivity(text).to_string();
+  let sanitized = sanitize_secret_material(text);
+  let source = json!({
+    "id": source_id,
+    "kind": "mcp_proposal",
+    "title": format!("{client_name} memory proposal"),
+    "origin": origin,
+    "body": sanitized,
+    "createdAt": now,
+    "capturedAt": now,
+    "defaultSensitivity": sensitivity,
+    "processingStatus": "ready",
+    "deletionState": "active"
+  });
+  let candidate_status = if sensitivity == "sensitive" || sensitivity == "secret_never_send" {
+    "blocked_sensitive"
+  } else {
+    "new"
+  };
+  let candidate = json!({
+    "id": candidate_id,
+    "sourceIds": [source_id],
+    "sourceChunkIds": [],
+    "proposedFactText": normalized_text(&sanitized),
+    "domain": classify_domain(text),
+    "candidateType": candidate_type(text),
+    "detectedSensitivity": sensitivity,
+    "confidence": "medium",
+    "reasonToRemember": "MCPクライアントから提案された生活文脈候補です。承認されるまでAIの確定文脈には使われません。",
+    "status": candidate_status,
+    "createdAt": now,
+    "createsFactIds": []
+  });
+
+  push_json_array(&mut vault, "sources", source);
+  push_json_array(&mut vault, "candidates", candidate);
+  touch_connector_in_vault(&mut vault, client_id, &now);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "memory_proposed",
+      "candidate",
+      &candidate_id,
+      &sensitivity,
+      json!({
+        "clientId": client_id,
+        "clientName": client_name,
+        "origin": origin,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreMemoryProposalResult {
+    payload,
+    updated_at,
+    status: "candidate_created".to_string(),
+    candidate_id,
+    source_id,
+    detected_sensitivity: sensitivity,
+  })
+}
+
+pub fn get_context_request_status_at_path(
+  path: &Path,
+  request_id: &str,
+) -> Result<VaultCoreRequestStatusResult, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let Some(request) = find_vault_item_by_id(&vault, "contextPackRequests", request_id) else {
+    return Ok(VaultCoreRequestStatusResult {
+      status: "not_found".to_string(),
+      request_id: request_id.to_string(),
+      expires_at: None,
+      context_pack: None,
+    });
+  };
+  let pack = vault
+    .get("contextPacks")
+    .and_then(Value::as_array)
+    .and_then(|packs| {
+      packs
+        .iter()
+        .find(|pack| str_field(pack, "requestId") == request_id)
+    })
+    .cloned();
+  let expires_at = str_field(&request, "expiresAt");
+  let confirmed = pack
+    .as_ref()
+    .map(|pack| str_field(pack, "confirmationStatus") == "confirmed")
+    .unwrap_or(false)
+    || str_field(&request, "status") == "fulfilled";
+  let expired = !confirmed && !expires_at.is_empty() && is_expired(&expires_at);
+
+  if confirmed {
+    return Ok(VaultCoreRequestStatusResult {
+      status: "fulfilled".to_string(),
+      request_id: request_id.to_string(),
+      expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+      context_pack: pack.as_ref().map(safe_context_pack_for_client),
+    });
+  }
+
+  Ok(VaultCoreRequestStatusResult {
+    status: if expired {
+      "expired".to_string()
+    } else {
+      str_field(&request, "status")
+    },
+    request_id: request_id.to_string(),
+    expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+    context_pack: None,
   })
 }
 
@@ -1607,6 +1768,23 @@ fn detect_sensitivity(text: &str) -> &'static str {
   }
 }
 
+fn candidate_type(text: &str) -> &'static str {
+  let lower = text.to_lowercase();
+  if contains_any(&lower, &["deadline", "due", "renew", "expires", "期限", "締切", "更新"]) {
+    "deadline"
+  } else if contains_any(&lower, &["must", "need to", "required", "submit", "notify", "必要", "提出", "連絡"]) {
+    "obligation"
+  } else if contains_any(&lower, &["tone", "preference", "好み", "口調"]) {
+    "preference"
+  } else if contains_any(&lower, &["goal", "priority", "目標", "優先"]) {
+    "goal"
+  } else if contains_any(&lower, &["moving", "move", "job change", "travel", "引っ越", "転職", "旅行"]) {
+    "life_event"
+  } else {
+    "note"
+  }
+}
+
 fn cross_domain_bridge_score(task: &str, domain: &str) -> i64 {
   if contains_any(task, &["job", "work", "employer", "転職", "勤務先", "仕事"])
     && ["contracts_and_policies", "procedures_and_obligations", "finance_and_benefits"].contains(&domain)
@@ -1640,6 +1818,30 @@ fn sensitivity_rank(sensitivity: &str) -> i64 {
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
   needles.iter().any(|needle| text.contains(needle))
+}
+
+fn sanitize_secret_material(text: &str) -> String {
+  let mut sanitized = Vec::new();
+  for token in text.split_whitespace() {
+    let lower = token.to_lowercase();
+    if lower.contains("password")
+      || lower.contains("token")
+      || lower.contains("secret")
+      || lower.contains("api_key")
+      || lower.contains("apikey")
+      || lower.contains("パスワード")
+      || lower.contains("秘密鍵")
+    {
+      sanitized.push("[REDACTED_SECRET]".to_string());
+    } else {
+      sanitized.push(token.to_string());
+    }
+  }
+  sanitized.join(" ")
+}
+
+fn normalized_text(text: &str) -> String {
+  text.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
 fn is_expired(value: &str) -> bool {
