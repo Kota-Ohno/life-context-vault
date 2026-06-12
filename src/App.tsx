@@ -2649,7 +2649,7 @@ function ConnectionsView({
                   Check
                 </button>
               </div>
-              {loginItemStatus?.plistPath && <span>{loginItemStatus.plistPath}</span>}
+              {loginItemStatus?.plistPath && <span>Startup item: {loginItemStatus.plistPath}</span>}
               {loginItemStatus?.backupPath && <span>Backup: {loginItemStatus.backupPath}</span>}
               {loginItemStatus?.lastError && <span>{loginItemStatus.lastError}</span>}
             </div>

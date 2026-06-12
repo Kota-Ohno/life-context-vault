@@ -109,6 +109,7 @@ Last updated: 2026-06-12
   - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
 - Added always-available AI Access operations:
   - Connections can install/remove a macOS LaunchAgent login item for Life Context Vault
+  - Startup item generation now supports macOS LaunchAgent, Windows Startup folder command, and Linux XDG autostart desktop entry paths
   - the login item starts only the app binary and does not persist Vault, MCP, or Context Pack bodies
   - a separate local runtime preference can auto-start Relay and Agent when the app opens
   - the UI makes login launch and AI Access auto-start distinct from Context Pack approval
@@ -213,7 +214,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Windows/Linux startup helpers and true headless/menu-bar background mode.
+- True headless/menu-bar background mode beyond the current cross-platform startup item helpers.
 - Hosted relay operations for the metadata-only state store: tenant isolation, backup policy, and deployment-specific rotation runbooks beyond the new retention controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
@@ -237,6 +238,7 @@ Last updated: 2026-06-12
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
+- Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
 - `npm run capture:build`
 - Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
@@ -419,6 +421,15 @@ Last updated: 2026-06-12
 - UX: Connections now leads with service status and direct controls, keeping manual commands as fallback.
 - Lifecycle: app-managed Relay and Agent are stopped by **Stop managed** and on app window close; external relays are observed but not killed or auto-attached.
 - Verification: bundled Relay and Agent launched from `Life Context Vault.app/Contents/MacOS` and served MCP `tools/list` through the Agent WebSocket path.
+
+### Cross-Platform Startup Helper Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, platform, and technical passes.
+- Product fit: accepted; AI Access can be restored after login on macOS, Windows, and Linux using the same Control Center command surface.
+- Security/privacy: accepted; startup payloads run only the app binary and do not embed Vault keys, Relay tokens, MCP payloads, Raw Sources, or Context Pack bodies.
+- Platform design: accepted; macOS keeps LaunchAgent, Windows uses the user's Startup folder `.cmd`, and Linux uses XDG autostart `.desktop`.
+- Technical design: accepted; existing Tauri command names remain stable while OS-specific path/payload generation is isolated in testable helpers.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
 
 ### First-Run AI Access UX Slice
 

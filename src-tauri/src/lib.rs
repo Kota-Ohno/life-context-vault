@@ -5374,6 +5374,55 @@ fn login_item_plist_for_path(label: &str, program_path: &PathBuf) -> String {
   )
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_login_item_command_for_path(program_path: &PathBuf) -> String {
+  let program_path = program_path.display().to_string().replace('"', "");
+  format!("@echo off\r\nstart \"\" \"{program_path}\"\r\n")
+}
+
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn desktop_entry_escape(value: &str) -> String {
+  value
+    .replace('\\', "\\\\")
+    .replace('"', "\\\"")
+    .replace('$', "\\$")
+    .replace('`', "\\`")
+}
+
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn linux_login_item_desktop_for_path(program_path: &PathBuf) -> String {
+  let program_path = desktop_entry_escape(&program_path.display().to_string());
+  format!(
+    r#"[Desktop Entry]
+Type=Application
+Name=Life Context Vault
+Comment=Start Life Context Vault Control Center at login
+Exec="{program_path}"
+Terminal=false
+X-GNOME-Autostart-enabled=true
+"#
+  )
+}
+
+fn login_item_payload_for_path(label: &str, program_path: &PathBuf) -> String {
+  #[cfg(target_os = "macos")]
+  {
+    return login_item_plist_for_path(label, program_path);
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    let _ = label;
+    return windows_login_item_command_for_path(program_path);
+  }
+
+  #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+  {
+    let _ = label;
+    linux_login_item_desktop_for_path(program_path)
+  }
+}
+
 fn login_item_plist_path() -> Result<PathBuf, String> {
   #[cfg(target_os = "macos")]
   {
@@ -5384,9 +5433,27 @@ fn login_item_plist_path() -> Result<PathBuf, String> {
       .join(format!("{LOGIN_ITEM_LABEL}.plist")));
   }
 
-  #[cfg(not(target_os = "macos"))]
+  #[cfg(target_os = "windows")]
   {
-    Err("Login item installation is currently implemented for macOS only.".to_string())
+    let appdata = env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
+    return Ok(PathBuf::from(appdata)
+      .join("Microsoft")
+      .join("Windows")
+      .join("Start Menu")
+      .join("Programs")
+      .join("Startup")
+      .join("Life Context Vault.cmd"));
+  }
+
+  #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+  {
+    let base = env::var("XDG_CONFIG_HOME")
+      .map(PathBuf::from)
+      .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
+      .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
+    Ok(base
+      .join("autostart")
+      .join("dev.life-context-vault.desktop"))
   }
 }
 
@@ -5431,10 +5498,10 @@ fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatu
     if enabled {
       match fs::read_to_string(&plist_path) {
         Ok(raw) => {
-          let expected_program = xml_escape(&program_path.display().to_string());
-          if !raw.contains(LOGIN_ITEM_LABEL) || !raw.contains(&expected_program) {
+          let expected_payload = login_item_payload_for_path(LOGIN_ITEM_LABEL, &program_path);
+          if raw != expected_payload {
             last_error = Some(
-              "Login item exists but points to a different app build; reinstall to update it."
+              "Startup item exists but points to a different app build; reinstall to update it."
                 .to_string(),
             );
           }
@@ -5457,18 +5524,62 @@ fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatu
 
   #[cfg(not(target_os = "macos"))]
   {
+    let startup_path = match login_item_plist_path() {
+      Ok(path) => path,
+      Err(error) => {
+        return LoginItemStatus {
+          supported: false,
+          enabled: false,
+          plist_path: None,
+          program_path: current_executable_path()
+            .ok()
+            .map(|path| path.display().to_string()),
+          label: LOGIN_ITEM_LABEL.to_string(),
+          backup_path: backup_path.map(|path| path.display().to_string()),
+          last_error: Some(error),
+        };
+      }
+    };
+    let program_path = match current_executable_path() {
+      Ok(path) => path,
+      Err(error) => {
+        return LoginItemStatus {
+          supported: true,
+          enabled: startup_path.exists(),
+          plist_path: Some(startup_path.display().to_string()),
+          program_path: None,
+          label: LOGIN_ITEM_LABEL.to_string(),
+          backup_path: backup_path.map(|path| path.display().to_string()),
+          last_error: Some(error),
+        };
+      }
+    };
+    let mut last_error = None;
+    let enabled = startup_path.exists();
+    if enabled {
+      match fs::read_to_string(&startup_path) {
+        Ok(raw) => {
+          let expected_payload = login_item_payload_for_path(LOGIN_ITEM_LABEL, &program_path);
+          if raw != expected_payload {
+            last_error = Some(
+              "Startup item exists but points to a different app build; reinstall to update it."
+                .to_string(),
+            );
+          }
+        }
+        Err(error) => {
+          last_error = Some(format!("failed to inspect startup item: {error}"));
+        }
+      }
+    }
     LoginItemStatus {
-      supported: false,
-      enabled: false,
-      plist_path: None,
-      program_path: current_executable_path()
-        .ok()
-        .map(|path| path.display().to_string()),
+      supported: true,
+      enabled,
+      plist_path: Some(startup_path.display().to_string()),
+      program_path: Some(program_path.display().to_string()),
       label: LOGIN_ITEM_LABEL.to_string(),
       backup_path: backup_path.map(|path| path.display().to_string()),
-      last_error: Some(
-        "Login item installation is currently implemented for macOS only.".to_string(),
-      ),
+      last_error,
     }
   }
 }
@@ -5550,49 +5661,64 @@ fn login_item_status() -> Result<LoginItemStatus, String> {
 
 #[tauri::command]
 fn install_login_item() -> Result<LoginItemStatus, String> {
-  let plist_path = login_item_plist_path()?;
+  let startup_path = login_item_plist_path()?;
   let program_path = current_executable_path()?;
-  let plist = login_item_plist_for_path(LOGIN_ITEM_LABEL, &program_path);
+  let payload = login_item_payload_for_path(LOGIN_ITEM_LABEL, &program_path);
 
-  if plist_path.exists() {
-    let existing = fs::read_to_string(&plist_path)
-      .map_err(|error| format!("failed to read login item plist: {error}"))?;
-    if existing == plist {
+  if startup_path.exists() {
+    let existing = fs::read_to_string(&startup_path)
+      .map_err(|error| format!("failed to read startup item: {error}"))?;
+    if existing == payload {
       return Ok(login_item_status_with_backup(None));
     }
   }
 
-  if let Some(parent) = plist_path.parent() {
+  if let Some(parent) = startup_path.parent() {
     fs::create_dir_all(parent)
-      .map_err(|error| format!("failed to create LaunchAgents directory: {error}"))?;
+      .map_err(|error| format!("failed to create startup item directory: {error}"))?;
   }
 
-  let backup_path = if plist_path.exists() {
-    let backup = plist_path.with_file_name(format!(
-      "{LOGIN_ITEM_LABEL}.lcv-backup-{}.plist",
+  let backup_path = if startup_path.exists() {
+    let file_name = startup_path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or("startup-item");
+    let backup = startup_path.with_file_name(format!(
+      "{file_name}.lcv-backup-{}",
       system_time_seconds(SystemTime::now())
     ));
-    fs::copy(&plist_path, &backup)
-      .map_err(|error| format!("failed to back up login item plist: {error}"))?;
+    fs::copy(&startup_path, &backup)
+      .map_err(|error| format!("failed to back up startup item: {error}"))?;
     Some(backup)
   } else {
     None
   };
 
-  let temp_path = plist_path.with_file_name(format!("{LOGIN_ITEM_LABEL}.plist.lcv.tmp"));
-  fs::write(&temp_path, plist)
-    .map_err(|error| format!("failed to write login item temp file: {error}"))?;
-  fs::rename(&temp_path, &plist_path)
-    .map_err(|error| format!("failed to install login item plist: {error}"))?;
+  let file_name = startup_path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("startup-item");
+  let temp_path = startup_path.with_file_name(format!("{file_name}.lcv.tmp"));
+  fs::write(&temp_path, payload)
+    .map_err(|error| format!("failed to write startup item temp file: {error}"))?;
+  #[cfg(target_os = "windows")]
+  {
+    if startup_path.exists() {
+      fs::remove_file(&startup_path)
+        .map_err(|error| format!("failed to replace startup item: {error}"))?;
+    }
+  }
+  fs::rename(&temp_path, &startup_path)
+    .map_err(|error| format!("failed to install startup item: {error}"))?;
   Ok(login_item_status_with_backup(backup_path))
 }
 
 #[tauri::command]
 fn uninstall_login_item() -> Result<LoginItemStatus, String> {
-  let plist_path = login_item_plist_path()?;
-  if plist_path.exists() {
-    fs::remove_file(&plist_path)
-      .map_err(|error| format!("failed to remove login item plist: {error}"))?;
+  let startup_path = login_item_plist_path()?;
+  if startup_path.exists() {
+    fs::remove_file(&startup_path)
+      .map_err(|error| format!("failed to remove startup item: {error}"))?;
   }
   Ok(login_item_status_with_backup(None))
 }
@@ -8682,5 +8808,31 @@ mod tests {
     );
 
     assert!(plist.contains("Life &amp; Context &lt;Vault&gt;.app"));
+  }
+
+  #[test]
+  fn windows_startup_command_runs_only_the_current_app_binary() {
+    let command = windows_login_item_command_for_path(&PathBuf::from(
+      r#"C:\Users\Kota\AppData\Local\Life Context Vault\life-context-vault.exe"#,
+    ));
+
+    assert!(command.contains("start \"\""));
+    assert!(command.contains("life-context-vault.exe"));
+    assert!(!command.contains("LCV_VAULT_DB_KEY"));
+    assert!(!command.contains("ContextPack"));
+  }
+
+  #[test]
+  fn linux_desktop_entry_runs_only_the_current_app_binary() {
+    let desktop = linux_login_item_desktop_for_path(&PathBuf::from(
+      "/opt/Life Context Vault/life-context-vault",
+    ));
+
+    assert!(desktop.contains("[Desktop Entry]"));
+    assert!(desktop.contains("Type=Application"));
+    assert!(desktop.contains("Exec=\"/opt/Life Context Vault/life-context-vault\""));
+    assert!(desktop.contains("X-GNOME-Autostart-enabled=true"));
+    assert!(!desktop.contains("LCV_VAULT_DB_KEY"));
+    assert!(!desktop.contains("ContextPack"));
   }
 }
