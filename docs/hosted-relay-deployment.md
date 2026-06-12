@@ -106,7 +106,7 @@ The local desktop Agent then connects to the returned `agentWebSocketUrl`. Once 
 External AI -> HTTPS /mcp -> Hosted Relay -> local Agent WebSocket -> local lcv-mcp -> encrypted local Vault
 ```
 
-In the desktop Control Center, open **Connections -> Hosted Relay Agent**, paste the returned `agentWebSocketUrl`, and click **Hosted RelayへAgent接続**. The app accepts only the exact hosted path `wss://<relay-host>/agent/ws?pairing_code=...`, starts the local `lcv-agent` with WSS support, clears the pairing URL from the UI after launch, and does not persist it. The Relay URL shown to AI clients is the same public origin with `/mcp`, for example `https://relay.example.com/mcp`. Confirm the Agent pairing on the hosted relay's `/agent/status` or operator dashboard before marking the connector ready.
+In the desktop Control Center, open **Connections -> Hosted Relay Agent**, paste the returned `agentWebSocketUrl`, and click **Hosted RelayへAgent接続**. The app accepts only the exact hosted path `wss://<relay-host>/agent/ws?pairing_code=...`, starts the local `lcv-agent` with WSS support, clears the pairing URL from the UI after launch, and does not persist it. The Relay URL shown to AI clients is the same public origin with `/mcp`, for example `https://relay.example.com/mcp`. After `connect_agent` accepts the pairing code, Relay sends an `agent_ready` message; only then does the Agent write fresh local `agent-status.json` metadata without the pairing secret. Control Center treats Hosted as ready only when that file reports `connected` for the matching Relay base URL, current Agent process id, and per-spawn status token. Operators can also confirm pairing on the hosted relay's `/agent/status` or dashboard.
 
 For manual operation, run the Agent with the returned URL:
 
@@ -116,6 +116,8 @@ LCV_MCP_COMMAND="$PWD/src-tauri/target/release/lcv-mcp" \
 LCV_VAULT_DB_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3" \
 src-tauri/target/release/lcv-agent
 ```
+
+The Control Center-managed launch also sets a private `LCV_AGENT_STATUS_PATH` and per-spawn `LCV_AGENT_STATUS_TOKEN` so the UI can bind readiness to its own child process. Manual operation should use the relay's `/agent/status` or operator dashboard for readiness.
 
 ## Rotation Runbook
 

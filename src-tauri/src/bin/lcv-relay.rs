@@ -45,6 +45,7 @@ const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
   &["2025-03-26", "2025-06-18", "2025-11-25"];
 const RELAY_CORS_ALLOW_HEADERS: &str =
   "Authorization, Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, Last-Event-ID";
+const AGENT_PING_INTERVAL_SECONDS: u64 = 10;
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
   "memory.propose",
@@ -975,11 +976,13 @@ impl RelayState {
     Ok(connected_session)
   }
 
-  fn disconnect_agent(&self) {
+  fn disconnect_agent_if_pairing(&self, pairing_id: &str) {
     let mut inner = self.inner.lock().expect("relay state");
-    inner.agent_sender = None;
-    inner.agent_pairing_id = None;
-    inner.agent_connected_at = None;
+    if inner.agent_pairing_id.as_deref() == Some(pairing_id) {
+      inner.agent_sender = None;
+      inner.agent_pairing_id = None;
+      inner.agent_connected_at = None;
+    }
   }
 
   fn agent_status(&self) -> Value {
@@ -2455,6 +2458,11 @@ fn handle_agent_websocket(stream: TcpStream, state: &RelayState) -> Result<(), S
   .map_err(|error| format!("failed to accept agent websocket: {error}"))?;
 
   let uri = request_uri.lock().expect("request uri").clone();
+  let path = uri.split_once('?').map(|(path, _)| path).unwrap_or(uri.as_str());
+  if path != "/agent/ws" {
+    let _ = websocket.close(None);
+    return Ok(());
+  }
   let query = uri
     .split_once('?')
     .map(|(_, query)| parse_query(query))
@@ -2473,16 +2481,37 @@ fn handle_agent_websocket(stream: TcpStream, state: &RelayState) -> Result<(), S
     }
   };
   eprintln!("Life Context Vault agent paired: {}", session.id);
+  let _disconnect = AgentDisconnectGuard {
+    state,
+    pairing_id: session.id.clone(),
+  };
+  websocket
+    .send(Message::Text(json!({
+      "type": "agent_ready",
+      "pairingId": session.id
+    }).to_string().into()))
+    .map_err(|error| format!("failed to write agent ready message: {error}"))?;
   websocket
     .get_mut()
     .set_read_timeout(Some(Duration::from_millis(200)))
     .map_err(|error| format!("failed to set agent websocket timeout: {error}"))?;
+  let mut last_agent_ping_at = SystemTime::now();
 
   loop {
     while let Ok(outbound) = outbound_rx.try_recv() {
       websocket
         .send(Message::Text(outbound.into()))
-        .map_err(|error| format!("failed to write agent websocket message: {error}"))?;
+          .map_err(|error| format!("failed to write agent websocket message: {error}"))?;
+    }
+    if SystemTime::now()
+      .duration_since(last_agent_ping_at)
+      .unwrap_or_default()
+      >= Duration::from_secs(AGENT_PING_INTERVAL_SECONDS)
+    {
+      websocket
+        .send(Message::Ping(Vec::new().into()))
+        .map_err(|error| format!("failed to write agent ping: {error}"))?;
+      last_agent_ping_at = SystemTime::now();
     }
 
     match websocket.read() {
@@ -2500,8 +2529,18 @@ fn handle_agent_websocket(stream: TcpStream, state: &RelayState) -> Result<(), S
       Err(error) => return Err(format!("agent websocket read failed: {error}")),
     }
   }
-  state.disconnect_agent();
   Ok(())
+}
+
+struct AgentDisconnectGuard<'a> {
+  state: &'a RelayState,
+  pairing_id: String,
+}
+
+impl Drop for AgentDisconnectGuard<'_> {
+  fn drop(&mut self) {
+    self.state.disconnect_agent_if_pairing(&self.pairing_id);
+  }
 }
 
 fn handle_agent_message(text: &str, state: &RelayState) {
@@ -2532,7 +2571,20 @@ fn is_agent_websocket_request(stream: &TcpStream) -> Result<bool, String> {
     .peek(&mut buffer)
     .map_err(|error| format!("failed to peek request: {error}"))?;
   let preview = String::from_utf8_lossy(&buffer[..len]);
-  Ok(preview.starts_with("GET /agent/ws") && preview.to_ascii_lowercase().contains("upgrade: websocket"))
+  Ok(is_agent_websocket_request_preview(&preview))
+}
+
+fn is_agent_websocket_request_preview(preview: &str) -> bool {
+  let request_target = preview
+    .lines()
+    .next()
+    .and_then(|line| line.split_whitespace().nth(1))
+    .unwrap_or_default();
+  let path = request_target
+    .split_once('?')
+    .map(|(path, _)| path)
+    .unwrap_or(request_target);
+  path == "/agent/ws" && preview.to_ascii_lowercase().contains("upgrade: websocket")
 }
 
 #[derive(Clone, Debug)]
@@ -3906,6 +3958,19 @@ mod tests {
       .and_then(Value::as_str)
       .unwrap_or_default()
       .starts_with("ws://127.0.0.1:8765/agent/ws?pairing_code="));
+  }
+
+  #[test]
+  fn agent_websocket_detection_requires_exact_agent_ws_path() {
+    assert!(is_agent_websocket_request_preview(
+      "GET /agent/ws?pairing_code=abc HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
+    ));
+    assert!(!is_agent_websocket_request_preview(
+      "GET /agent/ws-extra?pairing_code=abc HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
+    ));
+    assert!(!is_agent_websocket_request_preview(
+      "GET /agent/ws/extra?pairing_code=abc HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
+    ));
   }
 
   #[test]

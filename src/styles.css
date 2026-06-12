@@ -1190,6 +1190,10 @@ button:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.hosted-relay-status strong {
+  overflow-wrap: anywhere;
+}
+
 .relay-preview {
   padding: 12px;
   border: 1px solid #e0e5dd;

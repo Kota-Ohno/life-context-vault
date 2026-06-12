@@ -5,7 +5,7 @@ use base64::{
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
 use std::{
@@ -47,12 +47,16 @@ const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
+const AGENT_STATUS_FRESH_SECONDS: u64 = 30;
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
   agent: Option<Child>,
   pairing_code: Option<String>,
   external_relay_base_url: Option<String>,
+  agent_status_path: Option<PathBuf>,
+  agent_status_token: Option<String>,
+  agent_process_id: Option<u32>,
   relay_token: String,
   handoff_secret: String,
   last_error: Option<String>,
@@ -65,6 +69,9 @@ impl Default for AiAccessSupervisor {
       agent: None,
       pairing_code: None,
       external_relay_base_url: None,
+      agent_status_path: None,
+      agent_status_token: None,
+      agent_process_id: None,
       relay_token: random_local_token(),
       handoff_secret: random_local_token(),
       last_error: None,
@@ -106,8 +113,21 @@ struct AiAccessServiceStatus {
   mcp_server_url: String,
   relay_state_status_url: String,
   relay_mode: String,
+  agent_runtime_status: Option<AgentRuntimeStatus>,
   pairing_code: Option<String>,
   last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRuntimeStatus {
+  state: String,
+  relay_base_url: Option<String>,
+  updated_at: Option<u64>,
+  last_connected_at: Option<u64>,
+  last_error: Option<String>,
+  status_token: Option<String>,
+  process_id: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -473,6 +493,10 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
   vault_db_path(app).map(|path| path.with_file_name("relay-state.json"))
+}
+
+fn agent_status_path(app: &AppHandle) -> Result<PathBuf, String> {
+  vault_db_path(app).map(|path| path.with_file_name("agent-status.json"))
 }
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
@@ -6431,6 +6455,41 @@ fn stop_child(child: &mut Option<Child>) {
   }
 }
 
+fn clear_supervisor_agent_status(supervisor: &mut AiAccessSupervisor) {
+  if let Some(path) = supervisor.agent_status_path.take() {
+    let _ = fs::remove_file(path);
+  }
+  supervisor.agent_status_token = None;
+  supervisor.agent_process_id = None;
+}
+
+fn read_agent_runtime_status(path: &Path) -> Option<AgentRuntimeStatus> {
+  fs::read_to_string(path)
+    .ok()
+    .and_then(|content| serde_json::from_str::<AgentRuntimeStatus>(&content).ok())
+}
+
+fn agent_runtime_status_matches_relay(
+  status: &AgentRuntimeStatus,
+  relay_url: &str,
+  expected_token: Option<&str>,
+  expected_process_id: Option<u32>,
+  now_seconds: u64,
+) -> bool {
+  status.state == "connected"
+    && status
+      .relay_base_url
+      .as_deref()
+      .is_some_and(|base_url| base_url == relay_url)
+    && expected_token.is_some()
+    && status.status_token.as_deref() == expected_token
+    && expected_process_id.is_some()
+    && status.process_id == expected_process_id
+    && status
+      .updated_at
+      .is_some_and(|updated_at| now_seconds.saturating_sub(updated_at) <= AGENT_STATUS_FRESH_SECONDS)
+}
+
 fn local_relay_json(method: &str, path: &str, body: Option<&str>) -> Result<Value, String> {
   let body = body.unwrap_or("");
   let mut stream = TcpStream::connect(LOCAL_RELAY_BIND)
@@ -6644,11 +6703,16 @@ fn validate_agent_websocket_url(url: &str) -> Result<String, String> {
   if path != "agent/ws" {
     return Err("Agent WebSocket URL must point exactly to /agent/ws.".to_string());
   }
-  let has_pairing_code = query
-    .split('&')
-    .any(|part| part.strip_prefix("pairing_code=").is_some_and(|value| !value.is_empty()));
-  if !has_pairing_code {
+  let mut query_parts = query.split('&');
+  let Some(first_query_part) = query_parts.next() else {
     return Err("Agent WebSocket URL must include a non-empty pairing_code query parameter.".to_string());
+  };
+  if query_parts.next().is_some()
+    || !first_query_part
+      .strip_prefix("pairing_code=")
+      .is_some_and(|value| !value.is_empty())
+  {
+    return Err("Agent WebSocket URL must include only a non-empty pairing_code query parameter.".to_string());
   }
   Ok(trimmed.to_string())
 }
@@ -6677,6 +6741,23 @@ fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStat
   let relay_url = external_base_url
     .clone()
     .unwrap_or_else(|| LOCAL_RELAY_BASE_URL.to_string());
+  let agent_runtime_status = supervisor
+    .agent_status_path
+    .as_deref()
+    .and_then(read_agent_runtime_status);
+  let hosted_agent_connected = using_external_relay
+    && agent_managed_running
+    && agent_runtime_status
+      .as_ref()
+      .is_some_and(|status| {
+        agent_runtime_status_matches_relay(
+          status,
+          &relay_url,
+          supervisor.agent_status_token.as_deref(),
+          supervisor.agent_process_id,
+          system_time_seconds(SystemTime::now()),
+        )
+      });
   let relay_mode = if relay_managed_running {
     "local_managed"
   } else if using_external_relay {
@@ -6690,12 +6771,13 @@ fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStat
     managed_by_app: true,
     relay_managed_running,
     agent_managed_running,
-    relay_reachable: if using_external_relay { false } else { local_relay_reachable },
-    agent_connected: if using_external_relay { false } else { local_agent_connected },
+    relay_reachable: if using_external_relay { hosted_agent_connected } else { local_relay_reachable },
+    agent_connected: if using_external_relay { hosted_agent_connected } else { local_agent_connected },
     relay_url: relay_url.clone(),
     mcp_server_url: format!("{relay_url}/mcp"),
     relay_state_status_url: format!("{relay_url}/relay/state"),
     relay_mode: relay_mode.to_string(),
+    agent_runtime_status,
     pairing_code: supervisor.pairing_code.clone(),
     last_error: supervisor.last_error.clone(),
   }
@@ -6708,6 +6790,7 @@ fn stop_managed_ai_access(app: &AppHandle) {
   };
   stop_child(&mut supervisor.agent);
   stop_child(&mut supervisor.relay);
+  clear_supervisor_agent_status(&mut supervisor);
   supervisor.pairing_code = None;
   supervisor.external_relay_base_url = None;
 }
@@ -6816,19 +6899,25 @@ fn spawn_relay(app: &AppHandle, relay_token: &str, handoff_secret: &str) -> Resu
     .map_err(|error| format!("failed to start local relay at {}: {error}", relay_command.display()))
 }
 
-fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<Child, String> {
+fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<(Child, PathBuf, String), String> {
   let vault_path = vault_db_path(app)?;
+  let status_path = agent_status_path(app)?;
+  let status_token = random_local_token();
+  let _ = fs::remove_file(&status_path);
   let agent_command = mcp_stdio::resolve_sibling_binary("lcv-agent");
   let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
   Command::new(&agent_command)
     .env("LCV_AGENT_RELAY_WS", agent_websocket_url)
-    .env("LCV_AGENT_RECONNECT", "1")
+    .env("LCV_AGENT_RECONNECT", "0")
+    .env("LCV_AGENT_STATUS_PATH", &status_path)
+    .env("LCV_AGENT_STATUS_TOKEN", &status_token)
     .env("LCV_MCP_COMMAND", mcp_command)
     .env("LCV_VAULT_DB_PATH", vault_path)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .spawn()
+    .map(|child| (child, status_path, status_token))
     .map_err(|error| format!("failed to start local agent at {}: {error}", agent_command.display()))
 }
 
@@ -8015,6 +8104,7 @@ fn start_ai_access_services(
     if refresh_child(&mut supervisor.agent) {
       stop_child(&mut supervisor.agent);
     }
+    clear_supervisor_agent_status(&mut supervisor);
     let pairing = local_relay_json("POST", "/pairing/start", None).map_err(|error| {
       supervisor.last_error = Some(error.clone());
       error
@@ -8030,10 +8120,15 @@ fn start_ai_access_services(
       .ok_or_else(|| "relay pairing response did not include agentWebSocketUrl".to_string())?
       .to_string();
     supervisor.pairing_code = Some(pairing_code);
-    supervisor.agent = Some(spawn_agent(&app, &agent_websocket_url).map_err(|error| {
+    let (agent, status_path, status_token) = spawn_agent(&app, &agent_websocket_url).map_err(|error| {
       supervisor.last_error = Some(error.clone());
       error
-    })?);
+    })?;
+    let agent_process_id = agent.id();
+    supervisor.agent = Some(agent);
+    supervisor.agent_status_path = Some(status_path);
+    supervisor.agent_status_token = Some(status_token);
+    supervisor.agent_process_id = Some(agent_process_id);
     if !wait_for_condition(agent_connected) {
       let error = "local agent did not connect to relay".to_string();
       supervisor.last_error = Some(error.clone());
@@ -8060,18 +8155,24 @@ fn start_ai_access_agent_for_relay(
 
   stop_child(&mut supervisor.agent);
   stop_child(&mut supervisor.relay);
+  clear_supervisor_agent_status(&mut supervisor);
   supervisor.pairing_code = None;
   supervisor.external_relay_base_url = None;
-  let agent = spawn_agent(&app, &validated_url).map_err(|error| {
+  let (agent, status_path, status_token) = spawn_agent(&app, &validated_url).map_err(|error| {
     supervisor.last_error = Some(error.clone());
     error
   })?;
+  let agent_process_id = agent.id();
   supervisor.agent = Some(agent);
+  supervisor.agent_status_path = Some(status_path);
+  supervisor.agent_status_token = Some(status_token);
+  supervisor.agent_process_id = Some(agent_process_id);
 
   thread::sleep(Duration::from_millis(150));
   if !refresh_child(&mut supervisor.agent) {
     let error = "hosted relay agent exited immediately; check the pairing URL and relay TLS configuration".to_string();
     supervisor.external_relay_base_url = None;
+    clear_supervisor_agent_status(&mut supervisor);
     supervisor.last_error = Some(error.clone());
     return Err(error);
   }
@@ -8090,6 +8191,7 @@ fn stop_ai_access_services(
     .map_err(|_| "failed to lock AI access supervisor".to_string())?;
   stop_child(&mut supervisor.agent);
   stop_child(&mut supervisor.relay);
+  clear_supervisor_agent_status(&mut supervisor);
   supervisor.pairing_code = None;
   supervisor.external_relay_base_url = None;
   supervisor.last_error = None;
@@ -11498,12 +11600,73 @@ mod tests {
     assert!(validate_agent_websocket_url("ws://relay.example.com/agent/ws?pairing_code=secret").is_err());
     assert!(validate_agent_websocket_url("https://relay.example.com/agent/ws?pairing_code=secret").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=secret&token=extra").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws").is_err());
     assert!(validate_agent_websocket_url("wss://user@relay.example.com/agent/ws?pairing_code=secret").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/prefix/agent/ws?pairing_code=secret").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws-extra?pairing_code=secret").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=secret#fragment").is_err());
     assert!(validate_agent_websocket_url("wss://relay.example.com/other?pairing_code=secret").is_err());
+  }
+
+  #[test]
+  fn hosted_agent_runtime_status_must_match_relay_and_connected_state() {
+    let status = AgentRuntimeStatus {
+      state: "connected".to_string(),
+      relay_base_url: Some("https://relay.example.com".to_string()),
+      updated_at: Some(1),
+      last_connected_at: Some(1),
+      last_error: None,
+      status_token: Some("status-token".to_string()),
+      process_id: Some(42),
+    };
+    assert!(agent_runtime_status_matches_relay(
+      &status,
+      "https://relay.example.com",
+      Some("status-token"),
+      Some(42),
+      10
+    ));
+
+    let mut disconnected = status.clone();
+    disconnected.state = "disconnected".to_string();
+    assert!(!agent_runtime_status_matches_relay(
+      &disconnected,
+      "https://relay.example.com",
+      Some("status-token"),
+      Some(42),
+      10
+    ));
+
+    let mut wrong_relay = status.clone();
+    wrong_relay.relay_base_url = Some("https://other.example.com".to_string());
+    assert!(!agent_runtime_status_matches_relay(
+      &wrong_relay,
+      "https://relay.example.com",
+      Some("status-token"),
+      Some(42),
+      10
+    ));
+
+    let mut wrong_token = status.clone();
+    wrong_token.status_token = Some("other-token".to_string());
+    assert!(!agent_runtime_status_matches_relay(
+      &wrong_token,
+      "https://relay.example.com",
+      Some("status-token"),
+      Some(42),
+      10
+    ));
+
+    let mut stale = status;
+    stale.updated_at = Some(1);
+    assert!(!agent_runtime_status_matches_relay(
+      &stale,
+      "https://relay.example.com",
+      Some("status-token"),
+      Some(42),
+      AGENT_STATUS_FRESH_SECONDS + 2
+    ));
   }
 
   #[test]

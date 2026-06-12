@@ -150,6 +150,17 @@ export async function detectNativeLegacyOfficeProviderCandidates(): Promise<Nati
 }
 
 export type AiAccessRelayMode = "local_managed" | "hosted_agent" | "local_external" | "offline" | "unknown";
+export type AgentRuntimeState = "connecting" | "connected" | "disconnected" | "unknown";
+
+export interface AgentRuntimeStatus {
+  state: AgentRuntimeState;
+  relayBaseUrl: string | null;
+  updatedAt: number | null;
+  lastConnectedAt: number | null;
+  lastError: string | null;
+  statusToken: string | null;
+  processId: number | null;
+}
 
 export interface AiAccessServiceStatus {
   managedByApp: boolean;
@@ -161,6 +172,7 @@ export interface AiAccessServiceStatus {
   mcpServerUrl: string;
   relayStateStatusUrl: string;
   relayMode: AiAccessRelayMode;
+  agentRuntimeStatus: AgentRuntimeStatus | null;
   pairingCode: string | null;
   lastError: string | null;
 }
