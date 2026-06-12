@@ -54,6 +54,11 @@ Last updated: 2026-06-12
   - Local MCP `life_context.request_context_pack` now calls the same Vault Core path instead of maintaining a separate JSON-snapshot Pack builder
   - native generation includes source snippets only as approved Fact text, never Raw Source body text
   - native generation records policy-limited, sensitive-context, stale, low-confidence, and source-deleted warnings where applicable
+- Added Rust-owned Source ingestion path for the Tauri Control Center:
+  - `add_native_source_with_candidates` saves background setup, manual notes, and text uploads through Vault Core when Desktop storage is available
+  - Source ingestion creates Raw Sources and MemoryCandidates only; it does not create ApprovedFacts
+  - Source ingestion writes through the encrypted Vault save path so normalized `sources`, `source_chunks`, and `memory_candidates` stay in sync
+  - secret redaction now removes adjacent secret values in both native and browser fallback extraction paths
 - Added SQLCipher-backed local database encryption:
   - macOS Keychain-managed Vault key by default
   - `LCV_VAULT_DB_KEY` override for CI and smoke tests
@@ -137,7 +142,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD beyond the current native Context Pack generation/search/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for app-side candidate approval, passive capture, and policy updates beyond the current native Context Pack/source/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -165,6 +170,7 @@ Last updated: 2026-06-12
 - Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
+- Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
@@ -201,7 +207,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Context Pack generation, MCP memory proposal, and MCP request status are present, while app-side document/manual CRUD still uses the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Context Pack generation, MCP memory proposal, and MCP request status are present, while app-side candidate approval/passive capture/policy updates still use the JSON snapshot projected into tables.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -270,7 +276,15 @@ Last updated: 2026-06-12
 - Security/privacy: native tests cover ApprovedFact-only inclusion, unapproved Candidate exclusion, Raw Source body exclusion from snippets, and sensitivity-ceiling exclusions.
 - Technical design: ranking now reads normalized SQLite facts and sources, then writes the request and pack back through the encrypted Vault save path so projection state remains current.
 - Review disposition: a DB-read error in source-deleted warning generation was initially swallowed; fixed to propagate the error instead of silently omitting the warning.
-- Follow-up: app-side document/manual Source ingestion and browser capture should continue moving toward shared Vault Core CRUD.
+- Follow-up: app-side candidate approval, passive capture, and policy updates should continue moving toward shared Vault Core CRUD.
+
+### Native Source Ingestion Slice
+
+- Product fit: first-run background setup, manual notes, and text uploads now use the same Vault Core write boundary that everyday AI integrations rely on, so new users see one consistent Source -> Inbox -> ApprovedFact model.
+- UX: Sources now explicitly separates Source/candidate storage from AI-bound Context Pack sharing before the user submits a note or document.
+- Security/privacy: native and browser fallback redaction now remove adjacent secret values, and Source ingestion never creates ApprovedFacts automatically.
+- Technical design: `add_source_with_candidates_at_path` is the path-based Vault Core API behind the Tauri `add_native_source_with_candidates` command.
+- Review disposition: the first native redaction pass collapsed line breaks and reduced multi-line documents to one candidate; fixed by preserving line boundaries during Source-body sanitization.
 
 ### Shared MCP Context Pack Core Slice
 

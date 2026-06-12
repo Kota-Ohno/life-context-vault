@@ -1,6 +1,6 @@
 # Life Context Vault Architecture
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 ## Architecture Goal
 
@@ -118,6 +118,8 @@ Vault Core is the only component allowed to create ApprovedFact records.
 
 Source ingestion handles user-supplied background, conversations, notes, and files.
 
+In the desktop product path, Source ingestion enters through typed Vault Core commands, not browser-local JSON mutation. The command boundary returns the updated Vault snapshot plus Source and Candidate ids, while the UI remains responsible for review flow and user-facing copy.
+
 Initial supported input classes:
 
 - Guided onboarding answers
@@ -130,6 +132,14 @@ Initial supported input classes:
 - Common office documents if extraction support is available
 
 The ingestion pipeline stores the original file, structured answer, conversation excerpt, or local file reference. It creates a RawSource record, extracts text or structured fields, then produces MemoryCandidate records.
+
+Initial command behavior:
+
+- Save a RawSource with provenance, origin, sensitivity, and deletion state.
+- Preserve line boundaries for candidate extraction after secret redaction.
+- Generate MemoryCandidates only; never create ApprovedFacts directly.
+- Redact secret indicators and adjacent secret values before persistence.
+- Sync normalized `sources`, `source_chunks`, and `memory_candidates` tables before the command returns.
 
 ### Extraction Pipeline
 

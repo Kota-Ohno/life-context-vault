@@ -45,6 +45,24 @@ describe("vault flow", () => {
     expect(state.candidates[0].status).toBe("approved");
   });
 
+  it("redacts secret values from source text and generated candidates", () => {
+    const state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Secret note",
+      body: "API key sk-test-12345 should not be stored.\nPassword hunter2"
+    });
+
+    expect(state.sources[0].body).not.toContain("sk-test-12345");
+    expect(state.sources[0].body).not.toContain("hunter2");
+    expect(state.sources[0].defaultSensitivity).toBe("secret_never_send");
+    expect(state.candidates[0].proposedFactText).not.toContain("sk-test-12345");
+    expect(state.candidates[0].proposedFactText).not.toContain("hunter2");
+    expect(state.candidates[0].detectedSensitivity).toBe("secret_never_send");
+    expect(state.candidates[0].status).toBe("blocked_sensitive");
+    expect(state.facts).toHaveLength(0);
+  });
+
   it("requires confirmation when context pack includes consequential private context", () => {
     let state = addSourceWithCandidates(createEmptyVault(), {
       kind: "document",

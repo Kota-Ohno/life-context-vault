@@ -140,6 +140,17 @@ struct NativeContextPackBuildResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSourceIngestResult {
+  payload: String,
+  updated_at: Option<String>,
+  source_id: String,
+  candidate_ids: Vec<String>,
+  detected_sensitivity: String,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -158,6 +169,14 @@ pub struct VaultCoreMemoryProposalResult {
   pub status: String,
   pub candidate_id: String,
   pub source_id: String,
+  pub detected_sensitivity: String,
+}
+
+pub struct VaultCoreSourceIngestResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub source_id: String,
+  pub candidate_ids: Vec<String>,
   pub detected_sensitivity: String,
 }
 
@@ -1235,6 +1254,108 @@ pub fn propose_memory_at_path(
   })
 }
 
+pub fn add_source_with_candidates_at_path(
+  path: &Path,
+  kind: &str,
+  origin: &str,
+  title: &str,
+  body: &str,
+) -> Result<VaultCoreSourceIngestResult, String> {
+  let body = body.trim();
+  if body.is_empty() {
+    return Err("body is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let source_id = new_id("src");
+  let detected_sensitivity = detect_sensitivity(body).to_string();
+  let sanitized = sanitize_source_body(body);
+  let normalized_title = normalized_text(title);
+  let title = if normalized_title.trim().is_empty() {
+    "Untitled source".to_string()
+  } else {
+    normalized_title
+  };
+  let source_title = title.clone();
+  let kind = source_kind(kind);
+  let origin = source_origin(origin);
+  let source = json!({
+    "id": source_id,
+    "kind": kind,
+    "title": title,
+    "origin": origin,
+    "body": sanitized,
+    "createdAt": now,
+    "capturedAt": now,
+    "defaultSensitivity": detected_sensitivity,
+    "processingStatus": "ready",
+    "deletionState": "active"
+  });
+  let candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  let candidate_ids = candidates
+    .iter()
+    .map(|candidate| str_field(candidate, "id"))
+    .collect::<Vec<_>>();
+
+  push_json_array(&mut vault, "sources", source);
+  for candidate in candidates {
+    push_json_array(&mut vault, "candidates", candidate);
+  }
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "source_added",
+      "source",
+      &source_id,
+      &detected_sensitivity,
+      json!({
+        "title": source_title,
+        "kind": kind,
+        "origin": origin,
+        "candidateCount": candidate_ids.len(),
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  for candidate_id in &candidate_ids {
+    let sensitivity = vault
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|items| {
+        items
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == *candidate_id)
+      })
+      .map(|candidate| str_field(candidate, "detectedSensitivity"))
+      .unwrap_or_else(|| detected_sensitivity.clone());
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "candidate_generated",
+        "candidate",
+        candidate_id,
+        &sensitivity,
+        json!({
+          "sourceId": source_id,
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceIngestResult {
+    payload,
+    updated_at,
+    source_id,
+    candidate_ids,
+    detected_sensitivity,
+  })
+}
+
 pub fn get_context_request_status_at_path(
   path: &Path,
   request_id: &str,
@@ -1821,27 +1942,285 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 }
 
 fn sanitize_secret_material(text: &str) -> String {
+  let tokens = text.split_whitespace().collect::<Vec<_>>();
   let mut sanitized = Vec::new();
-  for token in text.split_whitespace() {
+  let mut index = 0;
+  while index < tokens.len() {
+    let token = tokens[index];
     let lower = token.to_lowercase();
-    if lower.contains("password")
-      || lower.contains("token")
-      || lower.contains("secret")
-      || lower.contains("api_key")
-      || lower.contains("apikey")
-      || lower.contains("パスワード")
-      || lower.contains("秘密鍵")
-    {
+    let next_lower = tokens
+      .get(index + 1)
+      .map(|next| next.to_lowercase())
+      .unwrap_or_default();
+
+    if lower == "api" && next_lower.starts_with("key") {
       sanitized.push("[REDACTED_SECRET]".to_string());
+      sanitized.push("[REDACTED_SECRET]".to_string());
+      if index + 2 < tokens.len() {
+        sanitized.push("[REDACTED_SECRET]".to_string());
+        index += 3;
+      } else {
+        index += 2;
+      }
+      continue;
+    }
+
+    if is_secret_indicator(&lower) {
+      sanitized.push("[REDACTED_SECRET]".to_string());
+      if index + 1 < tokens.len() {
+        sanitized.push("[REDACTED_SECRET]".to_string());
+        index += 2;
+      } else {
+        index += 1;
+      }
     } else {
       sanitized.push(token.to_string());
+      index += 1;
     }
   }
   sanitized.join(" ")
 }
 
+fn sanitize_source_body(text: &str) -> String {
+  text.lines()
+    .map(sanitize_secret_material)
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn is_secret_indicator(lower: &str) -> bool {
+  lower.contains("password")
+    || lower.contains("token")
+    || lower.contains("secret")
+    || lower.contains("api_key")
+    || lower.contains("apikey")
+    || lower.contains("passcode")
+    || lower.contains("パスワード")
+    || lower.contains("秘密鍵")
+}
+
 fn normalized_text(text: &str) -> String {
   text.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+fn source_kind(kind: &str) -> &'static str {
+  match kind {
+    "document" => "document",
+    "conversation" => "conversation",
+    "manual_note" => "manual_note",
+    "background_onboarding" => "background_onboarding",
+    "passive_capture" => "passive_capture",
+    "mcp_proposal" => "mcp_proposal",
+    _ => "manual_note",
+  }
+}
+
+fn source_origin(origin: &str) -> &'static str {
+  match origin {
+    "user_upload" => "user_upload",
+    "in_app_chat" => "in_app_chat",
+    "manual_entry" => "manual_entry",
+    "guided_onboarding" => "guided_onboarding",
+    "passive_browser" => "passive_browser",
+    "local_mcp" => "local_mcp",
+    "remote_relay" => "remote_relay",
+    _ => "manual_entry",
+  }
+}
+
+fn extract_memory_candidates_for_source(source_id: &str, body: &str, created_at: &str) -> Vec<Value> {
+  let mut candidates = Vec::new();
+
+  for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    if let Some(candidate) = candidate_from_source_line(source_id, line, created_at) {
+      candidates.push(candidate);
+    }
+  }
+
+  if candidates.is_empty() && !body.trim().is_empty() {
+    let text = body.chars().take(220).collect::<String>();
+    candidates.push(memory_candidate(
+      source_id,
+      &text,
+      classify_domain(&text),
+      "note",
+      "この情報は後で背景文脈として役立つ可能性があります。",
+      None,
+      "low",
+      created_at,
+    ));
+  }
+
+  candidates
+}
+
+fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> Option<Value> {
+  let lower = line.to_lowercase();
+
+  if contains_any(&lower, &["preferred name", "nickname", "名前", "呼び名"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      "identity_and_profile",
+      "background_profile",
+      "AIの呼び方や本人性の文脈として使えます。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+  if contains_any(&lower, &["tone", "communication", "話し方", "文体", "口調", "伝え方"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      "values_goals_and_preferences",
+      "preference",
+      "文章作成や会話支援の出力を本人に合わせられます。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+  if contains_any(&lower, &["goal", "priority", "want to", "目標", "優先", "大事", "やりたい"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      "values_goals_and_preferences",
+      "goal",
+      "提案や計画を本人の優先順位に合わせられます。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+  if contains_any(&lower, &["constraint", "budget", "energy", "accessibility", "schedule", "制約", "予算", "体力", "予定", "アクセシビリティ"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      "constraints_and_accessibility",
+      "constraint",
+      "現実的な計画や提案の制約として重要です。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+
+  let date = extract_yyyy_mm_dd(line);
+  if date.is_some()
+    && contains_any(
+      &lower,
+      &["deadline", "due", "renew", "expires", "expiration", "submit", "update", "期限", "締切", "更新", "提出", "満了"],
+    )
+  {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      classify_domain(line),
+      "deadline",
+      "期限や更新日は生活上の手続きに影響します。",
+      date,
+      "medium",
+      created_at,
+    ));
+  }
+
+  if looks_like_contact_point(line) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      classify_domain(line),
+      "contact_point",
+      "必要なときの連絡先として参照できます。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+  if contains_any(&lower, &["must", "need to", "required", "submit", "notify", "cancel", "renew", "必要", "提出", "連絡", "解約", "更新"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      classify_domain(line),
+      "obligation",
+      "やるべきことや注意点として後から役立ちます。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+  if contains_any(&lower, &["moving", "move", "job change", "travel", "caregiving", "引っ越", "転職", "旅行", "介護", "入学", "卒業"]) {
+    return Some(memory_candidate(
+      source_id,
+      line,
+      "life_events_and_plans",
+      "life_event",
+      "生活イベントは関連する助言や手続きの前提になります。",
+      None,
+      "medium",
+      created_at,
+    ));
+  }
+
+  None
+}
+
+fn memory_candidate(
+  source_id: &str,
+  text: &str,
+  domain: &str,
+  candidate_type: &str,
+  reason: &str,
+  due_date: Option<String>,
+  confidence: &str,
+  created_at: &str,
+) -> Value {
+  let sensitivity = detect_sensitivity(text);
+  let status = if sensitivity == "sensitive" || sensitivity == "secret_never_send" {
+    "blocked_sensitive"
+  } else {
+    "new"
+  };
+  let mut candidate = json!({
+    "id": new_id("cand"),
+    "sourceIds": [source_id],
+    "sourceChunkIds": [],
+    "proposedFactText": normalized_text(text),
+    "domain": domain,
+    "candidateType": candidate_type,
+    "detectedSensitivity": sensitivity,
+    "confidence": confidence,
+    "reasonToRemember": reason,
+    "status": status,
+    "createdAt": created_at,
+    "createsFactIds": []
+  });
+  if let Some(due_date) = due_date {
+    candidate["dueDate"] = Value::String(due_date);
+  }
+  candidate
+}
+
+fn looks_like_contact_point(text: &str) -> bool {
+  let has_email_shape = text.contains('@') && text.contains('.');
+  let digit_count = text.chars().filter(|character| character.is_ascii_digit()).count();
+  has_email_shape || digit_count >= 9
+}
+
+fn extract_yyyy_mm_dd(text: &str) -> Option<String> {
+  for token in text.split(|character: char| character.is_whitespace() || character == '.' || character == ',') {
+    let candidate = token.trim_matches(|character: char| {
+      !character.is_ascii_digit() && character != '-'
+    });
+    if candidate.len() == 10
+      && candidate.as_bytes().get(4) == Some(&b'-')
+      && candidate.as_bytes().get(7) == Some(&b'-')
+      && NaiveDate::parse_from_str(candidate, "%Y-%m-%d").is_ok()
+    {
+      return Some(candidate.to_string());
+    }
+  }
+  None
 }
 
 fn is_expired(value: &str) -> bool {
@@ -2747,6 +3126,26 @@ fn create_native_context_pack_request(
 }
 
 #[tauri::command]
+fn add_native_source_with_candidates(
+  app: AppHandle,
+  kind: String,
+  origin: String,
+  title: String,
+  body: String,
+) -> Result<NativeSourceIngestResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = add_source_with_candidates_at_path(&path, &kind, &origin, &title, &body)?;
+  Ok(NativeSourceIngestResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    candidate_ids: result.candidate_ids,
+    detected_sensitivity: result.detected_sensitivity,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -2862,6 +3261,7 @@ pub fn run() {
       vault_storage_path,
       search_vault_facts,
       create_native_context_pack_request,
+      add_native_source_with_candidates,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -2939,6 +3339,24 @@ mod tests {
         params![VAULT_STATE_KEY, payload, updated_at],
       )
       .expect("write vault_state");
+  }
+
+  fn temp_vault_path(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|duration| duration.as_nanos())
+      .unwrap_or_default();
+    std::env::temp_dir().join(format!("life-context-vault-{name}-{nanos}.sqlite3"))
+  }
+
+  fn remove_temp_vault(path: &Path) {
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
+    let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
+  }
+
+  fn use_test_vault_key() {
+    std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
   }
 
   #[test]
@@ -3185,6 +3603,125 @@ mod tests {
 
     assert!(!result.conflict);
     assert_eq!(Some(projection), result.updated_at);
+  }
+
+  #[test]
+  fn native_source_ingest_creates_candidates_not_facts_and_syncs_projection() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-ingest");
+    let result = add_source_with_candidates_at_path(
+      &path,
+      "document",
+      "user_upload",
+      "Renewal note",
+      "Insurance policy renews on 2026-08-31.\nNeed to update address before renewal.\nContact support@example.com for policy changes.",
+    )
+    .expect("source ingest");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source_count = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+    let candidate_count = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+    let fact_count = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+    let candidate_types = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .cloned()
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|candidate| candidate.get("candidateType").and_then(Value::as_str).map(str::to_string))
+      .collect::<Vec<_>>();
+
+    assert_eq!(source_count, 1);
+    assert_eq!(candidate_count, 3);
+    assert_eq!(fact_count, 0);
+    assert!(candidate_types.contains(&"deadline".to_string()));
+    assert!(candidate_types.contains(&"obligation".to_string()));
+    assert!(candidate_types.contains(&"contact_point".to_string()));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_source_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
+      .expect("normalized source count");
+    let normalized_candidate_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .expect("normalized candidate count");
+    let normalized_chunk_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM source_chunks", [], |row| row.get(0))
+      .expect("normalized chunk count");
+    let normalized_fact_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("normalized fact count");
+    let projection: String = connection
+      .query_row(
+        "SELECT value FROM projection_state WHERE key = ?1",
+        params![PROJECTION_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("projection state");
+
+    assert_eq!(normalized_source_count, 1);
+    assert_eq!(normalized_candidate_count, 3);
+    assert_eq!(normalized_chunk_count, 1);
+    assert_eq!(normalized_fact_count, 0);
+    assert_eq!(Some(projection), result.updated_at);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_ingest_redacts_secret_values_and_blocks_candidate() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-secret");
+    let result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Secret note",
+      "API key sk-test-12345 should not be stored.\nPassword hunter2",
+    )
+    .expect("source ingest");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source_body = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.first())
+      .and_then(|source| source.get("body"))
+      .and_then(Value::as_str)
+      .unwrap_or_default();
+    let candidate = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|candidates| candidates.first())
+      .expect("candidate");
+
+    assert!(!source_body.contains("sk-test-12345"));
+    assert!(!source_body.contains("hunter2"));
+    assert_eq!(
+      candidate.get("detectedSensitivity").and_then(Value::as_str),
+      Some("secret_never_send")
+    );
+    assert_eq!(
+      candidate.get("status").and_then(Value::as_str),
+      Some("blocked_sensitive")
+    );
+    assert!(
+      saved
+        .get("facts")
+        .and_then(Value::as_array)
+        .map(Vec::is_empty)
+        .unwrap_or(false)
+    );
+    remove_temp_vault(&path);
   }
 
   #[test]

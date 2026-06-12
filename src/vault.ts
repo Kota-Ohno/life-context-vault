@@ -192,11 +192,8 @@ export function addSourceWithCandidates(
   };
 }
 
-export function createBackgroundSource(
-  state: VaultState,
-  input: BackgroundSetupInput
-): VaultState {
-  const body = [
+export function backgroundSetupBody(input: BackgroundSetupInput): string {
+  return [
     input.displayName && `Preferred name: ${input.displayName}`,
     input.tonePreference && `Tone preference: ${input.tonePreference}`,
     input.activeLifeAreas && `Active life areas: ${input.activeLifeAreas}`,
@@ -206,6 +203,13 @@ export function createBackgroundSource(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export function createBackgroundSource(
+  state: VaultState,
+  input: BackgroundSetupInput
+): VaultState {
+  const body = backgroundSetupBody(input);
 
   if (!body.trim()) return state;
 
@@ -228,7 +232,9 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
   for (const line of lines) {
     const sensitivity = detectSensitivity(line);
     const status: MemoryCandidate["status"] =
-      sensitivity === "sensitive" ? "blocked_sensitive" : "new";
+      sensitivity === "sensitive" || sensitivity === "secret_never_send"
+        ? "blocked_sensitive"
+        : "new";
     const common = {
       id: newId("cand"),
       sourceIds: [source.id],
@@ -346,7 +352,10 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
       detectedSensitivity: sensitivity,
       confidence: "low",
       reasonToRemember: "この情報は後で背景文脈として役立つ可能性があります。",
-      status: sensitivity === "sensitive" ? "blocked_sensitive" : "new",
+      status:
+        sensitivity === "sensitive" || sensitivity === "secret_never_send"
+          ? "blocked_sensitive"
+          : "new",
       createdAt: nowIso(),
       createsFactIds: []
     } as MemoryCandidate);
@@ -1220,9 +1229,8 @@ function detectSensitivity(text: string): SensitivityTier {
 
 function sanitizeSecretMaterial(text: string): { text: string; secretFound: boolean } {
   const patterns = [
-    /(password|passcode)\s*[:=]\s*\S+/gi,
-    /(api key|token|secret|private key)\s*[:=]\s*\S+/gi,
-    /(パスワード|秘密鍵)\s*[:=：]\s*\S+/gi
+    /\b(password|passcode|api key|token|secret|private key|recovery code)\b\s*[:=]?\s*\S+/gi,
+    /(パスワード|秘密鍵)\s*[:=：]?\s*\S+/gi
   ];
   let sanitized = text;
   let secretFound = false;

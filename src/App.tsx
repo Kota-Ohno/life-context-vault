@@ -33,6 +33,7 @@ import {
   BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
+  addNativeSourceWithCandidates,
   createNativeContextPackRequest,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
@@ -58,6 +59,7 @@ import {
   addPassiveCaptureEvent,
   approveCandidate,
   attachLocalAnswer,
+  backgroundSetupBody,
   buildContextPackForRequest,
   confirmContextPack,
   createContextPackRequest,
@@ -90,6 +92,8 @@ import {
   MemoryCandidate,
   PassiveCaptureSettings,
   SensitivityTier,
+  SourceKind,
+  SourceOrigin,
   VaultState
 } from "./types";
 
@@ -498,40 +502,107 @@ export function App() {
     if (message) setNotice(message);
   }
 
-  function submitBackground() {
-    const next = createBackgroundSource(state, setup);
-    apply(next, "背景候補をMemory Inboxに追加しました。");
+  async function submitBackground() {
+    const body = backgroundSetupBody(setup);
+    if (!body.trim()) {
+      setNotice("背景情報を1つ以上入力してください。");
+      return;
+    }
+    const addStatus = await addSourceThroughCore(
+      {
+        kind: "background_onboarding",
+        origin: "guided_onboarding",
+        title: "Guided background setup",
+        body
+      },
+      "背景Sourceを保存し、Memory Inboxに候補を追加しました。"
+    );
+    if (addStatus === "unavailable") {
+      const next = createBackgroundSource(state, setup);
+      apply(next, "背景Sourceを保存し、Memory Inboxに候補を追加しました。");
+      setView("inbox");
+    }
+    if (addStatus === "failed") return;
     setSetup(blankSetup);
-    setView("inbox");
   }
 
-  function addManualSource() {
+  async function addManualSource() {
     if (!manualBody.trim()) {
       setNotice("メモ本文を入力してください。");
       return;
     }
-    const next = addSourceWithCandidates(state, {
-      kind: "manual_note",
-      origin: "manual_entry",
-      title: manualTitle || "Manual note",
-      body: manualBody
-    });
-    apply(next, "Sourceを追加し、記憶候補を生成しました。");
+    const addStatus = await addSourceThroughCore(
+      {
+        kind: "manual_note",
+        origin: "manual_entry",
+        title: manualTitle || "Manual note",
+        body: manualBody
+      },
+      "Sourceを保存し、Memory Inboxに候補を追加しました。"
+    );
+    if (addStatus === "unavailable") {
+      const next = addSourceWithCandidates(state, {
+        kind: "manual_note",
+        origin: "manual_entry",
+        title: manualTitle || "Manual note",
+        body: manualBody
+      });
+      apply(next, "Sourceを保存し、Memory Inboxに候補を追加しました。");
+      setView("inbox");
+    }
+    if (addStatus === "failed") return;
     setManualTitle("");
     setManualBody("");
-    setView("inbox");
   }
 
   async function handleFileUpload(file: File) {
     const text = await file.text();
-    const next = addSourceWithCandidates(state, {
-      kind: "document",
-      origin: "user_upload",
-      title: file.name,
-      body: text
-    });
-    apply(next, `${file.name} から記憶候補を生成しました。`);
-    setView("inbox");
+    const addStatus = await addSourceThroughCore(
+      {
+        kind: "document",
+        origin: "user_upload",
+        title: file.name,
+        body: text
+      },
+      `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。`
+    );
+    if (addStatus === "unavailable") {
+      const next = addSourceWithCandidates(state, {
+        kind: "document",
+        origin: "user_upload",
+        title: file.name,
+        body: text
+      });
+      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。`);
+      setView("inbox");
+    }
+  }
+
+  async function addSourceThroughCore(
+    input: {
+      kind: SourceKind;
+      origin: SourceOrigin;
+      title: string;
+      body: string;
+    },
+    message: string
+  ): Promise<"saved" | "unavailable" | "failed"> {
+    if (!nativePath) return "unavailable";
+    try {
+      const added = await addNativeSourceWithCandidates(input);
+      if (!added) return "unavailable";
+      nativeRevisionRef.current = added.updatedAt;
+      setNativeRevision(added.updatedAt);
+      setState(added.state);
+      setNotice(
+        `${message} ${added.candidateIds.length}件の候補が作成されました。承認されるまでAIには使われません。`
+      );
+      setView("inbox");
+      return "saved";
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
+      return "failed";
+    }
   }
 
   function approve(candidate: MemoryCandidate) {
@@ -1411,6 +1482,10 @@ function SourcesView({
           </div>
         </div>
         <div className="form-stack">
+          <div className="trust-note">
+            <ShieldCheck size={16} />
+            <span>ここで保存されるのはSourceと未承認候補です。AIへ渡るのはInboxで承認したFactから作るContext Packだけです。</span>
+          </div>
           <Input label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
           <Textarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
           <button className="primary-button" onClick={addManualSource} type="button">
@@ -1439,7 +1514,7 @@ function SourcesView({
             }}
           />
         </label>
-        <p className="muted">PDF/OCRはTauri版以降の抽出パイプラインに分離予定です。</p>
+        <p className="muted">アップロード直後は候補化だけを行います。PDF/OCRはTauri版以降の抽出パイプラインに分離予定です。</p>
       </div>
 
       <div className="panel wide">

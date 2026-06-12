@@ -2,6 +2,8 @@ import {
   ApprovedFact,
   LifeContextDomain,
   SensitivityTier,
+  SourceKind,
+  SourceOrigin,
   VaultState
 } from "./types";
 import { normalizeVaultState } from "./vault";
@@ -132,11 +134,29 @@ interface NativeContextPackBuildPayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeSourceIngestPayload {
+  payload: string;
+  updatedAt: string | null;
+  sourceId: string;
+  candidateIds: string[];
+  detectedSensitivity: SensitivityTier;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
   requestId: string;
   packId: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeSourceIngestResult {
+  state: VaultState;
+  updatedAt: string | null;
+  sourceId: string;
+  candidateIds: string[];
+  detectedSensitivity: SensitivityTier;
   generatedBy: "native_vault_core";
 }
 
@@ -240,6 +260,30 @@ export async function createNativeContextPackRequest(input: {
     updatedAt: result.updatedAt,
     requestId: result.requestId,
     packId: result.packId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function addNativeSourceWithCandidates(input: {
+  kind: SourceKind;
+  origin: SourceOrigin;
+  title: string;
+  body: string;
+}): Promise<NativeSourceIngestResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceIngestPayload>("add_native_source_with_candidates", {
+    kind: input.kind,
+    origin: input.origin,
+    title: input.title,
+    body: input.body
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
+    candidateIds: result.candidateIds,
+    detectedSensitivity: result.detectedSensitivity,
     generatedBy: result.generatedBy
   };
 }
