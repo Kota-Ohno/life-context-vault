@@ -100,6 +100,17 @@ describe("source upload safety", () => {
     expect(
       describeSourceFile(
         {
+          name: "scan.png",
+          size: 420,
+          type: "image/png"
+        },
+        true,
+        true
+      )
+    ).toEqual({ supported: true, extraction: "native_ocr" });
+    expect(
+      describeSourceFile(
+        {
           name: "old-benefits.doc",
           size: 420,
           type: "application/msword"

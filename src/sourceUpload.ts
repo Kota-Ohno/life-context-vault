@@ -29,6 +29,7 @@ export const SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS = [
 ] as const;
 
 export const OCR_DOCUMENT_EXTENSIONS = [
+  ".gif",
   ".png",
   ".jpg",
   ".jpeg",
@@ -46,6 +47,12 @@ export const SUPPORTED_SOURCE_ACCEPT = [
   ...SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS
 ].join(",");
 export const SUPPORTED_SOURCE_LABEL = "TXT, PDF, DOCX, PPTX, XLSX, ODT/ODS/ODP";
+export const SUPPORTED_SOURCE_ACCEPT_WITH_OCR = [
+  ...SUPPORTED_TEXT_SOURCE_EXTENSIONS,
+  ...SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS,
+  ...OCR_DOCUMENT_EXTENSIONS
+].join(",");
+export const SUPPORTED_SOURCE_LABEL_WITH_OCR = "TXT, PDF, Office, OpenDocument, Images";
 
 const supportedMimeTypes = new Set([
   "application/json",
@@ -66,7 +73,7 @@ export type TextSourceFileDecision =
   | { supported: false; reason: "too_large" | "unsupported_type" };
 
 export type SourceFileDecision =
-  | { supported: true; extraction: "browser_text" | "native_document" }
+  | { supported: true; extraction: "browser_text" | "native_document" | "native_ocr" }
   | {
       supported: false;
       reason: "too_large" | "native_required" | "ocr_required" | "legacy_office" | "unsupported_type";
@@ -94,7 +101,8 @@ export function describeTextSourceFile(
 
 export function describeSourceFile(
   file: Pick<File, "name" | "size" | "type">,
-  nativeExtractionAvailable: boolean
+  nativeExtractionAvailable: boolean,
+  ocrExtractionAvailable = false
 ): SourceFileDecision {
   const extension = fileExtension(file.name);
   const mimeType = file.type.toLowerCase();
@@ -122,6 +130,8 @@ export function describeSourceFile(
     mimeType.startsWith("image/") ||
     OCR_DOCUMENT_EXTENSIONS.includes(extension as (typeof OCR_DOCUMENT_EXTENSIONS)[number])
   ) {
+    if (file.size > MAX_NATIVE_DOCUMENT_SOURCE_BYTES) return { supported: false, reason: "too_large" };
+    if (nativeExtractionAvailable && ocrExtractionAvailable) return { supported: true, extraction: "native_ocr" };
     return { supported: false, reason: "ocr_required" };
   }
   if (

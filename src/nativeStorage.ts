@@ -36,6 +36,12 @@ export interface NativeDocumentExtractionResult {
   generatedBy: "native_document_extractor";
 }
 
+export interface NativeDocumentExtractionCapabilities {
+  nativeDocumentExtraction: boolean;
+  ocrExtraction: boolean;
+  ocrProviderLabel: string | null;
+}
+
 interface NativeVaultSnapshotPayload {
   payload: string | null;
   updatedAt: string | null;
@@ -104,6 +110,12 @@ export async function extractNativeDocumentText(input: {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<NativeDocumentExtractionResult>("extract_native_document_text", input);
+}
+
+export async function getNativeDocumentExtractionCapabilities(): Promise<NativeDocumentExtractionCapabilities | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<NativeDocumentExtractionCapabilities>("native_document_extraction_capabilities");
 }
 
 export interface AiAccessServiceStatus {

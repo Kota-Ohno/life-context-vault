@@ -14,7 +14,7 @@ use std::{
   io::{Cursor, Read, Write},
   net::TcpStream,
   path::{Path, PathBuf},
-  process::{Child, Command, Stdio},
+  process::{Child, Command, Output, Stdio},
   sync::Mutex,
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
@@ -207,6 +207,14 @@ struct NativeDocumentExtractionResult {
   detected_kind: String,
   warnings: Vec<String>,
   generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeDocumentExtractionCapabilities {
+  native_document_extraction: bool,
+  ocr_extraction: bool,
+  ocr_provider_label: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3925,7 +3933,7 @@ fn client_label(client: &str) -> &'static str {
   }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeDocumentKind {
   Text,
   Pdf,
@@ -3933,6 +3941,7 @@ enum NativeDocumentKind {
   Pptx,
   Xlsx,
   OpenDocument,
+  ImageOcr,
 }
 
 impl NativeDocumentKind {
@@ -3944,7 +3953,24 @@ impl NativeDocumentKind {
       NativeDocumentKind::Pptx => "pptx",
       NativeDocumentKind::Xlsx => "xlsx",
       NativeDocumentKind::OpenDocument => "opendocument",
+      NativeDocumentKind::ImageOcr => "image_ocr",
     }
+  }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OcrCommandConfig {
+  command: String,
+  args: Vec<String>,
+}
+
+impl OcrCommandConfig {
+  fn label(&self) -> String {
+    Path::new(&self.command)
+      .file_name()
+      .and_then(|value| value.to_str())
+      .unwrap_or(&self.command)
+      .to_string()
   }
 }
 
@@ -3993,6 +4019,9 @@ fn extract_native_document_text_from_base64(
         extract_zip_xml_document_text(&bytes, is_opendocument_text_entry)?;
       warnings.extend(document_warnings);
       text
+    }
+    NativeDocumentKind::ImageOcr => {
+      extract_image_ocr_document(file_name, mime_type, &bytes, &mut warnings)?
     }
   };
   let text = normalize_extracted_document_text(text, &mut warnings)?;
@@ -4061,10 +4090,7 @@ fn detect_native_document_kind(
       "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "tif" | "tiff"
     )
   {
-    return Err(
-      "画像OCRはまだこのローカル抽出パイプラインでは扱いません。OCR Providerを設定するまでは、テキスト化した内容をManual sourceへ貼り付けてください。"
-        .to_string(),
-    );
+    return Ok(NativeDocumentKind::ImageOcr);
   }
   if matches!(extension.as_str(), "doc" | "xls" | "ppt")
     || bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0])
@@ -4081,6 +4107,151 @@ fn detect_native_document_kind(
     "このファイル形式はまだSource化できません。対応形式は TXT/MD/CSV/JSON/YAML/LOG/PDF/DOCX/PPTX/XLSX/ODT/ODS/ODP です。"
       .to_string(),
   )
+}
+
+fn ocr_command_config_from_env() -> Option<OcrCommandConfig> {
+  let command = env::var("LCV_OCR_COMMAND").ok()?;
+  let command = command.trim();
+  if command.is_empty() {
+    return None;
+  }
+  let args = env::var("LCV_OCR_ARGS")
+    .ok()
+    .map(|value| {
+      value
+        .split_whitespace()
+        .filter(|part| !part.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    })
+    .filter(|args| !args.is_empty())
+    .unwrap_or_else(|| vec!["{input}".to_string()]);
+  Some(OcrCommandConfig {
+    command: command.to_string(),
+    args,
+  })
+}
+
+fn ocr_timeout() -> Duration {
+  let seconds = env::var("LCV_OCR_TIMEOUT_SECONDS")
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok())
+    .unwrap_or(30)
+    .clamp(1, 120);
+  Duration::from_secs(seconds)
+}
+
+fn extract_image_ocr_document(
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+  warnings: &mut Vec<String>,
+) -> Result<String, String> {
+  let config = ocr_command_config_from_env();
+  extract_image_ocr_document_with_optional_config(
+    config.as_ref(),
+    file_name,
+    mime_type,
+    bytes,
+    warnings,
+  )
+}
+
+fn extract_image_ocr_document_with_optional_config(
+  config: Option<&OcrCommandConfig>,
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+  warnings: &mut Vec<String>,
+) -> Result<String, String> {
+  let config = config.ok_or_else(|| {
+    "画像OCR Providerが設定されていません。LCV_OCR_COMMANDを設定するか、テキスト化した内容をManual sourceへ貼り付けてください。"
+      .to_string()
+  })?;
+  extract_image_ocr_document_with_config(config, file_name, mime_type, bytes, warnings)
+}
+
+fn extract_image_ocr_document_with_config(
+  config: &OcrCommandConfig,
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+  warnings: &mut Vec<String>,
+) -> Result<String, String> {
+  let extension = Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    .filter(|value| {
+      value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric())
+    })
+    .unwrap_or("img");
+  let input_path = env::temp_dir().join(format!("{}_input.{extension}", new_id("lcv_ocr")));
+  fs::write(&input_path, bytes)
+    .map_err(|error| format!("OCR入力ファイルを準備できませんでした: {error}"))?;
+
+  let input_path_text = input_path.display().to_string();
+  let mut command = Command::new(&config.command);
+  for arg in &config.args {
+    command.arg(
+      arg
+        .replace("{input}", &input_path_text)
+        .replace("{mime}", mime_type)
+        .replace("{file_name}", file_name),
+    );
+  }
+  command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+  let output = run_command_with_timeout(&mut command, ocr_timeout());
+  let _ = fs::remove_file(&input_path);
+  let output = output?;
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    return Err(if stderr.is_empty() {
+      "OCR Providerが本文抽出に失敗しました。".to_string()
+    } else {
+      format!("OCR Providerが本文抽出に失敗しました: {stderr}")
+    });
+  }
+  let text = String::from_utf8(output.stdout)
+    .map_err(|_| "OCR Providerの出力をUTF-8として読めませんでした。".to_string())?;
+  warnings.push(format!(
+    "画像本文はローカルOCR Provider `{}` で抽出しました。保存前に候補を確認してください。",
+    config.label()
+  ));
+  Ok(text)
+}
+
+fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {
+  let mut child = command
+    .spawn()
+    .map_err(|error| format!("OCR Providerを起動できませんでした: {error}"))?;
+  let started_at = SystemTime::now();
+  loop {
+    match child
+      .try_wait()
+      .map_err(|error| format!("OCR Providerの状態を確認できませんでした: {error}"))?
+    {
+      Some(_) => {
+        return child
+          .wait_with_output()
+          .map_err(|error| format!("OCR Providerの出力を読めませんでした: {error}"));
+      }
+      None => {
+        let elapsed = started_at.elapsed().unwrap_or_default();
+        if elapsed >= timeout {
+          let _ = child.kill();
+          let _ = child.wait();
+          return Err(format!(
+            "OCR Providerが{}秒以内に完了しなかったため停止しました。",
+            timeout.as_secs()
+          ));
+        }
+        thread::sleep(Duration::from_millis(25));
+      }
+    }
+  }
 }
 
 fn extract_plain_text_document(bytes: &[u8]) -> Result<String, String> {
@@ -6193,6 +6364,16 @@ fn extract_native_document_text(
 }
 
 #[tauri::command]
+fn native_document_extraction_capabilities() -> NativeDocumentExtractionCapabilities {
+  let ocr_config = ocr_command_config_from_env();
+  NativeDocumentExtractionCapabilities {
+    native_document_extraction: true,
+    ocr_extraction: ocr_config.is_some(),
+    ocr_provider_label: ocr_config.map(|config| config.label()),
+  }
+}
+
+#[tauri::command]
 fn approve_native_candidate(
   app: AppHandle,
   candidate_id: String,
@@ -6565,6 +6746,7 @@ pub fn run() {
       confirm_native_context_pack,
       deny_native_context_pack_request,
       extract_native_document_text,
+      native_document_extraction_capabilities,
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
@@ -6720,16 +6902,45 @@ mod tests {
 
   #[test]
   fn native_document_extraction_refuses_images_without_ocr_provider() {
-    let result = extract_native_document_text_from_base64(
+    let kind = detect_native_document_kind("scan.png", "image/png", b"\x89PNG\r\n")
+      .expect("detect image kind");
+    assert_eq!(kind, NativeDocumentKind::ImageOcr);
+
+    let mut warnings = Vec::new();
+    let result = extract_image_ocr_document_with_optional_config(
+      None,
       "scan.png",
       "image/png",
-      &STANDARD.encode(b"\x89PNG\r\n"),
+      b"\x89PNG\r\n",
+      &mut warnings,
     );
     let error = match result {
       Ok(_) => panic!("image extraction should fail without OCR provider"),
       Err(error) => error,
     };
-    assert!(error.contains("画像OCR"));
+    assert!(error.contains("画像OCR Provider"));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn native_document_extraction_uses_configured_ocr_provider_command() {
+    let config = OcrCommandConfig {
+      command: "/bin/cat".to_string(),
+      args: vec!["{input}".to_string()],
+    };
+    let mut warnings = Vec::new();
+    let text = extract_image_ocr_document_with_config(
+      &config,
+      "scan.png",
+      "image/png",
+      b"Scanned policy renewal is due on 2027-08-31.",
+      &mut warnings,
+    )
+    .expect("ocr provider command");
+    assert!(text.contains("Scanned policy renewal is due on 2027-08-31."));
+    assert!(warnings
+      .iter()
+      .any(|warning| warning.contains("OCR Provider")));
   }
 
   fn benchmark_size_from_env(name: &str, default: usize) -> usize {

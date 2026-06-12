@@ -152,9 +152,9 @@ Guided setup must be optional. The product should become useful through normal c
 ### Flow 2: Upload Important Document
 
 1. User drops a document into the app.
-2. App classifies the file as browser-readable text, native desktop document extraction, OCR-required image, legacy Office binary, oversized, or unsupported.
-3. Supported text, PDF, modern Office, and OpenDocument files are extracted locally in the Desktop app before RawSource creation.
-4. Images, legacy Office binaries, unsupported files, or oversized files are not stored as RawSource records; the app explains the specific reason and points to Manual source text until OCR/provider extraction is available.
+2. App classifies the file as browser-readable text, native desktop document extraction, OCR-capable image, OCR-required image, legacy Office binary, oversized, or unsupported.
+3. Supported text, PDF, modern Office, OpenDocument, and explicitly configured local OCR image files are extracted locally in the Desktop app before RawSource creation.
+4. Images without a configured OCR provider, legacy Office binaries, unsupported files, or oversized files are not stored as RawSource records; the app explains the specific reason and points to Manual source text or OCR setup.
 5. Extracted text is stored locally as a RawSource record.
 6. App classifies document type, sensitivity, dates, parties, obligations, and contact points.
 7. App creates MemoryCandidate records.

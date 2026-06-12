@@ -223,6 +223,13 @@ Last updated: 2026-06-12
   - extracted document text flows into the existing RawSource -> MemoryCandidate path and still never creates ApprovedFacts automatically
   - native extraction rejects images without OCR Provider, legacy Office binaries, unsupported archives, unreadable files, zip-entry overages, and oversized uploads before RawSource creation
   - Upload UX now explains local PDF/Office extraction separately from OCR/provider gaps
+- Added explicit local OCR provider support for Desktop image uploads:
+  - images remain blocked by default unless `LCV_OCR_COMMAND` is configured
+  - OCR runs as a local command without shell expansion and receives an input temp file
+  - `LCV_OCR_ARGS` supports placeholders such as `{input}`, `{mime}`, and `{file_name}`
+  - OCR output must be UTF-8 text on stdout and is normalized through the same Source -> MemoryCandidate path
+  - OCR execution is timeout-bounded by `LCV_OCR_TIMEOUT_SECONDS`, defaulting to 30 seconds
+  - Upload UI shows whether image OCR is currently available and still explains that extracted text creates only Inbox candidates
 - Added explicit large-scale retrieval benchmark coverage:
   - ignored Rust benchmark seeds an encrypted SQLite Vault with 100,000 ApprovedFacts and 500,000 SourceChunks by default
   - benchmark measures Vault Core FTS search and Context Pack generation on the same normalized schema used by the app and MCP sidecars
@@ -238,7 +245,7 @@ Last updated: 2026-06-12
 
 - Public HTTPS deployment and durable hosted relay domain.
 - Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, backup, and short-lived handoff controls.
-- OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
+- Packaged OCR onboarding and legacy Office conversion beyond the explicit local OCR command provider and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - CI-hosted or scheduled retrieval performance tracking; local release qualification now has an explicit product check wrapper, while the 100k Fact / 500k SourceChunk benchmark remains opt-in because of dataset size.
 
@@ -275,8 +282,8 @@ Last updated: 2026-06-12
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Context Pack minimization tests proving user-hidden items are removed from the AI-bound Pack, retained as exclusions, and remain absent after confirmation and `get_request_status`
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
-- Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images and legacy Office binaries are blocked, and oversized files are rejected before Source creation
-- Native document extraction tests proving DOCX XML text can be extracted locally while image OCR is refused without an OCR Provider
+- Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images require a provider unless configured, legacy Office binaries are blocked, and oversized files are rejected before Source creation
+- Native document extraction tests proving DOCX XML text can be extracted locally, image OCR is refused without a provider, and a configured local OCR command can provide image text without creating ApprovedFacts
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
 - Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
@@ -421,6 +428,15 @@ Last updated: 2026-06-12
 - Dependency review: accepted with constraints; `pdf-extract`, `quick-xml`, and `zip` were added for local extraction, with `zip` pinned to the Rust-1.77-compatible 0.6 series rather than the latest MSRV-heavy release.
 - UX review: accepted; Upload now separates local PDF/Office extraction from OCR/provider gaps and keeps failure messages specific enough for non-developer users.
 - Verification: `npm test`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml`, `git diff --check`, and `npm run tauri:build` passed. Browser layout checks covered Sources Upload at desktop `1280x720` and mobile `390x844` with no page-level or Upload-card horizontal overflow. `cargo fmt` remains unavailable because `rustfmt` is not installed for the local stable toolchain.
+
+### Local OCR Provider Slice
+
+- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Product fit: accepted; scanned life documents can now enter the same Memory Inbox workflow when the user explicitly configures a local OCR provider.
+- Security/privacy: accepted; OCR is off by default, uses an explicit local command without shell expansion, accepts only stdout text, keeps image body handling inside Desktop extraction, and still creates only unapproved MemoryCandidates.
+- Technical design: accepted; provider invocation uses a temp input file, placeholder-based args, UTF-8 output validation, normalized extracted text, and a bounded timeout.
+- UX: accepted; Upload shows whether image OCR is available and keeps the copy focused on local extraction plus Inbox confirmation.
+- Verification: `npm test -- --run src/sourceUpload.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_document_extraction`, `npm run build`, and in-app Browser desktop Sources Upload DOM/layout check at `1280x900` passed. Mobile rendering could not be re-verified in this Browser runtime because viewport control was unavailable; the new OCR copy uses the already-validated responsive `trust-note` and drop-zone patterns.
 
 ### Large Retrieval Benchmark Slice
 

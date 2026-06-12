@@ -35,6 +35,7 @@ import {
   BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
+  NativeDocumentExtractionCapabilities,
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   approveNativeCandidate,
@@ -45,6 +46,7 @@ import {
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
+  getNativeDocumentExtractionCapabilities,
   getNativeVaultPath,
   installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
@@ -74,7 +76,9 @@ import {
   MAX_NATIVE_DOCUMENT_SOURCE_BYTES,
   MAX_TEXT_SOURCE_BYTES,
   SUPPORTED_SOURCE_ACCEPT,
+  SUPPORTED_SOURCE_ACCEPT_WITH_OCR,
   SUPPORTED_SOURCE_LABEL,
+  SUPPORTED_SOURCE_LABEL_WITH_OCR,
   describeSourceFile,
   formatFileSize,
   looksLikeReadableText
@@ -243,6 +247,8 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
+  const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
+    useState<NativeDocumentExtractionCapabilities | null>(null);
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(() =>
     loadRuntimePreferences()
   );
@@ -268,16 +274,18 @@ export function App() {
     let cancelled = false;
     async function hydrateNativeStorage() {
       try {
-        const [nativeSnapshot, path, configTemplate] = await Promise.all([
+        const [nativeSnapshot, path, configTemplate, extractionCapabilities] = await Promise.all([
           loadNativeVaultSnapshot(),
           getNativeVaultPath(),
-          getClaudeDesktopConfigTemplate()
+          getClaudeDesktopConfigTemplate(),
+          getNativeDocumentExtractionCapabilities().catch(() => null)
         ]);
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
         nativeRevisionRef.current = nativeSnapshot?.updatedAt ?? null;
         setNativeRevision(nativeSnapshot?.updatedAt ?? null);
         setNativePath(path);
+        setDocumentExtractionCapabilities(extractionCapabilities);
         if (configTemplate) setClaudeConfig(configTemplate);
       } catch (error) {
         console.warn("Native storage unavailable", error);
@@ -567,6 +575,9 @@ export function App() {
   const searchResults = nativePath && searchMode === "native_fts"
     ? nativeSearchResults
     : localSearchResults;
+  const ocrExtractionAvailable = Boolean(documentExtractionCapabilities?.ocrExtraction);
+  const sourceAccept = ocrExtractionAvailable ? SUPPORTED_SOURCE_ACCEPT_WITH_OCR : SUPPORTED_SOURCE_ACCEPT;
+  const sourceLabel = ocrExtractionAvailable ? SUPPORTED_SOURCE_LABEL_WITH_OCR : SUPPORTED_SOURCE_LABEL;
 
   function apply(next: VaultState, message?: string) {
     setState(next);
@@ -627,7 +638,7 @@ export function App() {
   }
 
   async function handleFileUpload(file: File) {
-    const support = describeSourceFile(file, Boolean(nativePath));
+    const support = describeSourceFile(file, Boolean(nativePath), ocrExtractionAvailable);
     if (!support.supported) {
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
       return;
@@ -1557,6 +1568,10 @@ export function App() {
             setManualBody={setManualBody}
             addManualSource={addManualSource}
             handleFileUpload={handleFileUpload}
+            ocrExtractionAvailable={ocrExtractionAvailable}
+            ocrProviderLabel={documentExtractionCapabilities?.ocrProviderLabel ?? null}
+            sourceAccept={sourceAccept}
+            sourceLabel={sourceLabel}
             uploadFeedback={uploadFeedback}
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
@@ -2147,6 +2162,10 @@ function SourcesView({
   setManualBody,
   addManualSource,
   handleFileUpload,
+  ocrExtractionAvailable,
+  ocrProviderLabel,
+  sourceAccept,
+  sourceLabel,
   uploadFeedback,
   changeSourceLifecycle,
   editSourceMetadata,
@@ -2161,6 +2180,10 @@ function SourcesView({
   setManualBody: (value: string) => void;
   addManualSource: () => void;
   handleFileUpload: (file: File) => void;
+  ocrExtractionAvailable: boolean;
+  ocrProviderLabel: string | null;
+  sourceAccept: string;
+  sourceLabel: string;
   uploadFeedback: UploadFeedback | null;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
@@ -2198,9 +2221,9 @@ function SourcesView({
         </div>
         <label className="drop-zone">
           <Upload size={24} />
-          <span>{SUPPORTED_SOURCE_LABEL}</span>
+          <span>{sourceLabel}</span>
           <input
-            accept={SUPPORTED_SOURCE_ACCEPT}
+            accept={sourceAccept}
             type="file"
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -2218,7 +2241,15 @@ function SourcesView({
             </div>
           </div>
         )}
-        <p className="muted">PDF/OfficeはDesktopでローカル抽出します。画像OCRと旧Office形式は、誤記憶を避けるためProvider接続までSource化しません。</p>
+        <div className="trust-note">
+          <ShieldCheck size={16} />
+          <span>
+            PDF/OfficeはDesktopでローカル抽出します。
+            {ocrExtractionAvailable
+              ? ` 画像は ${ocrProviderLabel ?? "OCR Provider"} をローカル実行して抽出し、Inbox候補として確認します。`
+              : " 画像OCRと旧Office形式は、誤記憶を避けるためProvider接続までSource化しません。"}
+          </span>
+        </div>
       </div>
 
       <div className="panel wide">
@@ -3891,7 +3922,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "画像OCRはまだ未接続です",
-      body: `${file.name} は画像として検出しました。OCR Providerを接続するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+      body: `${file.name} は画像として検出しました。Desktopで LCV_OCR_COMMAND を設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
     };
   }
   if (reason === "legacy_office") {
@@ -3930,6 +3961,8 @@ function documentExtractionLabel(kind: string): string {
       return "XLSX";
     case "opendocument":
       return "OpenDocument";
+    case "image_ocr":
+      return "画像OCR";
     case "text":
       return "テキスト";
     default:

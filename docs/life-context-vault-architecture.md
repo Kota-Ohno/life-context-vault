@@ -159,8 +159,10 @@ Initial command behavior:
 
 - Save a RawSource with provenance, origin, sensitivity, and deletion state.
 - Accept text-like uploads in the browser path and use the Desktop native extractor for PDF, DOCX, PPTX, XLSX, and OpenDocument files.
-- Reject images, legacy Office binaries, unsupported archives, unreadable documents, and oversized files before RawSource creation so garbled text cannot become MemoryCandidates.
+- Accept image uploads only when the Desktop app has an explicitly configured local OCR provider, such as `LCV_OCR_COMMAND`; otherwise reject images before RawSource creation.
+- Reject legacy Office binaries, unsupported archives, unreadable documents, and oversized files before RawSource creation so garbled text cannot become MemoryCandidates.
 - Bound native extraction by input byte size, ZIP entry size, ZIP entry count, and extracted text size to reduce zip-bomb and huge-document risk.
+- Bound OCR provider execution with an input temp file, stdout-only text ingestion, UTF-8 output requirement, and a short timeout so a hung provider cannot block the Vault indefinitely.
 - Preserve line boundaries for candidate extraction after secret redaction.
 - Generate MemoryCandidates only; never create ApprovedFacts directly.
 - Redact secret indicators and adjacent secret values before persistence.
@@ -196,11 +198,12 @@ Vault Core owns all capture decisions:
 
 ### Extraction Pipeline
 
-Extraction is allowed to use local parsers, OCR, local models, and cloud LLMs depending on policy.
+Extraction is allowed to use local parsers, explicit local OCR providers, local models, and cloud LLMs depending on policy.
 
 Default PoC behavior:
 
 - Extract raw text locally where possible.
+- Use OCR only when the user has configured a local provider. Raw images are not sent to cloud OCR by default.
 - Detect document type, parties, dates, obligations, and sensitivity locally where feasible.
 - Use LLMs for structured candidate generation only with minimal source excerpts or user-approved document access.
 - Store LLM output as candidates, never as approved facts.
