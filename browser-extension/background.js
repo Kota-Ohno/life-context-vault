@@ -101,6 +101,8 @@ async function recordCaptureMeta(page, result, reason) {
     conversationId: page.conversationId,
     url: page.url,
     pageTitle: page.title,
+    captureMode: page.captureMode ?? (page.selected ? "selection" : "full"),
+    textLength: page.textLength ?? page.text.length,
     reason,
     capturedAt: new Date().toISOString()
   };

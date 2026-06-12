@@ -1,5 +1,6 @@
 const MAX_CAPTURE_CHARS = 8000;
 const MIN_CAPTURE_CHARS = 80;
+const MIN_DELTA_OVERLAP_CHARS = 120;
 const AUTO_CAPTURE_DEBOUNCE_MS = 12000;
 const STORAGE_AUTO_CAPTURE = "lcvAutoCaptureEnabled";
 const STORAGE_LAST_HASH = "lcvLastCaptureHash";
@@ -8,6 +9,8 @@ let autoCaptureEnabled = false;
 let observer = null;
 let captureTimer = null;
 let lastCaptureHash = "";
+let lastAcceptedUrl = "";
+let lastAcceptedText = "";
 let statusBadge = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -97,23 +100,89 @@ async function autoCapture(reason) {
     return;
   }
 
+  const prepared = prepareAutoCapturePayload(page);
+  if (!prepared) {
+    renderStatus("LCV Capture waiting", "paused");
+    return;
+  }
+
   renderStatus("LCV Capture saving", "sending");
   try {
     const result = await chrome.runtime.sendMessage({
       type: "LCV_CAPTURE_PAGE_FRAGMENT",
-      page,
-      reason
+      page: prepared.page,
+      reason: prepared.captureMode === "delta" ? "auto_delta" : reason
     });
     if (result?.ok) {
       lastCaptureHash = captureHash;
+      lastAcceptedUrl = page.url;
+      lastAcceptedText = page.text;
       await chrome.storage.local.set({ [STORAGE_LAST_HASH]: captureHash });
-      renderStatus(`LCV captured ${result.candidateCount ?? 0}`, "ok");
+      const label = prepared.captureMode === "delta" ? "delta" : "full";
+      renderStatus(`LCV captured ${label} ${result.candidateCount ?? 0}`, "ok");
     } else {
       renderStatus(`LCV ${result?.status ?? "not saved"}`, "attention");
     }
   } catch (error) {
     renderStatus(error instanceof Error ? `LCV ${error.message}` : "LCV Capture failed", "error");
   }
+}
+
+function prepareAutoCapturePayload(page) {
+  if (lastAcceptedUrl !== page.url || !lastAcceptedText) {
+    return {
+      captureMode: "full",
+      page: {
+        ...page,
+        captureMode: "full",
+        textLength: page.text.length
+      }
+    };
+  }
+
+  const delta = incrementalText(lastAcceptedText, page.text);
+  if (delta === null) {
+    return {
+      captureMode: "full",
+      page: {
+        ...page,
+        captureMode: "full",
+        textLength: page.text.length
+      }
+    };
+  }
+  if (delta.length < MIN_CAPTURE_CHARS) return null;
+
+  return {
+    captureMode: "delta",
+    page: {
+      ...page,
+      text: delta,
+      selected: false,
+      captureMode: "delta",
+      textLength: delta.length,
+      fullTextHash: stableHash(`${page.url}\n${page.text}`)
+    }
+  };
+}
+
+function incrementalText(previous, current) {
+  if (!previous || current === previous) return "";
+  if (current.startsWith(previous)) return current.slice(previous.length).trim();
+
+  const directIndex = current.indexOf(previous);
+  if (directIndex >= 0) {
+    return current.slice(directIndex + previous.length).trim();
+  }
+
+  const maxOverlap = Math.min(previous.length, current.length);
+  for (let overlap = maxOverlap; overlap >= MIN_DELTA_OVERLAP_CHARS; overlap -= 1) {
+    if (previous.slice(previous.length - overlap) === current.slice(0, overlap)) {
+      return current.slice(overlap).trim();
+    }
+  }
+
+  return null;
 }
 
 function collectPagePayload() {

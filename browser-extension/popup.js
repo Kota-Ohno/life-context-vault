@@ -104,7 +104,9 @@ function renderLastCapture(meta) {
   }
   const time = meta.capturedAt ? new Date(meta.capturedAt).toLocaleTimeString() : "recently";
   const client = meta.sourceClient ? `${meta.sourceClient} ` : "";
-  lastCapture.textContent = `${time}: ${client}${meta.status} / ${meta.candidateCount ?? 0} candidate(s)`;
+  const mode = meta.captureMode ? ` ${meta.captureMode}` : "";
+  const length = meta.textLength ? `, ${meta.textLength} chars` : "";
+  lastCapture.textContent = `${time}: ${client}${meta.status}${mode} / ${meta.candidateCount ?? 0} candidate(s)${length}`;
   lastCapture.dataset.state = meta.ok ? "ok" : "attention";
   deleteSource.disabled = !meta.sourceId || meta.status === "source_purged";
 }

@@ -269,7 +269,7 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and hosted-client compatibility beyond the explicit POST-only `GET /mcp` 405 boundary.
-- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, and popup deletion of the latest captured Source body. Remaining product-hardening: extension-side recent captured Source review/open-in-app flow and true delta queueing instead of debounced changed-text capture.
+- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, and popup deletion of the latest captured Source body. Remaining product-hardening: extension-side recent captured Source review/open-in-app flow and durable delta queues across page reloads.
 - OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
 ## Verification
@@ -737,6 +737,13 @@ Last updated: 2026-06-13
 - Technical design: the capture host exposes a `delete_capture_source` Native Messaging action backed by a Vault Core wrapper that validates Source kind/origin before calling the existing `purge_body` lifecycle path. The popup updates recent-capture metadata after deletion.
 - Verification: Rust tests cover both the capture-host delete path and refusal of non-browser Sources. Extension static checks cover the popup/background changes. `npm run product:check` passed; popup visual inspection remains limited by the in-app browser `file://` URL policy noted in the Browser Auto Capture slice.
 
+### Browser Delta Capture Slice
+
+- Product fit: Auto Capture now avoids resending the whole visible conversation after every debounced page change when the chat grows normally, reducing duplicate Sources and making passive capture feel calmer.
+- Security/privacy: the previous accepted transcript is held only in the content script's in-memory page session for delta comparison. Chrome storage still keeps only preference/hash/status metadata and the latest `sourceId`, not transcript text.
+- Technical design: first successful capture uses `captureMode: "full"`; later captures compute appended text by prefix/direct/overlap matching and send `captureMode: "delta"` with metadata-only `textLength`. If overlap is unclear, the extension falls back to full capture rather than guessing.
+- Verification: extension static checks cover content/background/popup changes. A Node VM check verified prefix, overlap, and rewrite fallback behavior against the actual content script helper. `npm run product:check` passed.
+
 ### Remote MCP Method Boundary Slice
 
 - Product fit: hosted-client smoke tests against `/mcp` now get an explicit method boundary instead of a generic 404 when they probe with GET.
@@ -753,4 +760,4 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, public Origin allowlists, detailed OAuth challenge headers, and hosted-client protocol negotiation remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: browser Capture recent-source review/open-in-app flow, true delta queueing, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: browser Capture recent-source review/open-in-app flow, durable delta queues across page reloads, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
