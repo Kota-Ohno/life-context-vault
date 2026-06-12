@@ -269,7 +269,7 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including SSE/session transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
-- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture. Remaining product-hardening: durable delta queues across page reloads.
+- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
 - OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
 ## Verification
@@ -751,6 +751,13 @@ Last updated: 2026-06-13
 - Technical design: the popup sends `LCV_OPEN_CONTROL_CENTER` to the background service worker, which asks the Native Messaging host to launch the known app bundle or sibling app binary. The host does not accept a user-supplied command or path.
 - Verification: capture-host unit tests cover app-bundle and sibling-binary resolution. Extension static checks cover popup/background JavaScript. Headless Chrome rendered the popup at `360x620` with the new open-app button visible and no horizontal overflow. `npm run product:check` passed.
 
+### Browser Durable Delta Checkpoint Slice
+
+- Product fit: Auto Capture can resume calm delta behavior after an AI chat page reload instead of sending the whole visible conversation again whenever the page refreshes.
+- Security/privacy: Chrome storage still does not keep transcript text. Durable checkpoints store only `conversationId`, source client, full-text hash, text length, and timestamp, and they are used only when the current page prefix hashes to the previous accepted capture.
+- Technical design: the content script keeps the existing in-memory overlap path for live page growth, then falls back to recent checkpoint metadata after reload. If the prefix hash does not match, the extension sends a full capture rather than guessing.
+- Verification: extension static checks cover content/background/popup JavaScript. A Node VM check loaded the actual content script and verified reload-safe delta, unchanged-checkpoint detection, rewrite fallback, and absence of stored `text`/`url` fields in checkpoints. `npm run product:check` passed.
+
 ### Remote MCP Method Boundary Slice
 
 - Product fit: hosted-client smoke tests against `/mcp` now get an explicit method boundary instead of a generic 404 when they probe with GET.
@@ -781,4 +788,4 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, including SSE/session semantics and real hosted-client certification, remains before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: browser Capture durable delta queues across page reloads and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: bundled OCR runtime or guided non-developer OCR installer remains product-hardening work after the core AI access boundary.

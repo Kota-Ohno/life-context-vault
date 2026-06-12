@@ -10,7 +10,7 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
 
 - Capture is explicit from the popup button unless the user turns on the extension's Auto Capture toggle.
 - Auto Capture is off by default, shows a small in-page status badge, debounces page changes, skips writes when the captured text hash has not changed, and sends only appended delta text after the first successful page capture when the current page grows normally.
-- Chrome extension storage keeps Auto Capture preference, the last text hash, recent capture status metadata, and the latest captured `sourceId` only; it does not store captured transcript text. Delta comparison keeps the previous accepted text only in the content script's in-memory page session.
+- Chrome extension storage keeps Auto Capture preference, the last text hash, recent capture status metadata, the latest captured `sourceId`, and recent delta checkpoint metadata only; it does not store captured transcript text. Delta checkpoints store `conversationId`, source client, full-text hash, text length, and timestamp so reloads can resume delta capture only when the current prefix hash matches the last accepted capture.
 - The extension only runs on:
   - `chatgpt.com`
   - `chat.openai.com`
@@ -102,7 +102,7 @@ The extension sends:
 }
 ```
 
-Auto Capture sends the same message shape with `selected: false`. After the first successful page capture, it may send only appended delta text with `captureMode: "delta"` and a metadata-only `textLength`; it falls back to `captureMode: "full"` when the page is rewritten or the overlap is unclear. The Native host and Vault Core still enforce the app-level Passive Capture switch, allowed-site policy, retention policy, and candidate-only boundary.
+Auto Capture sends the same message shape with `selected: false`. After the first successful page capture, it may send only appended delta text with `captureMode: "delta"` and a metadata-only `textLength`; it falls back to `captureMode: "full"` when the page is rewritten, the overlap is unclear, or the reload-safe checkpoint hash does not match the current page prefix. The Native host and Vault Core still enforce the app-level Passive Capture switch, allowed-site policy, retention policy, and candidate-only boundary.
 
 The host replies:
 

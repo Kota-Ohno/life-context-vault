@@ -4,6 +4,8 @@ const MIN_DELTA_OVERLAP_CHARS = 120;
 const AUTO_CAPTURE_DEBOUNCE_MS = 12000;
 const STORAGE_AUTO_CAPTURE = "lcvAutoCaptureEnabled";
 const STORAGE_LAST_HASH = "lcvLastCaptureHash";
+const STORAGE_DELTA_CHECKPOINTS = "lcvDeltaCheckpoints";
+const MAX_DELTA_CHECKPOINTS = 20;
 
 let autoCaptureEnabled = false;
 let observer = null;
@@ -99,8 +101,14 @@ async function autoCapture(reason) {
     renderStatus("LCV Capture watching", "ready");
     return;
   }
+  if (await checkpointMatchesFullText(page, captureHash)) {
+    lastCaptureHash = captureHash;
+    await chrome.storage.local.set({ [STORAGE_LAST_HASH]: captureHash });
+    renderStatus("LCV Capture watching", "ready");
+    return;
+  }
 
-  const prepared = prepareAutoCapturePayload(page);
+  const prepared = await prepareAutoCapturePayload(page, captureHash);
   if (!prepared) {
     renderStatus("LCV Capture waiting", "paused");
     return;
@@ -118,6 +126,7 @@ async function autoCapture(reason) {
       lastAcceptedUrl = page.url;
       lastAcceptedText = page.text;
       await chrome.storage.local.set({ [STORAGE_LAST_HASH]: captureHash });
+      await storeDeltaCheckpoint(page, captureHash);
       const label = prepared.captureMode === "delta" ? "delta" : "full";
       renderStatus(`LCV captured ${label} ${result.candidateCount ?? 0}`, "ok");
     } else {
@@ -128,19 +137,8 @@ async function autoCapture(reason) {
   }
 }
 
-function prepareAutoCapturePayload(page) {
-  if (lastAcceptedUrl !== page.url || !lastAcceptedText) {
-    return {
-      captureMode: "full",
-      page: {
-        ...page,
-        captureMode: "full",
-        textLength: page.text.length
-      }
-    };
-  }
-
-  const delta = incrementalText(lastAcceptedText, page.text);
+async function prepareAutoCapturePayload(page, captureHash = stableHash(`${page.url}\n${page.text}`)) {
+  const delta = await autoCaptureDelta(page, captureHash);
   if (delta === null) {
     return {
       captureMode: "full",
@@ -164,6 +162,60 @@ function prepareAutoCapturePayload(page) {
       fullTextHash: stableHash(`${page.url}\n${page.text}`)
     }
   };
+}
+
+async function autoCaptureDelta(page, captureHash) {
+  if (lastAcceptedUrl === page.url && lastAcceptedText) {
+    return incrementalText(lastAcceptedText, page.text);
+  }
+
+  const checkpoint = await deltaCheckpointForPage(page);
+  if (!checkpoint || checkpoint.fullTextHash === captureHash) return "";
+  if (!Number.isFinite(checkpoint.textLength) || checkpoint.textLength <= 0) return null;
+  if (checkpoint.textLength >= page.text.length) return "";
+
+  const currentPrefixHash = stableHash(`${page.url}\n${page.text.slice(0, checkpoint.textLength)}`);
+  if (currentPrefixHash !== checkpoint.fullTextHash) return null;
+
+  return page.text.slice(checkpoint.textLength).trim();
+}
+
+async function deltaCheckpointForPage(page) {
+  const checkpoints = await loadDeltaCheckpoints();
+  return checkpoints.find((checkpoint) => checkpoint.conversationId === page.conversationId) ?? null;
+}
+
+async function checkpointMatchesFullText(page, captureHash) {
+  const checkpoint = await deltaCheckpointForPage(page);
+  return checkpoint?.fullTextHash === captureHash;
+}
+
+async function storeDeltaCheckpoint(page, fullTextHash) {
+  const checkpoint = {
+    conversationId: page.conversationId,
+    sourceClient: page.sourceClient,
+    fullTextHash,
+    textLength: page.text.length,
+    capturedAt: new Date().toISOString()
+  };
+  const checkpoints = (await loadDeltaCheckpoints())
+    .filter((existing) => existing.conversationId !== checkpoint.conversationId);
+  checkpoints.unshift(checkpoint);
+  await chrome.storage.local.set({
+    [STORAGE_DELTA_CHECKPOINTS]: checkpoints.slice(0, MAX_DELTA_CHECKPOINTS)
+  });
+}
+
+async function loadDeltaCheckpoints() {
+  const stored = await chrome.storage.local.get({ [STORAGE_DELTA_CHECKPOINTS]: [] });
+  const checkpoints = stored[STORAGE_DELTA_CHECKPOINTS];
+  if (!Array.isArray(checkpoints)) return [];
+  return checkpoints.filter((checkpoint) =>
+    checkpoint &&
+    typeof checkpoint.conversationId === "string" &&
+    typeof checkpoint.fullTextHash === "string" &&
+    typeof checkpoint.textLength === "number"
+  );
 }
 
 function incrementalText(previous, current) {
