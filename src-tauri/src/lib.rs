@@ -178,6 +178,14 @@ struct NativePassiveCaptureResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeVaultSettingsUpdateResult {
+  payload: String,
+  updated_at: Option<String>,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -226,6 +234,11 @@ pub struct VaultCorePassiveCaptureResult {
   pub candidate_ids: Vec<String>,
   pub detected_sensitivity: String,
   pub retention_until: Option<String>,
+}
+
+pub struct VaultCoreSettingsUpdateResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
 }
 
 pub struct VaultCoreRequestStatusResult {
@@ -1597,6 +1610,129 @@ pub fn add_passive_capture_event_at_path(
   })
 }
 
+pub fn update_passive_capture_settings_at_path(
+  path: &Path,
+  enabled: Option<bool>,
+  retention_days: Option<i64>,
+  allowed_sites: Option<Vec<String>>,
+) -> Result<VaultCoreSettingsUpdateResult, String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let current = vault
+    .get("passiveCaptureSettings")
+    .cloned()
+    .unwrap_or_else(default_passive_capture_settings);
+  let mut next = current.as_object().cloned().unwrap_or_default();
+
+  if let Some(enabled) = enabled {
+    next.insert("enabled".to_string(), Value::Bool(enabled));
+  }
+  if let Some(retention_days) = retention_days {
+    next.insert(
+      "retentionDays".to_string(),
+      Value::Number(serde_json::Number::from(retention_days.clamp(1, 90))),
+    );
+  }
+  if let Some(allowed_sites) = allowed_sites {
+    let normalized_sites = normalize_allowed_sites(allowed_sites);
+    if normalized_sites.is_empty() {
+      return Err("allowedSites must include at least one host.".to_string());
+    }
+    next.insert("allowedSites".to_string(), json!(normalized_sites));
+  }
+
+  vault["passiveCaptureSettings"] = Value::Object(next.clone());
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "policy_updated",
+      "policy",
+      "passive_capture",
+      "personal",
+      json!({
+        "enabled": next.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        "retentionDays": next.get("retentionDays").and_then(Value::as_i64).unwrap_or(14),
+        "allowedSites": next.get("allowedSites").cloned().unwrap_or_else(|| json!([])),
+        "updatedAt": now,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+}
+
+pub fn update_access_policy_at_path(
+  path: &Path,
+  client_id: &str,
+  sensitivity_ceiling: Option<&str>,
+  requires_approval_above: Option<&str>,
+  passive_capture_allowed: Option<bool>,
+) -> Result<VaultCoreSettingsUpdateResult, String> {
+  let client_id = client_id.trim();
+  if client_id.is_empty() {
+    return Err("clientId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  ensure_access_policy_for_client(&mut vault, client_id);
+  let now = now_iso();
+  let ceiling = sensitivity_ceiling
+    .map(sensitivity_tier)
+    .transpose()?;
+  let approval = requires_approval_above
+    .map(sensitivity_tier)
+    .transpose()?;
+
+  let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+    return Err("Vault has no accessPolicies array.".to_string());
+  };
+  let Some(policy) = policies
+    .iter_mut()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+  else {
+    return Err(format!("AccessPolicy was not found for client: {client_id}"));
+  };
+
+  if let Some(ceiling) = ceiling {
+    policy["sensitivityCeiling"] = Value::String(ceiling.to_string());
+  }
+  if let Some(approval) = approval {
+    policy["requiresApprovalAbove"] = Value::String(approval.to_string());
+  }
+  if let Some(passive_capture_allowed) = passive_capture_allowed {
+    policy["passiveCaptureAllowed"] = Value::Bool(passive_capture_allowed);
+  }
+  policy["updatedAt"] = Value::String(now.clone());
+  let policy_id = str_field(policy, "id");
+  let sensitivity = str_field(policy, "sensitivityCeiling");
+  let metadata = json!({
+    "clientId": client_id,
+    "sensitivityCeiling": sensitivity,
+    "requiresApprovalAbove": str_field(policy, "requiresApprovalAbove"),
+    "passiveCaptureAllowed": policy.get("passiveCaptureAllowed").and_then(Value::as_bool).unwrap_or(false),
+    "generatedBy": "native_vault_core"
+  });
+
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "policy_updated",
+      "policy",
+      &policy_id,
+      &sensitivity,
+      metadata,
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+}
+
 pub fn approve_candidate_at_path(
   path: &Path,
   candidate_id: &str,
@@ -2443,6 +2579,44 @@ fn passive_capture_retention_days(vault: &Value) -> i64 {
     .clamp(1, 90)
 }
 
+fn default_passive_capture_settings() -> Value {
+  json!({
+    "enabled": false,
+    "retentionDays": 14,
+    "allowedSites": default_allowed_sites()
+  })
+}
+
+fn default_allowed_sites() -> Vec<&'static str> {
+  vec!["chat.openai.com", "chatgpt.com", "claude.ai", "gemini.google.com"]
+}
+
+fn normalize_allowed_sites(sites: Vec<String>) -> Vec<String> {
+  let mut normalized = Vec::new();
+  for site in sites {
+    let raw = site.trim().to_lowercase();
+    if raw.is_empty() {
+      continue;
+    }
+    let host = host_from_url(&raw).unwrap_or(raw);
+    let host = host
+      .trim_start_matches("*.")
+      .trim_matches('.')
+      .to_string();
+    if host.is_empty()
+      || host.contains('/')
+      || host.contains('@')
+      || host.chars().any(char::is_whitespace)
+    {
+      continue;
+    }
+    if !normalized.iter().any(|item| item == &host) {
+      normalized.push(host);
+    }
+  }
+  normalized
+}
+
 fn passive_capture_site_allowed(vault: &Value, source_client: &str, url: &str) -> bool {
   if is_local_capture_url(source_client, url) {
     return true;
@@ -2483,6 +2657,93 @@ fn host_from_url(url: &str) -> Option<String> {
     None
   } else {
     Some(host)
+  }
+}
+
+fn sensitivity_tier(value: &str) -> Result<&'static str, String> {
+  match value {
+    "public" => Ok("public"),
+    "personal" => Ok("personal"),
+    "private_consequential" => Ok("private_consequential"),
+    "sensitive" => Ok("sensitive"),
+    "secret_never_send" => Ok("secret_never_send"),
+    _ => Err(format!("unsupported sensitivity tier: {value}")),
+  }
+}
+
+fn all_life_domains() -> Vec<&'static str> {
+  vec![
+    "identity_and_profile",
+    "values_goals_and_preferences",
+    "life_events_and_plans",
+    "routines_and_logistics",
+    "home_and_places",
+    "documents_and_evidence",
+    "contracts_and_policies",
+    "procedures_and_obligations",
+    "health_and_care",
+    "finance_and_benefits",
+    "work_and_education",
+    "relationships_and_household",
+    "constraints_and_accessibility",
+  ]
+}
+
+fn default_policy_scopes(client_id: &str) -> Vec<&'static str> {
+  if client_id == "conn_browser_capture" {
+    vec!["passive_capture.write", "memory.propose"]
+  } else {
+    vec![
+      "context_pack.request",
+      "memory.propose",
+      "policy.read",
+      "request.status",
+    ]
+  }
+}
+
+fn default_policy_ceiling(client_id: &str) -> &'static str {
+  match client_id {
+    "conn_claude_desktop" => "sensitive",
+    "conn_browser_capture" => "personal",
+    _ => "private_consequential",
+  }
+}
+
+fn default_policy_passive_capture_allowed(client_id: &str) -> bool {
+  client_id == "conn_browser_capture"
+}
+
+fn default_access_policy_for_client(client_id: &str, now: &str) -> Value {
+  json!({
+    "id": format!("policy_{}", client_id.trim_start_matches("conn_")),
+    "clientId": client_id,
+    "scopes": default_policy_scopes(client_id),
+    "domainAllowlist": all_life_domains(),
+    "sensitivityCeiling": default_policy_ceiling(client_id),
+    "requiresApprovalAbove": "personal",
+    "passiveCaptureAllowed": default_policy_passive_capture_allowed(client_id),
+    "createdAt": now,
+    "updatedAt": now
+  })
+}
+
+fn ensure_access_policy_for_client(vault: &mut Value, client_id: &str) {
+  if !vault
+    .get("accessPolicies")
+    .map(Value::is_array)
+    .unwrap_or(false)
+  {
+    vault["accessPolicies"] = json!([]);
+  }
+  let exists = vault
+    .get("accessPolicies")
+    .and_then(Value::as_array)
+    .map(|policies| policies.iter().any(|policy| str_field(policy, "clientId") == client_id))
+    .unwrap_or(false);
+  if !exists {
+    let policy = default_access_policy_for_client(client_id, &now_iso());
+    push_json_array(vault, "accessPolicies", policy);
   }
 }
 
@@ -3759,6 +4020,50 @@ fn add_native_passive_capture_event(
 }
 
 #[tauri::command]
+fn update_native_passive_capture_settings(
+  app: AppHandle,
+  enabled: Option<bool>,
+  retention_days: Option<i64>,
+  allowed_sites: Option<Vec<String>>,
+) -> Result<NativeVaultSettingsUpdateResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_passive_capture_settings_at_path(
+    &path,
+    enabled,
+    retention_days,
+    allowed_sites,
+  )?;
+  Ok(NativeVaultSettingsUpdateResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
+fn update_native_access_policy(
+  app: AppHandle,
+  client_id: String,
+  sensitivity_ceiling: Option<String>,
+  requires_approval_above: Option<String>,
+  passive_capture_allowed: Option<bool>,
+) -> Result<NativeVaultSettingsUpdateResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_access_policy_at_path(
+    &path,
+    &client_id,
+    sensitivity_ceiling.as_deref(),
+    requires_approval_above.as_deref(),
+    passive_capture_allowed,
+  )?;
+  Ok(NativeVaultSettingsUpdateResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -3878,6 +4183,8 @@ pub fn run() {
       approve_native_candidate,
       update_native_candidate_status,
       add_native_passive_capture_event,
+      update_native_passive_capture_settings,
+      update_native_access_policy,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -4498,6 +4805,91 @@ mod tests {
     assert_eq!(normalized_candidate_count, result.candidate_ids.len() as i64);
     assert_eq!(normalized_fact_count, 0);
     assert_eq!(normalized_capture_count, 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_passive_capture_settings_update_normalizes_sites_and_audits() {
+    use_test_vault_key();
+    let path = temp_vault_path("passive-settings");
+    let result = update_passive_capture_settings_at_path(
+      &path,
+      Some(true),
+      Some(120),
+      Some(vec![
+        "https://chatgpt.com/c/thread".to_string(),
+        "*.Claude.ai".to_string(),
+        "bad host".to_string(),
+        "chatgpt.com".to_string(),
+      ]),
+    )
+    .expect("settings update");
+    let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
+    let settings = saved
+      .get("passiveCaptureSettings")
+      .expect("passive capture settings");
+    let audit_count = saved
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+
+    assert_eq!(settings.get("enabled").and_then(Value::as_bool), Some(true));
+    assert_eq!(settings.get("retentionDays").and_then(Value::as_i64), Some(90));
+    assert_eq!(
+      settings.get("allowedSites").cloned().unwrap_or_else(|| json!([])),
+      json!(["chatgpt.com", "claude.ai"])
+    );
+    assert_eq!(audit_count, 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_access_policy_update_syncs_projection() {
+    use_test_vault_key();
+    let path = temp_vault_path("policy-update");
+    let result = update_access_policy_at_path(
+      &path,
+      "conn_chatgpt",
+      Some("personal"),
+      Some("public"),
+      Some(false),
+    )
+    .expect("policy update");
+    let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
+    let policy = saved
+      .get("accessPolicies")
+      .and_then(Value::as_array)
+      .and_then(|policies| {
+        policies
+          .iter()
+          .find(|policy| str_field(policy, "clientId") == "conn_chatgpt")
+      })
+      .expect("policy");
+
+    assert_eq!(
+      policy.get("sensitivityCeiling").and_then(Value::as_str),
+      Some("personal")
+    );
+    assert_eq!(
+      policy.get("requiresApprovalAbove").and_then(Value::as_str),
+      Some("public")
+    );
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_policy_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM access_policies", [], |row| row.get(0))
+      .expect("normalized policy count");
+    let audit_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM audit_events WHERE event_type = 'policy_updated'",
+        [],
+        |row| row.get(0),
+      )
+      .expect("audit count");
+
+    assert_eq!(normalized_policy_count, 1);
+    assert_eq!(audit_count, 1);
     remove_temp_vault(&path);
   }
 

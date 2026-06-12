@@ -193,8 +193,11 @@ Policy Engine decides:
 - Whether a fact may be retrieved for a task.
 - Whether a Context Pack requires answer-time confirmation.
 - Whether a context item may be sent to the configured LLM provider.
+- Whether Passive Capture may write candidates from a configured source.
 
-Policy decisions must be recorded in the audit log.
+In the desktop product path, policy and Capture settings are updated through typed Vault Core commands. The Control Center may expose these as ordinary UI controls, but the canonical write path remains Vault Core so normalized policy tables and audit events stay in sync.
+
+Policy decisions and policy changes must be recorded in the audit log.
 
 ### Retrieval Engine
 

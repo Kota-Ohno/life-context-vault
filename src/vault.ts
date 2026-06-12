@@ -817,6 +817,37 @@ export function updatePassiveCaptureSettings(
   };
 }
 
+export function updateAccessPolicy(
+  state: VaultState,
+  clientId: string,
+  settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+): VaultState {
+  const now = nowIso();
+  const currentPolicy = state.accessPolicies.find((policy) => policy.clientId === clientId);
+  if (!currentPolicy) return state;
+  const updatedPolicy: AccessPolicy = {
+    ...currentPolicy,
+    ...settings,
+    updatedAt: now
+  };
+  const accessPolicies = state.accessPolicies.map((policy) =>
+    policy.clientId === clientId ? updatedPolicy : policy
+  );
+  return {
+    ...state,
+    accessPolicies,
+    auditEvents: [
+      audit("policy_updated", "policy", updatedPolicy.id, updatedPolicy.sensitivityCeiling, {
+        clientId,
+        sensitivityCeiling: updatedPolicy.sensitivityCeiling,
+        requiresApprovalAbove: updatedPolicy.requiresApprovalAbove,
+        passiveCaptureAllowed: updatedPolicy.passiveCaptureAllowed
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
 export function addPassiveCaptureEvent(
   state: VaultState,
   input: {

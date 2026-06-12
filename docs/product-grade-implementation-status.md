@@ -145,6 +145,11 @@ Last updated: 2026-06-12
   - browser-only preview keeps the TypeScript fallback
   - Capture creates Sources, PassiveCaptureEvents, Candidates, and audit records, but never ApprovedFacts
   - allowed-site checks are enforced by Vault Core for browser captures, while local Codex/MCP capture uses an explicit `lcv-local://` boundary
+- Added Rust-owned policy/settings update path for the Tauri Control Center:
+  - `update_native_passive_capture_settings` saves Capture on/off, retention days, and allowed AI sites through Vault Core
+  - `update_native_access_policy` saves per-client sensitivity ceilings and confirmation thresholds through Vault Core
+  - Connections now lets users edit AI-bound sensitivity policy instead of only reading policy values
+  - Capture allowed sites can be edited from the Passive Capture card and are normalized to host names before persistence
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -153,7 +158,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for policy updates and broader source lifecycle operations beyond the current native Context Pack/source/candidate review/passive capture/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for broader source lifecycle operations beyond the current native Context Pack/source/candidate review/passive capture/policy settings/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -184,6 +189,7 @@ Last updated: 2026-06-12
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
+- Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
@@ -201,6 +207,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
   - desktop `1280x900`: Connections manual Capture can start Passive Capture, create an Inbox candidate, and keep Facts at zero
   - mobile `390x844`: Connections Capture surfaces render without page-level horizontal overflow
+  - desktop `1280x920`: editable policy controls and Capture allowed-site controls render and update without page-level horizontal overflow
+  - mobile `390x844`: editable policy controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
@@ -222,7 +230,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Candidate review, Passive Capture, Context Pack generation, MCP memory proposal, and MCP request status are present, while policy updates and some source lifecycle operations still use the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while some source lifecycle operations still use the JSON snapshot projected into tables.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -232,6 +240,11 @@ Last updated: 2026-06-12
 - Passive Capture security review: accepted after fixing the `copy_fallback` local URL allowlist mismatch; paused captures, unallowed browser sites, secrets, and Fact creation are covered by tests.
 - Passive Capture technical review: accepted; capture host no longer duplicates extraction, redaction, persistence, or audit logic, and normalized capture tables are synced by the same encrypted save path.
 - Passive Capture UX review: accepted; desktop and mobile Connections surfaces render without page-level horizontal overflow, and manual Capture produces an Inbox candidate with zero Facts.
+- Policy Settings review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Policy Settings product review: accepted; users can now adjust AI-bound sensitivity policy and Capture allowed sites from Connections instead of reading fixed policy values.
+- Policy Settings security review: accepted; Capture site input is normalized to host names, empty allowlists are rejected by Vault Core, and every policy/settings update writes an audit event.
+- Policy Settings technical review: accepted; Tauri policy/settings writes now use shared Vault Core commands and sync normalized `access_policies` plus audit projection.
+- Policy Settings UX review: accepted; controls preserve the existing card density, avoid `secret_never_send` as a selectable AI-bound ceiling, and stack cleanly on mobile.
 
 ### Relay State Store Slice
 

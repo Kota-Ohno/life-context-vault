@@ -49,7 +49,9 @@ import {
   searchNativeFacts,
   startAiAccessServices,
   stopAiAccessServices,
+  updateNativeAccessPolicy,
   updateNativeCandidateStatus,
+  updateNativePassiveCaptureSettings,
   uninstallLoginItem
 } from "./nativeStorage";
 import {
@@ -81,11 +83,13 @@ import {
   saveVault,
   searchFacts,
   sensitivityLabel,
+  updateAccessPolicy,
   updatePassiveCaptureSettings,
   updateCandidateStatus
 } from "./vault";
 import {
   ApprovedFact,
+  AccessPolicy,
   BackgroundSetupInput,
   CandidateStatus,
   ConnectorKind,
@@ -146,6 +150,13 @@ const sensitivityOptions: Array<SensitivityTier | "all"> = [
   "private_consequential",
   "sensitive",
   "secret_never_send"
+];
+
+const policySensitivityOptions: SensitivityTier[] = [
+  "public",
+  "personal",
+  "private_consequential",
+  "sensitive"
 ];
 
 const blankSetup: BackgroundSetupInput = {
@@ -760,7 +771,58 @@ export function App() {
   }
 
   function updateCapture(settings: Partial<PassiveCaptureSettings>) {
+    void updateCaptureThroughCore(settings);
+  }
+
+  async function updateCaptureThroughCore(settings: Partial<PassiveCaptureSettings>) {
+    if (nativePath) {
+      try {
+        const updated = await updateNativePassiveCaptureSettings(settings);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice("Capture設定をVault Coreで保存しました。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでCapture設定を保存できませんでした。");
+        return;
+      }
+    }
     apply(updatePassiveCaptureSettings(state, settings), "Capture設定を更新しました。");
+  }
+
+  function updatePolicy(
+    clientId: string,
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+  ) {
+    void updatePolicyThroughCore(clientId, settings);
+  }
+
+  async function updatePolicyThroughCore(
+    clientId: string,
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+  ) {
+    if (nativePath) {
+      try {
+        const updated = await updateNativeAccessPolicy({
+          clientId,
+          ...settings
+        });
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice("AI接続ポリシーをVault Coreで保存しました。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでAI接続ポリシーを保存できませんでした。");
+        return;
+      }
+    }
+    apply(updateAccessPolicy(state, clientId, settings), "AI接続ポリシーを更新しました。");
   }
 
   function simulatePassiveCapture() {
@@ -1127,6 +1189,7 @@ export function App() {
             pendingCandidateCount={activeCandidates.length}
             requestCount={state.contextPackRequests.length}
             updateCapture={updateCapture}
+            updatePolicy={updatePolicy}
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
@@ -1655,6 +1718,7 @@ function ConnectionsView({
   pendingCandidateCount,
   requestCount,
   updateCapture,
+  updatePolicy,
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
@@ -1693,6 +1757,10 @@ function ConnectionsView({
   pendingCandidateCount: number;
   requestCount: number;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
+  updatePolicy: (
+    clientId: string,
+    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed">>
+  ) => void;
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
@@ -1726,6 +1794,11 @@ function ConnectionsView({
 }) {
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
+  const [allowedSitesDraft, setAllowedSitesDraft] = useState(captureSettings.allowedSites.join(", "));
+
+  useEffect(() => {
+    setAllowedSitesDraft(captureSettings.allowedSites.join(", "));
+  }, [captureSettings.allowedSites]);
 
   return (
     <section className="view-grid connections-grid">
@@ -1760,6 +1833,42 @@ function ConnectionsView({
                   {connector.scopes.map((scope) => (
                     <Badge key={scope}>{scope}</Badge>
                   ))}
+                </div>
+                <div className="policy-controls">
+                  <label className="field">
+                    <span>AIへ渡せる最大感度</span>
+                    <select
+                      value={policy?.sensitivityCeiling ?? "private_consequential"}
+                      onChange={(event) =>
+                        updatePolicy(connector.id, {
+                          sensitivityCeiling: event.target.value as SensitivityTier
+                        })
+                      }
+                    >
+                      {policySensitivityOptions.map((sensitivity) => (
+                        <option key={sensitivity} value={sensitivity}>
+                          {sensitivityLabel(sensitivity)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>確認が必要になる感度</span>
+                    <select
+                      value={policy?.requiresApprovalAbove ?? "personal"}
+                      onChange={(event) =>
+                        updatePolicy(connector.id, {
+                          requiresApprovalAbove: event.target.value as SensitivityTier
+                        })
+                      }
+                    >
+                      {policySensitivityOptions.map((sensitivity) => (
+                        <option key={sensitivity} value={sensitivity}>
+                          {sensitivityLabel(sensitivity)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
               </article>
             );
@@ -2100,6 +2209,28 @@ function ConnectionsView({
             onChange={(value) => updateCapture({ retentionDays: Number(value) || 14 })}
             type="number"
           />
+          <label className="field">
+            <span>Captureを許可するAIサイト</span>
+            <input
+              value={allowedSitesDraft}
+              onChange={(event) => setAllowedSitesDraft(event.target.value)}
+              placeholder="chatgpt.com, claude.ai, gemini.google.com"
+            />
+          </label>
+          <div className="service-actions">
+            <button
+              className="secondary-button"
+              onClick={() =>
+                updateCapture({
+                  allowedSites: parseAllowedSitesInput(allowedSitesDraft)
+                })
+              }
+              type="button"
+            >
+              <ShieldCheck size={16} />
+              許可サイトを保存
+            </button>
+          </div>
           <p className="muted">Raw transcriptは初期設定で{captureSettings.retentionDays}日後に消えます。候補が承認されるまでFactにはなりません。</p>
         </div>
       </div>
@@ -2748,6 +2879,23 @@ function captureUrlForClient(client: ConnectorKind, conversationId: string): str
     default:
       return `https://chatgpt.com/c/${id}`;
   }
+}
+
+function parseAllowedSitesInput(value: string): string[] {
+  const sites: string[] = [];
+  for (const item of value.split(/[,\n]/)) {
+    const raw = item.trim().toLowerCase();
+    if (!raw) continue;
+    const withoutScheme = raw.includes("://") ? raw.split("://")[1] : raw;
+    const host = withoutScheme
+      .split("/")[0]
+      .split(":")[0]
+      .replace(/^\*\./, "")
+      .replace(/\.+$/, "");
+    if (!host || host.includes("@") || /\s/.test(host)) continue;
+    if (!sites.includes(host)) sites.push(host);
+  }
+  return sites;
 }
 
 function EmptyState({

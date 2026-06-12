@@ -167,6 +167,12 @@ interface NativePassiveCapturePayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeVaultSettingsUpdatePayload {
+  payload: string;
+  updatedAt: string | null;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -204,6 +210,12 @@ export interface NativePassiveCaptureResult {
   candidateIds: string[];
   detectedSensitivity: SensitivityTier;
   retentionUntil: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeVaultSettingsUpdateResult {
+  state: VaultState;
+  updatedAt: string | null;
   generatedBy: "native_vault_core";
 }
 
@@ -404,6 +416,49 @@ export async function addNativePassiveCaptureEvent(input: {
     candidateIds: result.candidateIds,
     detectedSensitivity: result.detectedSensitivity,
     retentionUntil: result.retentionUntil,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativePassiveCaptureSettings(input: {
+  enabled?: boolean;
+  retentionDays?: number;
+  allowedSites?: string[];
+}): Promise<NativeVaultSettingsUpdateResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeVaultSettingsUpdatePayload>(
+    "update_native_passive_capture_settings",
+    {
+      enabled: input.enabled ?? null,
+      retentionDays: input.retentionDays ?? null,
+      allowedSites: input.allowedSites ?? null
+    }
+  );
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeAccessPolicy(input: {
+  clientId: string;
+  sensitivityCeiling?: SensitivityTier;
+  requiresApprovalAbove?: SensitivityTier;
+  passiveCaptureAllowed?: boolean;
+}): Promise<NativeVaultSettingsUpdateResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeVaultSettingsUpdatePayload>("update_native_access_policy", {
+    clientId: input.clientId,
+    sensitivityCeiling: input.sensitivityCeiling ?? null,
+    requiresApprovalAbove: input.requiresApprovalAbove ?? null,
+    passiveCaptureAllowed: input.passiveCaptureAllowed ?? null
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
     generatedBy: result.generatedBy
   };
 }
