@@ -1,4 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -34,6 +36,9 @@ const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_MCP_SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MCP_SSE_RETRY_MS: u64 = 5_000;
+const HTTP_READ_TIMEOUT_SECONDS: u64 = 10;
+const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -89,6 +94,7 @@ struct RelayConfig {
   base_url: String,
   token: String,
   admin_token: Option<String>,
+  handoff_secret: Option<String>,
   allow_static_bearer: bool,
   tenant_id: String,
   mcp_command: PathBuf,
@@ -105,6 +111,10 @@ impl RelayConfig {
     let token = env::var("LCV_RELAY_TOKEN").unwrap_or_else(|_| DEFAULT_TOKEN.to_string());
     let base_url = env::var("LCV_RELAY_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
     let admin_token = env::var("LCV_RELAY_ADMIN_TOKEN").ok();
+    let handoff_secret = env::var("LCV_RELAY_HANDOFF_SECRET")
+      .ok()
+      .map(|value| value.trim().to_string())
+      .filter(|value| !value.is_empty());
     let allow_direct_sidecar = env::var("LCV_RELAY_ALLOW_DIRECT_SIDECAR")
       .map(|value| value != "0")
       .unwrap_or(true);
@@ -116,6 +126,7 @@ impl RelayConfig {
       &bind,
       &base_url,
       admin_token.as_ref(),
+      handoff_secret.as_ref(),
       allow_direct_sidecar,
       allow_static_bearer,
       env::var("LCV_RELAY_TOKEN").is_ok(),
@@ -127,6 +138,7 @@ impl RelayConfig {
       base_url,
       token,
       admin_token,
+      handoff_secret,
       allow_static_bearer,
       tenant_id,
       mcp_command: env::var("LCV_MCP_COMMAND")
@@ -248,6 +260,7 @@ fn validate_relay_surface(
   bind: &str,
   base_url: &str,
   admin_token: Option<&String>,
+  handoff_secret: Option<&String>,
   allow_direct_sidecar: bool,
   allow_static_bearer: bool,
   static_token_set: bool,
@@ -261,6 +274,9 @@ fn validate_relay_surface(
   }
   if admin_token.is_none() {
     return Err("LCV_RELAY_ADMIN_TOKEN is required when binding outside loopback".to_string());
+  }
+  if handoff_secret.is_none() {
+    return Err("LCV_RELAY_HANDOFF_SECRET is required when binding outside loopback".to_string());
   }
   if allow_direct_sidecar {
     return Err("LCV_RELAY_ALLOW_DIRECT_SIDECAR=0 is required when binding outside loopback".to_string());
@@ -947,6 +963,9 @@ impl RelayState {
       session.status = PairingStatus::Expired;
       return Err("pairing code expired".to_string());
     }
+    if session.status != PairingStatus::Pending {
+      return Err("pairing code already used".to_string());
+    }
     session.status = PairingStatus::Connected;
     session.connected_at = Some(SystemTime::now());
     let connected_session = session.clone();
@@ -1107,7 +1126,10 @@ fn handle_stream(stream: TcpStream, config: &RelayConfig, state: &RelayState) ->
     return handle_agent_websocket(stream, state);
   }
   let mut stream = stream;
-  let request = HttpRequest::read(&mut stream)?;
+  let request = match HttpRequest::read(&mut stream) {
+    Ok(request) => request,
+    Err(error) => return error.to_response().write_to(&mut stream),
+  };
   let response = route_request(&request, config, state);
   response.write_to(&mut stream)
 }
@@ -1283,15 +1305,6 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     .get("mcpResponse")
     .cloned()
     .unwrap_or_else(|| body.clone());
-  let request_id = match validate_handoff_mcp_response(&mcp_response) {
-    Ok(request_id) => request_id,
-    Err(error) => {
-      return HttpResponse::json(400, json!({
-        "error": "invalid_handoff",
-        "message": error
-      }));
-    }
-  };
   let client_id = body
     .get("clientId")
     .and_then(Value::as_str)
@@ -1303,10 +1316,68 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       "message": "handoff body must include clientId so cached Context Packs remain bound to the requesting AI client."
     }));
   };
-  let handoff = state.store_handoff(request_id.clone(), Some(client_id), mcp_response);
+  let validation = match validate_handoff_mcp_response(&mcp_response, &client_id) {
+    Ok(validation) => validation,
+    Err(error) => {
+      return HttpResponse::json(400, json!({
+        "error": "invalid_handoff",
+        "message": error
+      }));
+    }
+  };
+  if body.get("requestId").and_then(Value::as_str) != Some(validation.request_id.as_str()) {
+    return HttpResponse::json(400, json!({
+      "error": "invalid_handoff",
+      "message": "handoff requestId must match the signed Context Pack requestId."
+    }));
+  }
+  if body.get("expiresAt").and_then(Value::as_str) != Some(validation.expires_at.as_str()) {
+    return HttpResponse::json(400, json!({
+      "error": "invalid_handoff",
+      "message": "handoff expiresAt must match the signed Context Pack expiresAt."
+    }));
+  }
+  if iso_time_expired(&validation.expires_at) {
+    return HttpResponse::json(400, json!({
+      "error": "invalid_handoff",
+      "message": "handoff Context Pack is expired."
+    }));
+  }
+  let Some(handoff_secret) = config.handoff_secret.as_deref() else {
+    return HttpResponse::json(403, json!({
+      "error": "handoff_signature_required",
+      "message": "Relay handoff requires LCV_RELAY_HANDOFF_SECRET."
+    }));
+  };
+  let signature = body
+    .get("handoffSignature")
+    .and_then(Value::as_str)
+    .unwrap_or_default();
+  let expected_signature = match relay_handoff_signature(
+    handoff_secret,
+    &client_id,
+    &validation.request_id,
+    &validation.expires_at,
+    &mcp_response,
+  ) {
+    Ok(signature) => signature,
+    Err(error) => {
+      return HttpResponse::json(400, json!({
+        "error": "invalid_handoff",
+        "message": error
+      }));
+    }
+  };
+  if !constant_time_eq(signature.as_bytes(), expected_signature.as_bytes()) {
+    return HttpResponse::json(403, json!({
+      "error": "invalid_handoff_signature",
+      "message": "handoff signature did not match the Context Pack payload."
+    }));
+  }
+  let handoff = state.store_handoff(validation.request_id.clone(), Some(client_id), mcp_response);
   HttpResponse::json(200, json!({
     "status": "stored",
-    "requestId": request_id,
+    "requestId": validation.request_id,
     "expiresAt": system_time_seconds(handoff.expires_at),
     "ttlSeconds": state.retention.handoff_ttl_seconds
   }))
@@ -1369,12 +1440,10 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
     .get("code_challenge_method")
     .map(String::as_str)
     .unwrap_or("S256");
-  if !code_challenge_method.eq_ignore_ascii_case("S256")
-    && !code_challenge_method.eq_ignore_ascii_case("plain")
-  {
+  if !code_challenge_method.eq_ignore_ascii_case("S256") {
     return json_response(400, json!({
       "error": "invalid_request",
-      "message": "unsupported code_challenge_method"
+      "message": "code_challenge_method must be S256."
     }));
   }
   let scopes = match parse_requested_scopes(query.get("scope").map(String::as_str).unwrap_or_default()) {
@@ -2248,7 +2317,17 @@ fn handoff_response_for_mcp_request(state: &RelayState, body: &str, client_id: &
   state.handoff_response(&request_id, client_id)
 }
 
-fn validate_handoff_mcp_response(response: &Value) -> Result<String, String> {
+struct HandoffValidation {
+  request_id: String,
+  expires_at: String,
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn validate_handoff_mcp_response(
+  response: &Value,
+  expected_client_id: &str,
+) -> Result<HandoffValidation, String> {
   let structured = response
     .get("result")
     .and_then(|result| result.get("structuredContent"))
@@ -2262,6 +2341,17 @@ fn validate_handoff_mcp_response(response: &Value) -> Result<String, String> {
     .and_then(Value::as_str)
     .filter(|request_id| !request_id.trim().is_empty())
     .ok_or_else(|| "handoff structuredContent must include requestId".to_string())?;
+  let context_pack = structured
+    .get("contextPack")
+    .ok_or_else(|| "handoff structuredContent must include contextPack".to_string())?;
+  let pack_request_id = context_pack
+    .get("requestId")
+    .and_then(Value::as_str)
+    .filter(|value| !value.trim().is_empty())
+    .ok_or_else(|| "handoff contextPack must include requestId".to_string())?;
+  if pack_request_id != request_id {
+    return Err("handoff contextPack requestId must match structuredContent requestId".to_string());
+  }
   let trust_boundary = structured
     .get("contextPack")
     .and_then(|context_pack| context_pack.get("trustBoundary"))
@@ -2269,7 +2359,63 @@ fn validate_handoff_mcp_response(response: &Value) -> Result<String, String> {
   if trust_boundary != Some("ContextPack only") {
     return Err("handoff contextPack must declare trustBoundary: ContextPack only".to_string());
   }
-  Ok(request_id.to_string())
+  if context_pack.get("confirmationStatus").and_then(Value::as_str) != Some("confirmed") {
+    return Err("handoff contextPack must be user-confirmed".to_string());
+  }
+  let pack_client_id = context_pack
+    .get("clientId")
+    .and_then(Value::as_str)
+    .unwrap_or(expected_client_id);
+  if pack_client_id != expected_client_id {
+    return Err("handoff contextPack clientId must match handoff clientId".to_string());
+  }
+  let expires_at = context_pack
+    .get("expiresAt")
+    .and_then(Value::as_str)
+    .filter(|value| !value.trim().is_empty())
+    .ok_or_else(|| "handoff contextPack must include expiresAt".to_string())?;
+  Ok(HandoffValidation {
+    request_id: request_id.to_string(),
+    expires_at: expires_at.to_string(),
+  })
+}
+
+fn relay_handoff_signature(
+  secret: &str,
+  client_id: &str,
+  request_id: &str,
+  expires_at: &str,
+  mcp_response: &Value,
+) -> Result<String, String> {
+  let response_text = serde_json::to_string(mcp_response)
+    .map_err(|error| format!("failed to serialize signed handoff payload: {error}"))?;
+  let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+    .map_err(|error| format!("failed to create handoff signature: {error}"))?;
+  mac.update(client_id.as_bytes());
+  mac.update(b"\n");
+  mac.update(request_id.as_bytes());
+  mac.update(b"\n");
+  mac.update(expires_at.as_bytes());
+  mac.update(b"\n");
+  mac.update(response_text.as_bytes());
+  Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
+fn iso_time_expired(value: &str) -> bool {
+  DateTime::parse_from_rfc3339(value)
+    .map(|parsed| parsed.with_timezone(&Utc) <= Utc::now())
+    .unwrap_or(true)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+  let max_len = left.len().max(right.len());
+  let mut diff = left.len() ^ right.len();
+  for index in 0..max_len {
+    let left_byte = left.get(index).copied().unwrap_or(0);
+    let right_byte = right.get(index).copied().unwrap_or(0);
+    diff |= usize::from(left_byte ^ right_byte);
+  }
+  diff == 0
 }
 
 fn record_relay_event(
@@ -2398,25 +2544,60 @@ struct HttpRequest {
   body: String,
 }
 
+#[derive(Debug)]
+enum HttpReadError {
+  BadRequest(String),
+  HeaderTooLarge,
+  PayloadTooLarge,
+  Timeout(String),
+}
+
+impl HttpReadError {
+  fn to_response(&self) -> HttpResponse {
+    match self {
+      HttpReadError::BadRequest(message) => HttpResponse::json(400, json!({
+        "error": "bad_request",
+        "message": message
+      })),
+      HttpReadError::HeaderTooLarge => HttpResponse::json(431, json!({
+        "error": "request_header_fields_too_large",
+        "message": format!("Relay request headers must be {}KB or smaller.", MAX_HTTP_HEADER_BYTES / 1024)
+      })),
+      HttpReadError::PayloadTooLarge => HttpResponse::json(413, json!({
+        "error": "payload_too_large",
+        "message": format!("Relay request body must be {}KB or smaller.", MAX_HTTP_BODY_BYTES / 1024)
+      })),
+      HttpReadError::Timeout(message) => HttpResponse::json(408, json!({
+        "error": "request_timeout",
+        "message": message
+      })),
+    }
+  }
+}
+
 impl HttpRequest {
-  fn read(stream: &mut TcpStream) -> Result<Self, String> {
+  fn read(stream: &mut TcpStream) -> Result<Self, HttpReadError> {
+    stream
+      .set_read_timeout(Some(Duration::from_secs(HTTP_READ_TIMEOUT_SECONDS)))
+      .map_err(|error| HttpReadError::BadRequest(format!("failed to set read timeout: {error}")))?;
     let mut reader = BufReader::new(stream);
-    let mut start = String::new();
-    reader
-      .read_line(&mut start)
-      .map_err(|error| format!("failed to read request line: {error}"))?;
+    Self::read_from_reader(&mut reader)
+  }
+
+  fn read_from_reader<R: BufRead>(reader: &mut R) -> Result<Self, HttpReadError> {
+    let mut header_bytes = 0usize;
+    let start = read_http_line_limited(reader, &mut header_bytes)?;
     let parts: Vec<&str> = start.split_whitespace().collect();
     if parts.len() < 2 {
-      return Err("malformed HTTP request line".to_string());
+      return Err(HttpReadError::BadRequest(
+        "malformed HTTP request line".to_string(),
+      ));
     }
 
     let mut headers = Vec::new();
     let mut content_length = 0usize;
     loop {
-      let mut line = String::new();
-      reader
-        .read_line(&mut line)
-        .map_err(|error| format!("failed to read header: {error}"))?;
+      let line = read_http_line_limited(reader, &mut header_bytes)?;
       let trimmed = line.trim_end_matches(['\r', '\n']);
       if trimmed.is_empty() {
         break;
@@ -2425,7 +2606,12 @@ impl HttpRequest {
         let name = name.trim().to_string();
         let value = value.trim().to_string();
         if name.eq_ignore_ascii_case("content-length") {
-          content_length = value.parse::<usize>().unwrap_or(0);
+          content_length = value
+            .parse::<usize>()
+            .map_err(|_| HttpReadError::BadRequest("invalid Content-Length".to_string()))?;
+          if content_length > MAX_HTTP_BODY_BYTES {
+            return Err(HttpReadError::PayloadTooLarge);
+          }
         }
         headers.push((name, value));
       }
@@ -2435,7 +2621,7 @@ impl HttpRequest {
     if content_length > 0 {
       reader
         .read_exact(&mut body_bytes)
-        .map_err(|error| format!("failed to read body: {error}"))?;
+        .map_err(http_read_io_error)?;
     }
 
     let request_target = parts[1].to_string();
@@ -2468,6 +2654,45 @@ impl HttpRequest {
       .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
       .map(|(_, value)| value.as_str())
       .collect()
+  }
+}
+
+fn read_http_line_limited<R: BufRead>(
+  reader: &mut R,
+  total_bytes: &mut usize,
+) -> Result<String, HttpReadError> {
+  let remaining = MAX_HTTP_HEADER_BYTES.saturating_sub(*total_bytes);
+  if remaining == 0 {
+    return Err(HttpReadError::HeaderTooLarge);
+  }
+  let mut bytes = Vec::new();
+  let read = reader
+    .take((remaining + 1) as u64)
+    .read_until(b'\n', &mut bytes)
+    .map_err(http_read_io_error)?;
+  if read == 0 {
+    return Err(HttpReadError::BadRequest(
+      "unexpected end of request headers".to_string(),
+    ));
+  }
+  if bytes.len() > remaining {
+    return Err(HttpReadError::HeaderTooLarge);
+  }
+  *total_bytes += bytes.len();
+  String::from_utf8(bytes)
+    .map_err(|_| HttpReadError::BadRequest("request headers must be UTF-8".to_string()))
+}
+
+fn http_read_io_error(error: std::io::Error) -> HttpReadError {
+  if matches!(
+    error.kind(),
+    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+  ) {
+    HttpReadError::Timeout(format!(
+      "Relay request was not fully received within {HTTP_READ_TIMEOUT_SECONDS} seconds."
+    ))
+  } else {
+    HttpReadError::BadRequest(format!("failed to read request: {error}"))
   }
 }
 
@@ -2733,9 +2958,6 @@ fn verify_pkce(challenge: &str, method: &str, verifier: &str) -> bool {
   if verifier.is_empty() {
     return false;
   }
-  if method.eq_ignore_ascii_case("plain") {
-    return challenge == verifier;
-  }
   if !method.eq_ignore_ascii_case("S256") {
     return false;
   }
@@ -2875,6 +3097,7 @@ mod tests {
       base_url: "http://127.0.0.1:8765".to_string(),
       token: "test-token".to_string(),
       admin_token: None,
+      handoff_secret: Some("test-handoff-secret".to_string()),
       allow_static_bearer: true,
       tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       mcp_command: PathBuf::from("lcv-mcp"),
@@ -2908,6 +3131,49 @@ mod tests {
     let mut headers = mcp_post_headers();
     headers.push(("Authorization".to_string(), format!("Bearer {token}")));
     headers
+  }
+
+  #[test]
+  fn relay_http_parser_rejects_oversized_body_before_allocation() {
+    let raw = format!(
+      "POST /mcp HTTP/1.1\r\nHost: relay\r\nContent-Length: {}\r\n\r\n",
+      MAX_HTTP_BODY_BYTES + 1
+    );
+    let mut reader = BufReader::new(raw.as_bytes());
+    let error = HttpRequest::read_from_reader(&mut reader).expect_err("oversized body");
+
+    assert!(matches!(error, HttpReadError::PayloadTooLarge));
+    assert_eq!(error.to_response().status, 413);
+  }
+
+  #[test]
+  fn relay_http_parser_rejects_oversized_headers() {
+    let raw = format!(
+      "GET /health HTTP/1.1\r\nX-Large: {}\r\n\r\n",
+      "a".repeat(MAX_HTTP_HEADER_BYTES)
+    );
+    let mut reader = BufReader::new(raw.as_bytes());
+    let error = HttpRequest::read_from_reader(&mut reader).expect_err("oversized header");
+
+    assert!(matches!(error, HttpReadError::HeaderTooLarge));
+    assert_eq!(error.to_response().status, 431);
+  }
+
+  #[test]
+  fn pairing_code_is_consumed_after_agent_connects() {
+    let state = RelayState::new();
+    let pairing = state.start_pairing();
+    let (first_tx, _first_rx) = mpsc::channel::<String>();
+    let (second_tx, _second_rx) = mpsc::channel::<String>();
+
+    state
+      .connect_agent(&pairing.code, first_tx)
+      .expect("first agent connect");
+    let error = state
+      .connect_agent(&pairing.code, second_tx)
+      .expect_err("pairing code should be single-use");
+
+    assert!(error.contains("already used"));
   }
 
   fn authorized_mcp_sse_headers(token: &str) -> Vec<(String, String)> {
@@ -3266,9 +3532,11 @@ mod tests {
   #[test]
   fn public_relay_surface_requires_https_admin_and_agent_only_path() {
     let admin_token = "admin-secret".to_string();
+    let handoff_secret = "handoff-secret".to_string();
     assert!(validate_relay_surface(
       "127.0.0.1:8765",
       "http://127.0.0.1:8765",
+      None,
       None,
       true,
       false,
@@ -3280,6 +3548,7 @@ mod tests {
       "0.0.0.0:8765",
       "http://relay.example.com",
       Some(&admin_token),
+      Some(&handoff_secret),
       false,
       false,
       false,
@@ -3291,6 +3560,7 @@ mod tests {
       "0.0.0.0:8765",
       "https://relay.example.com",
       None,
+      Some(&handoff_secret),
       false,
       false,
       false,
@@ -3302,6 +3572,7 @@ mod tests {
       "0.0.0.0:8765",
       "https://relay.example.com",
       Some(&admin_token),
+      Some(&handoff_secret),
       true,
       false,
       false,
@@ -3313,6 +3584,7 @@ mod tests {
       "0.0.0.0:8765",
       "https://relay.example.com",
       Some(&admin_token),
+      Some(&handoff_secret),
       false,
       true,
       false,
@@ -3324,6 +3596,7 @@ mod tests {
       "0.0.0.0:8765",
       "https://relay.example.com",
       Some(&admin_token),
+      Some(&handoff_secret),
       false,
       false,
       false,
@@ -3335,6 +3608,19 @@ mod tests {
       "0.0.0.0:8765",
       "https://relay.example.com",
       Some(&admin_token),
+      None,
+      false,
+      false,
+      false,
+      &["https://chatgpt.com".to_string()]
+    )
+    .expect_err("public relay must require handoff secret")
+    .contains("HANDOFF_SECRET"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      Some(&admin_token),
+      Some(&handoff_secret),
       false,
       false,
       false,
@@ -3363,6 +3649,7 @@ mod tests {
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     assert!(verify_pkce(&challenge, "S256", verifier));
     assert!(!verify_pkce(&challenge, "S256", "wrong"));
+    assert!(!verify_pkce(verifier, "plain", verifier));
   }
 
   #[test]
@@ -3674,7 +3961,7 @@ mod tests {
     let _ = fs::remove_dir_all(dir);
   }
 
-  fn test_handoff_response(request_id: &str) -> Value {
+  fn test_handoff_response(request_id: &str, expires_at: &str) -> Value {
     json!({
       "jsonrpc": "2.0",
       "id": 1,
@@ -3691,6 +3978,7 @@ mod tests {
             "trustBoundary": "ContextPack only",
             "id": "pack_handoff",
             "requestId": request_id,
+            "expiresAt": expires_at,
             "items": [{
               "factId": "fact_1",
               "itemText": "Approved handoff context"
@@ -3708,6 +3996,26 @@ mod tests {
     })
   }
 
+  fn test_signed_handoff_body(client_id: &str, request_id: &str) -> Value {
+    let expires_at = (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
+    let mcp_response = test_handoff_response(request_id, &expires_at);
+    let signature = relay_handoff_signature(
+      "test-handoff-secret",
+      client_id,
+      request_id,
+      &expires_at,
+      &mcp_response,
+    )
+    .expect("handoff signature");
+    json!({
+      "clientId": client_id,
+      "requestId": request_id,
+      "expiresAt": expires_at,
+      "mcpResponse": mcp_response,
+      "handoffSignature": signature
+    })
+  }
+
   #[test]
   fn relay_handoff_accepts_only_context_pack_only_responses() {
     let state = RelayState::new();
@@ -3716,11 +4024,7 @@ mod tests {
       path: "/relay/handoff".to_string(),
       query: String::new(),
       headers: Vec::new(),
-      body: json!({
-        "clientId": "client_chatgpt",
-        "mcpResponse": test_handoff_response("req_handoff")
-      })
-      .to_string(),
+      body: test_signed_handoff_body("client_chatgpt", "req_handoff").to_string(),
     };
     let response = relay_handoff(&request, &test_config(), &state);
     assert_eq!(response.status, 200);
@@ -3743,6 +4047,10 @@ mod tests {
 
     let invalid_request = HttpRequest {
       body: json!({
+        "clientId": "client_chatgpt",
+        "requestId": "req_bad",
+        "expiresAt": (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+        "handoffSignature": "bad",
         "structuredContent": {
           "status": "fulfilled",
           "requestId": "req_bad",
@@ -3764,7 +4072,10 @@ mod tests {
     state.store_handoff(
       "req_cached".to_string(),
       Some("static-dev-token".to_string()),
-      test_handoff_response("req_cached"),
+      test_handoff_response(
+        "req_cached",
+        &(Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+      ),
     );
     let request = HttpRequest {
       method: "POST".to_string(),
@@ -3803,7 +4114,10 @@ mod tests {
     state.store_handoff(
       "req_other_client".to_string(),
       Some("client_chatgpt".to_string()),
-      test_handoff_response("req_other_client"),
+      test_handoff_response(
+        "req_other_client",
+        &(Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+      ),
     );
     let request = HttpRequest {
       method: "POST".to_string(),

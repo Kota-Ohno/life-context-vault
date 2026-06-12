@@ -18,6 +18,7 @@ Set these for any public or shared deployment:
 LCV_RELAY_BIND=0.0.0.0:8765
 LCV_RELAY_BASE_URL=https://relay.example.com
 LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token>
+LCV_RELAY_HANDOFF_SECRET=<long-random-handoff-signing-secret>
 LCV_RELAY_TENANT_ID=<tenant-or-environment-id>
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=0
 LCV_RELAY_ALLOWED_ORIGINS=https://chatgpt.com,https://claude.ai
@@ -63,6 +64,8 @@ The relay does not persist:
 - OAuth access tokens or authorization codes.
 
 Confirmed Context Pack handoff bodies are memory-only, admin-gated, client-bound, and TTL-bound. `/relay/state` exposes only handoff metadata.
+
+`POST /relay/handoff` also requires a Vault-generated HMAC signature over the requesting client id, request id, pack expiry, and MCP response body. Unsigned or expired handoffs are rejected even when the caller has admin access.
 
 ## Smoke Test
 
@@ -112,6 +115,8 @@ Rotate `LCV_RELAY_ADMIN_TOKEN` when an operator leaves, an admin workstation is 
 3. Confirm `/relay/state` rejects the old token.
 4. Confirm `/pairing/start` accepts the new token.
 5. Record the rotation in the deployment incident log.
+
+Rotate `LCV_RELAY_HANDOFF_SECRET` if a local Control Center, operator shell, or deployment secret store may have exposed it. After rotation, pending handoffs signed with the old secret are rejected and users must reconfirm those Context Pack deliveries.
 
 If static bearer fallback was enabled outside local development, treat it as a deployment misconfiguration: disable `LCV_RELAY_ENABLE_STATIC_TOKEN`, remove `LCV_RELAY_TOKEN` from the public environment, restart the relay, and require OAuth clients to reconnect.
 

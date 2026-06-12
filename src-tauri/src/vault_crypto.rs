@@ -112,6 +112,10 @@ fn migrate_plaintext_to_encrypted(path: &Path, payload: &str, key: &str) -> Resu
       params![VAULT_STATE_KEY, payload],
     )
     .map_err(|error| format!("failed to write encrypted vault payload: {error}"))?;
+  validate_connection(&connection)?;
+  if !keep_plaintext_migration_backup() {
+    remove_if_exists(&backup_path)?;
+  }
   Ok(())
 }
 
@@ -133,6 +137,12 @@ fn plaintext_backup_path(path: &Path) -> PathBuf {
     .and_then(|name| name.to_str())
     .unwrap_or("vault.sqlite3");
   path.with_file_name(format!("{filename}.plaintext-migrated-{suffix}"))
+}
+
+fn keep_plaintext_migration_backup() -> bool {
+  std::env::var("LCV_KEEP_PLAINTEXT_MIGRATION_BACKUP")
+    .map(|value| value == "1")
+    .unwrap_or(false)
 }
 
 fn vault_key() -> Result<String, String> {
@@ -164,7 +174,31 @@ fn vault_key() -> Result<String, String> {
         .map_err(|error| format!("failed to read key file: {error}"));
     }
     let key = generate_hex_key()?;
-    fs::write(&key_file, &key).map_err(|error| format!("failed to write key file: {error}"))?;
+    if let Some(parent) = key_file.parent() {
+      fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create key file directory: {error}"))?;
+      #[cfg(unix)]
+      {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+      }
+    }
+    {
+      let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&key_file)
+        .map_err(|error| format!("failed to create key file: {error}"))?;
+      #[cfg(unix)]
+      {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+      }
+      use std::io::Write as _;
+      file
+        .write_all(key.as_bytes())
+        .map_err(|error| format!("failed to write key file: {error}"))?;
+    }
     Ok(key)
   }
 }
@@ -316,6 +350,18 @@ mod tests {
     let plain_result =
       plain.query_row("SELECT payload FROM vault_state", [], |row| row.get::<_, String>(0));
     assert!(plain_result.is_err());
+    let plaintext_backups = fs::read_dir(&dir)
+      .expect("read migration dir")
+      .filter_map(Result::ok)
+      .filter(|entry| {
+        entry
+          .file_name()
+          .to_str()
+          .map(|name| name.contains(".plaintext-migrated-"))
+          .unwrap_or(false)
+      })
+      .count();
+    assert_eq!(plaintext_backups, 0);
     let _ = fs::remove_dir_all(dir);
   }
 }

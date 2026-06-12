@@ -1984,6 +1984,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
+ "hmac",
  "log",
  "pdf-extract",
  "quick-xml 0.31.0",

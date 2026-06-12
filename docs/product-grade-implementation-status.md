@@ -108,7 +108,7 @@ Last updated: 2026-06-13
   - legacy tenantless local relay state migrates to the configured tenant on load
   - `/health` and `/relay/state` expose tenant id as operational metadata without exposing Vault or Context Pack bodies
 - Added short-lived Relay Context Pack handoff cache:
-  - `POST /relay/handoff` accepts already confirmed MCP responses for approved Context Packs
+  - `POST /relay/handoff` accepts signed, already confirmed MCP responses for approved Context Packs
   - handoff responses are memory-only, TTL-bound, and default to 10 minutes
   - the Relay accepts only fulfilled `ContextPack only` MCP responses
   - `life_context.get_request_status` can return a cached handoff response when the local Agent path is temporarily offline
@@ -283,6 +283,14 @@ Last updated: 2026-06-13
 - Added guided Legacy Office provider detection:
   - Desktop detects installed LibreOffice/soffice candidates from PATH and common install locations without executing them
   - Settings shows detected candidates with one-click command/argument/timeout setup and explains that detection does not run LibreOffice or send documents
+- Added security hardening from adversarial review:
+  - external MCP requests now default to user review even for low-sensitivity Context Packs
+  - confirmed Context Packs expire at `expiresAt` and are not returned after TTL
+  - Relay handoff now requires a Vault-generated HMAC signature, confirmed Context Pack status, matching request/client metadata, and unexpired pack expiry
+  - Relay HTTP parsing now enforces header/body size limits and read timeouts
+  - Agent pairing codes are single-use and Agent logs redact `pairing_code`
+  - OCR/Legacy Office provider output is drained concurrently with bounded buffers, and temporary document directories are cleaned on failure
+  - plaintext Vault migration backups are deleted after verified encrypted migration by default
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -292,7 +300,6 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Remote MCP hosted-client certification, long-running SSE soak, and provider-specific connector registration against a real public HTTPS Relay.
-- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
 - OCR setup now detects common local Tesseract providers, Legacy Office setup detects common local LibreOffice/soffice providers, both offer one-click Settings presets, and both include OS-specific guided install commands. Remaining product-hardening: bundled OCR/Office conversion runtimes for users who do not want to install providers separately.
 
 ## Verification
@@ -315,6 +322,12 @@ Last updated: 2026-06-13
 - Relay state backup tests proving metadata-only backup generations are rotated without storing Context Pack bodies
 - Relay tenant tests proving non-loopback binds require tenant id, mismatched tenant state is refused, and legacy tenantless metadata migrates to the configured tenant
 - Relay handoff tests proving only fulfilled `ContextPack only` responses are accepted, `/relay/state` omits Pack body text, and offline `get_request_status` can return a still-valid cached handoff
+- Relay handoff signature tests proving unsigned/spoofed handoffs are rejected before short-lived cache storage
+- Relay HTTP parser tests proving oversized request bodies and headers are rejected before unbounded allocation
+- MCP tests proving low-sensitivity external Context Packs are queued for user confirmation instead of auto-returned
+- Native Context Pack expiry tests proving confirmed-but-expired Packs are not returned to external clients
+- Provider execution tests proving noisy OCR/Office providers do not deadlock on pipe output and failed conversion removes temp directories
+- Vault encryption migration tests proving plaintext migrated database backups are removed after successful encrypted migration
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
 - Background lifecycle unit tests proving window close hides to tray without stopping managed AI Access, while window destruction/quit still stops managed Relay and Agent
@@ -582,7 +595,7 @@ Last updated: 2026-06-13
 
 - Review fallback: At the time of this slice, SubAgents were not used; the main thread ran separate product, security/privacy, technical, and operations passes.
 - Product fit: accepted; a hosted Remote MCP request can now be fulfilled after local approval without asking the Relay to read or persist the Vault.
-- Security/privacy: accepted; handoff bodies are admin-gated, memory-only, TTL-bound, validated as fulfilled `ContextPack only` responses, and excluded from relay state persistence plus backups.
+- Security/privacy: accepted; handoff bodies are admin-gated, HMAC-signed, memory-only, TTL-bound, validated as fulfilled `ContextPack only` responses, and excluded from relay state persistence plus backups.
 - Technical design: accepted; Agent/Vault remains canonical when online, while offline `get_request_status` can use the cached response for the matching request id.
 - Operations: accepted; `/relay/state` exposes handoff count, request id, client id, creation time, expiry time, and TTL settings for debugging without exposing Pack body text.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay` passed.
@@ -700,7 +713,7 @@ Last updated: 2026-06-13
 ### Control Center Relay Handoff Slice
 
 - Product fit: approving a Context Pack in Control Center can now register the already-confirmed Pack with the local Relay, so hosted Remote MCP clients can complete `life_context.get_request_status` without asking the Relay to read the Vault.
-- Security/privacy: the Tauri command posts only a safe MCP status response built from `safe_context_pack_for_client`; handoff is bound to the original request id and client id, and still excludes Raw Source bodies, Vault snapshots, and unapproved MemoryCandidates.
+- Security/privacy: the Tauri command posts only a safe MCP status response built from `safe_context_pack_for_client`; handoff is signed, bound to the original request id and client id, and still excludes Raw Source bodies, Vault snapshots, and unapproved MemoryCandidates.
 - UX: approval notices distinguish Vault confirmation from Relay handoff. If Relay is unavailable, the Pack remains confirmed locally and the user is told that handoff is not complete.
 - Verification: Rust coverage confirms the handoff payload is fulfilled, declares `ContextPack only`, includes approved Pack facts, and does not include source-origin internals.
 
@@ -868,6 +881,14 @@ Last updated: 2026-06-13
 - UX/design: the Settings card now shows detected LibreOffice candidates above install guides and includes explicit copy that detection has not run the provider or sent documents.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml provider_detection`, `npm run build`, and Playwright desktop `1280x920` plus mobile `390x844` Settings renders passed with no horizontal overflow.
 - Review fallback: SubAgents were not used for this narrow detection slice; the main thread ran separate product-fit, privacy, technical, and visual QA passes.
+
+### Adversarial Security Hardening Slice
+
+- Product fit: external AI clients now follow the product promise more strictly: every MCP Context Pack request waits for user review, and confirmed Packs still expire before reuse.
+- Security/privacy: Relay handoff requires `LCV_RELAY_HANDOFF_SECRET` signatures, confirmed Pack state, matching request/client metadata, and unexpired expiry. Pairing codes are single-use, Agent logs redact pairing secrets, Relay HTTP reads have body/header limits plus read timeouts, provider subprocess output is drained with bounded buffers, and plaintext migration backups are removed after verified encrypted migration.
+- Technical design: the Relay validates handoff signatures before inserting the memory-only cache, MCP sidecar requests use `always_review`, Context Pack status checks apply `expiresAt` even after confirmation, and OCR/Legacy Office execution no longer depends on `wait_with_output` pipe draining after process exit.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml` passed. New coverage includes noisy provider output, conversion failure temp cleanup, confirmed-but-expired Pack refusal, low-risk MCP queueing, signed Relay handoff, Relay HTTP size limits, single-use pairing, redacted Agent URLs, S256-only PKCE, and plaintext migration backup deletion.
+- SubAgent disposition: fixed material P1/P2 security and engineering findings for Provider execution deadlock, temp cleanup, Relay body limits, PKCE mismatch, Context Pack TTL, low-risk external auto-send, unsigned handoff, pairing reuse/log leakage, plaintext migration backup retention, and key-file fallback permissions.
 
 ### Remote MCP Connection Diagnostics UX Slice
 

@@ -67,7 +67,10 @@ impl AgentConfig {
 fn run_once(config: &AgentConfig) -> Result<(), String> {
   let (mut socket, _) = connect(config.relay_ws_url.as_str())
     .map_err(|error| format!("failed to connect relay: {error}"))?;
-  eprintln!("Life Context Vault agent connected to {}", config.relay_ws_url);
+  eprintln!(
+    "Life Context Vault agent connected to {}",
+    redacted_relay_ws_url(&config.relay_ws_url)
+  );
 
   loop {
     let message = socket
@@ -89,6 +92,13 @@ fn run_once(config: &AgentConfig) -> Result<(), String> {
       .send(Message::Text(response.to_string().into()))
       .map_err(|error| format!("failed to write relay websocket response: {error}"))?;
   }
+}
+
+fn redacted_relay_ws_url(url: &str) -> String {
+  url
+    .split_once('?')
+    .map(|(base, _)| format!("{base}?pairing_code=REDACTED"))
+    .unwrap_or_else(|| url.to_string())
 }
 
 fn handle_relay_message(text: &str, config: &AgentConfig) -> Value {
@@ -161,6 +171,18 @@ mod tests {
     };
     let response = handle_relay_message("not-json", &config);
     assert_eq!(response.get("type").and_then(Value::as_str), Some("agent_error"));
+  }
+
+  #[test]
+  fn relay_ws_url_log_redacts_pairing_code() {
+    assert_eq!(
+      redacted_relay_ws_url("ws://127.0.0.1:8765/agent/ws?pairing_code=secret"),
+      "ws://127.0.0.1:8765/agent/ws?pairing_code=REDACTED"
+    );
+    assert_eq!(
+      redacted_relay_ws_url("ws://127.0.0.1:8765/agent/ws"),
+      "ws://127.0.0.1:8765/agent/ws"
+    );
   }
 
   #[cfg(unix)]

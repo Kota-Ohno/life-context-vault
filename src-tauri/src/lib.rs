@@ -3,9 +3,11 @@ use base64::{
   Engine as _,
 };
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::Sha256;
 use std::{
   collections::HashSet,
   env,
@@ -43,12 +45,15 @@ const TRAY_MENU_QUIT_ID: &str = "quit-life-context-vault";
 const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
+const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
   agent: Option<Child>,
   pairing_code: Option<String>,
   relay_token: String,
+  handoff_secret: String,
   last_error: Option<String>,
 }
 
@@ -59,6 +64,7 @@ impl Default for AiAccessSupervisor {
       agent: None,
       pairing_code: None,
       relay_token: random_local_token(),
+      handoff_secret: random_local_token(),
       last_error: None,
     }
   }
@@ -2984,12 +2990,19 @@ fn get_context_request_status_at_path_with_client(
     })
     .cloned();
   let expires_at = str_field(&request, "expiresAt");
+  if !expires_at.is_empty() && is_expired(&expires_at) {
+    return Ok(VaultCoreRequestStatusResult {
+      status: "expired".to_string(),
+      request_id: request_id.to_string(),
+      expires_at: Some(expires_at),
+      context_pack: None,
+    });
+  }
   let pack_confirmed = pack
     .as_ref()
     .map(|pack| str_field(pack, "confirmationStatus") == "confirmed")
     .unwrap_or(false);
   let confirmed = pack_confirmed && str_field(&request, "status") == "fulfilled";
-  let expired = !confirmed && !expires_at.is_empty() && is_expired(&expires_at);
 
   if confirmed {
     let Some(pack) = pack.as_ref() else {
@@ -3017,11 +3030,7 @@ fn get_context_request_status_at_path_with_client(
   }
 
   Ok(VaultCoreRequestStatusResult {
-    status: if expired {
-      "expired".to_string()
-    } else {
-      str_field(&request, "status")
-    },
+    status: str_field(&request, "status"),
     request_id: request_id.to_string(),
     expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
     context_pack: None,
@@ -4262,6 +4271,10 @@ struct LegacyOfficeCommandConfig {
   timeout: Duration,
 }
 
+struct TempDirGuard {
+  path: PathBuf,
+}
+
 impl OcrCommandConfig {
   fn label(&self) -> String {
     Path::new(&self.command)
@@ -4279,6 +4292,28 @@ impl LegacyOfficeCommandConfig {
       .and_then(|value| value.to_str())
       .unwrap_or(&self.command)
       .to_string()
+  }
+}
+
+impl TempDirGuard {
+  fn new(path: PathBuf) -> Self {
+    Self { path }
+  }
+
+  fn path(&self) -> &Path {
+    &self.path
+  }
+
+  fn into_path(self) -> PathBuf {
+    let path = self.path.clone();
+    std::mem::forget(self);
+    path
+  }
+}
+
+impl Drop for TempDirGuard {
+  fn drop(&mut self) {
+    let _ = fs::remove_dir_all(&self.path);
   }
 }
 
@@ -4563,8 +4598,15 @@ fn legacy_office_command_config_from_parts(
   Some(LegacyOfficeCommandConfig {
     command: command.to_string(),
     args,
-    timeout: ocr_timeout_from_value(timeout_seconds),
+    timeout: legacy_office_timeout_from_value(timeout_seconds),
   })
+}
+
+fn legacy_office_timeout_from_value(seconds: Option<u64>) -> Duration {
+  let seconds = seconds
+    .unwrap_or(60)
+    .clamp(1, 120);
+  Duration::from_secs(seconds)
 }
 
 fn legacy_office_command_config_from_input(
@@ -4758,8 +4800,9 @@ fn extract_legacy_office_document(
   let target_ext = legacy_office_target_extension(file_name, mime_type)?;
   let (temp_dir, input_path, output_path) =
     write_legacy_office_temp_input(file_name, target_ext, bytes)?;
+  let temp_dir = TempDirGuard::new(temp_dir);
   let input_path_text = input_path.display().to_string();
-  let output_dir_text = temp_dir.display().to_string();
+  let output_dir_text = temp_dir.path().display().to_string();
   let output_path_text = output_path.display().to_string();
   let mut command = Command::new(&config.command);
   command.env_clear();
@@ -4785,22 +4828,18 @@ fn extract_legacy_office_document(
   let converted_bytes = match output {
     Ok(output) if output.status.success() => {
       if !output_path.exists() {
-        let _ = fs::remove_dir_all(&temp_dir);
         return Err("旧Office変換Providerは完了しましたが、変換後ファイルが見つかりませんでした。引数の{output_dir}/{output}設定を確認してください。".to_string());
       }
       fs::read(&output_path)
         .map_err(|error| format!("変換後Office文書を読めませんでした: {error}"))?
     }
     Ok(_) => {
-      let _ = fs::remove_dir_all(&temp_dir);
       return Err("旧Office変換Providerが変換に失敗しました。コマンド、引数、対応ファイル形式を確認してください。".to_string());
     }
     Err(error) => {
-      let _ = fs::remove_dir_all(&temp_dir);
       return Err(error);
     }
   };
-  let _ = fs::remove_dir_all(&temp_dir);
   if converted_bytes.len() > MAX_NATIVE_DOCUMENT_BYTES {
     return Err(format!(
       "変換後Office文書が大きすぎます。ローカル抽出は{}MBまでです。",
@@ -4869,12 +4908,13 @@ fn write_legacy_office_temp_input(
   let temp_dir = env::temp_dir().join(new_id("lcv_legacy_office"));
   fs::create_dir(&temp_dir)
     .map_err(|error| format!("旧Office変換一時ディレクトリを準備できませんでした: {error}"))?;
+  let temp_dir_guard = TempDirGuard::new(temp_dir);
   #[cfg(unix)]
   {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700));
+    let _ = fs::set_permissions(temp_dir_guard.path(), fs::Permissions::from_mode(0o700));
   }
-  let input_path = temp_dir.join(format!("{stem}.{extension}"));
+  let input_path = temp_dir_guard.path().join(format!("{stem}.{extension}"));
   {
     let mut file = fs::OpenOptions::new()
       .write(true)
@@ -4890,8 +4930,8 @@ fn write_legacy_office_temp_input(
       .write_all(bytes)
       .map_err(|error| format!("旧Office変換入力ファイルを書き込めませんでした: {error}"))?;
   }
-  let output_path = temp_dir.join(format!("{stem}.{target_ext}"));
-  Ok((temp_dir, input_path, output_path))
+  let output_path = temp_dir_guard.path().join(format!("{stem}.{target_ext}"));
+  Ok((temp_dir_guard.into_path(), input_path, output_path))
 }
 
 fn safe_temp_file_stem(value: &str) -> String {
@@ -4993,12 +5033,13 @@ fn write_ocr_temp_input(file_name: &str, bytes: &[u8]) -> Result<(PathBuf, PathB
   let temp_dir = env::temp_dir().join(new_id("lcv_ocr"));
   fs::create_dir(&temp_dir)
     .map_err(|error| format!("OCR一時ディレクトリを準備できませんでした: {error}"))?;
+  let temp_dir_guard = TempDirGuard::new(temp_dir);
   #[cfg(unix)]
   {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700));
+    let _ = fs::set_permissions(temp_dir_guard.path(), fs::Permissions::from_mode(0o700));
   }
-  let input_path = temp_dir.join(format!("input.{extension}"));
+  let input_path = temp_dir_guard.path().join(format!("input.{extension}"));
   {
     let mut file = fs::OpenOptions::new()
       .write(true)
@@ -5014,7 +5055,7 @@ fn write_ocr_temp_input(file_name: &str, bytes: &[u8]) -> Result<(PathBuf, PathB
       .write_all(bytes)
       .map_err(|error| format!("OCR入力ファイルを書き込めませんでした: {error}"))?;
   }
-  Ok((temp_dir, input_path))
+  Ok((temp_dir_guard.into_path(), input_path))
 }
 
 fn run_command_with_timeout(
@@ -5025,22 +5066,34 @@ fn run_command_with_timeout(
   let mut child = command
     .spawn()
     .map_err(|error| format!("{provider_label}を起動できませんでした: {error}"))?;
+  let stdout = child
+    .stdout
+    .take()
+    .ok_or_else(|| format!("{provider_label}の標準出力を取得できませんでした。"))?;
+  let stderr = child
+    .stderr
+    .take()
+    .ok_or_else(|| format!("{provider_label}の標準エラー出力を取得できませんでした。"))?;
+  let stdout_reader = thread::spawn(move || drain_reader_limited(stdout, MAX_PROVIDER_STDOUT_BYTES));
+  let stderr_reader = thread::spawn(move || drain_reader_limited(stderr, MAX_PROVIDER_STDERR_BYTES));
   let started_at = SystemTime::now();
-  loop {
+  let status = loop {
     match child
       .try_wait()
       .map_err(|error| format!("{provider_label}の状態を確認できませんでした: {error}"))?
     {
       Some(_) => {
-        return child
-          .wait_with_output()
-          .map_err(|error| format!("{provider_label}の出力を読めませんでした: {error}"));
+        break child
+          .wait()
+          .map_err(|error| format!("{provider_label}の終了状態を読めませんでした: {error}"))?;
       }
       None => {
         let elapsed = started_at.elapsed().unwrap_or_default();
         if elapsed >= timeout {
           let _ = child.kill();
           let _ = child.wait();
+          let _ = stdout_reader.join();
+          let _ = stderr_reader.join();
           return Err(format!(
             "{provider_label}が{}秒以内に完了しなかったため停止しました。",
             timeout.as_secs()
@@ -5049,7 +5102,58 @@ fn run_command_with_timeout(
         thread::sleep(Duration::from_millis(25));
       }
     }
+  };
+  let stdout = join_drained_output(stdout_reader, provider_label, "標準出力")?;
+  let stderr = join_drained_output(stderr_reader, provider_label, "標準エラー出力")?;
+  if stdout.exceeded {
+    return Err(format!(
+      "{provider_label}の標準出力が大きすぎます。ローカルProvider出力は{}MBまでです。",
+      MAX_PROVIDER_STDOUT_BYTES / 1024 / 1024
+    ));
   }
+  Ok(Output {
+    status,
+    stdout: stdout.bytes,
+    stderr: stderr.bytes,
+  })
+}
+
+struct DrainedOutput {
+  bytes: Vec<u8>,
+  exceeded: bool,
+}
+
+fn drain_reader_limited<R: Read>(mut reader: R, limit: usize) -> Result<DrainedOutput, String> {
+  let mut bytes = Vec::new();
+  let mut exceeded = false;
+  let mut buffer = [0u8; 8192];
+  loop {
+    let len = reader
+      .read(&mut buffer)
+      .map_err(|error| format!("Provider出力を読めませんでした: {error}"))?;
+    if len == 0 {
+      break;
+    }
+    let remaining = limit.saturating_sub(bytes.len());
+    if remaining >= len {
+      bytes.extend_from_slice(&buffer[..len]);
+    } else {
+      bytes.extend_from_slice(&buffer[..remaining]);
+      exceeded = true;
+    }
+  }
+  Ok(DrainedOutput { bytes, exceeded })
+}
+
+fn join_drained_output(
+  handle: thread::JoinHandle<Result<DrainedOutput, String>>,
+  provider_label: &str,
+  stream_label: &str,
+) -> Result<DrainedOutput, String> {
+  handle
+    .join()
+    .map_err(|_| format!("{provider_label}の{stream_label}Readerが停止しました。"))?
+    .map_err(|error| format!("{provider_label}の{stream_label}を読めませんでした: {error}"))
 }
 
 fn extract_plain_text_document(bytes: &[u8]) -> Result<String, String> {
@@ -6397,10 +6501,34 @@ fn mcp_status_response_for_handoff(path: &Path, request_id: &str, client_id: &st
   }))
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
+fn relay_handoff_signature(
+  secret: &str,
+  client_id: &str,
+  request_id: &str,
+  expires_at: &str,
+  mcp_response: &Value,
+) -> Result<String, String> {
+  let response_text = serde_json::to_string(mcp_response)
+    .map_err(|error| format!("failed to serialize signed handoff payload: {error}"))?;
+  let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+    .map_err(|error| format!("failed to create handoff signature: {error}"))?;
+  mac.update(client_id.as_bytes());
+  mac.update(b"\n");
+  mac.update(request_id.as_bytes());
+  mac.update(b"\n");
+  mac.update(expires_at.as_bytes());
+  mac.update(b"\n");
+  mac.update(response_text.as_bytes());
+  Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
 fn handoff_context_pack_to_local_relay(
   path: &Path,
   client_id: &str,
   request_id: &str,
+  handoff_secret: &str,
 ) -> Result<RelayContextPackHandoffResult, String> {
   let client_id = client_id.trim();
   if client_id.is_empty() {
@@ -6411,9 +6539,21 @@ fn handoff_context_pack_to_local_relay(
     return Err("requestId is required for Relay handoff.".to_string());
   }
   let mcp_response = mcp_status_response_for_handoff(path, request_id, client_id)?;
+  let expires_at = mcp_response
+    .get("result")
+    .and_then(|result| result.get("structuredContent"))
+    .and_then(|structured| structured.get("contextPack"))
+    .and_then(|pack| pack.get("expiresAt"))
+    .and_then(Value::as_str)
+    .ok_or_else(|| "ContextPack handoff requires expiresAt.".to_string())?;
+  let handoff_signature =
+    relay_handoff_signature(handoff_secret, client_id, request_id, expires_at, &mcp_response)?;
   let body = serde_json::to_string(&json!({
     "clientId": client_id,
-    "mcpResponse": mcp_response
+    "requestId": request_id,
+    "expiresAt": expires_at,
+    "mcpResponse": mcp_response,
+    "handoffSignature": handoff_signature
   }))
   .map_err(|error| format!("failed to serialize relay handoff: {error}"))?;
   let response = local_relay_json("POST", "/relay/handoff", Some(&body))?;
@@ -6585,13 +6725,14 @@ fn configure_background_tray(app: &mut App) -> tauri::Result<()> {
   Ok(())
 }
 
-fn spawn_relay(app: &AppHandle, relay_token: &str) -> Result<Child, String> {
+fn spawn_relay(app: &AppHandle, relay_token: &str, handoff_secret: &str) -> Result<Child, String> {
   let vault_path = vault_db_path(app)?;
   let relay_state_path = relay_state_path(app)?;
   let relay_command = mcp_stdio::resolve_sibling_binary("lcv-relay");
   let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
   Command::new(&relay_command)
     .env("LCV_RELAY_TOKEN", relay_token)
+    .env("LCV_RELAY_HANDOFF_SECRET", handoff_secret)
     .env("LCV_RELAY_BIND", LOCAL_RELAY_BIND)
     .env("LCV_RELAY_BASE_URL", LOCAL_RELAY_BASE_URL)
     .env("LCV_RELAY_STATE_PATH", relay_state_path)
@@ -7408,11 +7549,17 @@ fn confirm_native_context_pack(
 #[tauri::command]
 fn handoff_confirmed_context_pack_to_relay(
   app: AppHandle,
+  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
   client_id: String,
   request_id: String,
 ) -> Result<RelayContextPackHandoffResult, String> {
   let path = vault_db_path(&app)?;
-  handoff_context_pack_to_local_relay(&path, &client_id, &request_id)
+  let handoff_secret = supervisor
+    .lock()
+    .map_err(|_| "failed to lock AI access supervisor".to_string())?
+    .handoff_secret
+    .clone();
+  handoff_context_pack_to_local_relay(&path, &client_id, &request_id, &handoff_secret)
 }
 
 #[tauri::command]
@@ -7771,7 +7918,7 @@ fn start_ai_access_services(
   let relay_is_reachable = relay_reachable();
   if !relay_is_reachable {
     if !relay_managed_running {
-      supervisor.relay = Some(spawn_relay(&app, &supervisor.relay_token).map_err(|error| {
+      supervisor.relay = Some(spawn_relay(&app, &supervisor.relay_token, &supervisor.handoff_secret).map_err(|error| {
         supervisor.last_error = Some(error.clone());
         error
       })?);
@@ -8103,6 +8250,39 @@ mod tests {
     let _ = fs::remove_dir_all(temp_dir);
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn legacy_office_conversion_failure_removes_temp_dir() {
+    let before = legacy_office_temp_dirs();
+    let config = LegacyOfficeCommandConfig {
+      command: "/bin/true".to_string(),
+      args: Vec::new(),
+      timeout: Duration::from_secs(5),
+    };
+    let result = extract_native_document_text_from_base64_with_configs(
+      "old-benefits.doc",
+      "application/msword",
+      &STANDARD.encode([0xD0, 0xCF, 0x11, 0xE0, 0x00]),
+      None,
+      Some(config),
+    );
+
+    assert!(result.is_err());
+    let after = legacy_office_temp_dirs();
+    let leaked = after
+      .difference(&before)
+      .map(|path| path.display().to_string())
+      .collect::<Vec<_>>();
+    assert!(leaked.is_empty(), "leaked temp dirs: {leaked:?}");
+  }
+
+  #[test]
+  fn legacy_office_command_default_timeout_is_sixty_seconds() {
+    let config = legacy_office_command_config_from_parts("/usr/bin/libreoffice", None, None)
+      .expect("legacy office config");
+    assert_eq!(config.timeout, Duration::from_secs(60));
+  }
+
   #[test]
   fn native_document_extraction_refuses_images_without_ocr_provider() {
     let kind = detect_native_document_kind("scan.png", "image/png", b"\x89PNG\r\n")
@@ -8147,6 +8327,30 @@ mod tests {
       .any(|warning| warning.contains("OCR Provider")));
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn native_document_extraction_drains_noisy_provider_output() {
+    let config = OcrCommandConfig {
+      command: "/bin/sh".to_string(),
+      args: vec![
+        "-c".to_string(),
+        "i=0; while [ $i -lt 20000 ]; do printf '0123456789abcdef0123456789abcdef\\n' >&2; i=$((i+1)); done; printf 'Noisy OCR text renews on 2029-01-01.'".to_string(),
+      ],
+      timeout: Duration::from_secs(10),
+    };
+    let mut warnings = Vec::new();
+    let text = extract_image_ocr_document_with_config(
+      &config,
+      "scan.png",
+      "image/png",
+      b"tiny image",
+      &mut warnings,
+    )
+    .expect("noisy provider output should not deadlock");
+
+    assert!(text.contains("Noisy OCR text renews on 2029-01-01."));
+  }
+
   #[test]
   fn ocr_provider_detection_finds_path_candidate_without_running_it() {
     let temp_dir = env::temp_dir().join(new_id("lcv_ocr_detect_test"));
@@ -8170,6 +8374,23 @@ mod tests {
     assert_eq!(candidates[0].source, "PATH");
 
     fs::remove_dir_all(temp_dir).ok();
+  }
+
+  fn legacy_office_temp_dirs() -> HashSet<PathBuf> {
+    fs::read_dir(env::temp_dir())
+      .ok()
+      .into_iter()
+      .flatten()
+      .filter_map(Result::ok)
+      .map(|entry| entry.path())
+      .filter(|path| {
+        path
+          .file_name()
+          .and_then(|value| value.to_str())
+          .map(|name| name.starts_with("lcv_legacy_office"))
+          .unwrap_or(false)
+      })
+      .collect()
   }
 
   #[test]
@@ -10492,6 +10713,70 @@ mod tests {
     );
     assert!(structured.to_string().contains("Passport expires on 2028-05-01."));
     assert!(!structured.to_string().contains("manual_entry"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn confirmed_context_pack_expires_before_external_status_return() {
+    use_test_vault_key();
+    let path = temp_vault_path("confirmed-pack-expiry");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Travel reminder",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    for request in vault
+      .get_mut("contextPackRequests")
+      .and_then(Value::as_array_mut)
+      .expect("requests")
+    {
+      if str_field(request, "id") == built.request_id {
+        request["expiresAt"] = Value::String("2000-01-01T00:00:00.000Z".to_string());
+      }
+    }
+    for pack in vault
+      .get_mut("contextPacks")
+      .and_then(Value::as_array_mut)
+      .expect("packs")
+    {
+      if str_field(pack, "id") == built.pack_id {
+        pack["expiresAt"] = Value::String("2000-01-01T00:00:00.000Z".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save expired vault");
+
+    let status = get_context_request_status_for_client_at_path(
+      &path,
+      &built.request_id,
+      "conn_chatgpt",
+    )
+    .expect("request status");
+
+    assert_eq!(status.status, "expired");
+    assert!(status.context_pack.is_none());
     remove_temp_vault(&path);
   }
 

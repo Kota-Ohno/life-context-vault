@@ -46,6 +46,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl"] }
 base64 = "0.22.1"
 sha2 = "0.10.9"
+hmac = "0.12.1"
 getrandom = "0.2"
 tungstenite = "0.28.0"
 tauri = { version = "2.11.2", features = ["tray-icon"] }

@@ -207,7 +207,7 @@ fn request_context_pack_at_path(
     task_text,
     Some("MCP client requested life context"),
     ceiling,
-    Some("explicit_sensitive"),
+    Some("always_review"),
   )
   .map_err(|error| (-32000, error))?;
 
@@ -597,7 +597,7 @@ mod tests {
   }
 
   #[test]
-  fn low_risk_context_pack_returns_core_pack_without_raw_source_body() {
+  fn low_risk_context_pack_is_queued_without_raw_source_body() {
     let path = test_vault_path("low-risk-context-pack");
     let mut vault = empty_vault();
     push_array(
@@ -646,12 +646,14 @@ mod tests {
     )
     .expect("request context pack");
 
-    assert_eq!(result.get("status").and_then(Value::as_str), Some("fulfilled"));
-    let pack = result.get("contextPack").expect("returned pack");
     assert_eq!(
-      pack.get("trustBoundary").and_then(Value::as_str),
-      Some("ContextPack only")
+      result.get("status").and_then(Value::as_str),
+      Some("pending_user_confirmation")
     );
+    assert!(result.get("contextPack").is_none());
+    let saved = read_test_vault(&path);
+    let packs = array(&saved, "contextPacks");
+    let pack = packs.first().expect("queued context pack");
     let snippets = pack
       .get("sourceSnippets")
       .and_then(Value::as_array)
