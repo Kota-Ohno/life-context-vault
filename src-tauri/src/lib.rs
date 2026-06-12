@@ -3,6 +3,8 @@ use serde_json::Value;
 use std::{fs, path::PathBuf};
 use tauri::{ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
+mod vault_crypto;
+
 const VAULT_STATE_KEY: &str = "vault_state";
 
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -17,8 +19,7 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
   let path = vault_db_path(app)?;
-  let connection =
-    Connection::open(path).map_err(|error| format!("failed to open vault database: {error}"))?;
+  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   connection
     .execute(
       "CREATE TABLE IF NOT EXISTS vault_state (

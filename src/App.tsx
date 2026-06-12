@@ -1322,8 +1322,12 @@ function SettingsView({
         <div className="table-list">
           <div className="table-row">
             <div>
-              <strong>{nativePath ? "Native SQLite" : "Browser localStorage"}</strong>
-              <span>{nativePath ?? "Tauri外ではブラウザのlocalStorageに保存します。"}</span>
+              <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "Browser localStorage"}</strong>
+              <span>
+                {nativePath
+                  ? `${nativePath} / Vault鍵はOSの安全な資格情報ストアで管理されます。`
+                  : "Tauri外ではブラウザのlocalStorageに保存します。"}
+              </span>
             </div>
             <Badge>{storageReady ? "ready" : "loading"}</Badge>
           </div>

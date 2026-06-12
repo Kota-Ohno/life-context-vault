@@ -56,13 +56,13 @@ npm run tauri:bundle
 - Audit trail for source, candidate, request, pack, and capture events
 - Search over approved facts
 - Encrypted JSON backup export and restore
-- Tauri desktop wrapper with SQLite-backed native persistence
+- Tauri desktop wrapper with SQLCipher-backed encrypted native persistence
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
 - Local MCP stdio sidecar for same-device AI clients
 - HTTP MCP relay for local Remote-MCP-style testing
 - Chrome browser capture extension and Native Messaging host
 
-The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to SQLite in the app data directory and projected into normalized tables.
+The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to an encrypted SQLCipher database in the app data directory, keyed by the OS secure credential store, and projected into normalized tables.
 
 ## Run Local MCP Sidecar
 

@@ -8,6 +8,9 @@ use std::{
 };
 use chrono::{SecondsFormat, Utc};
 
+#[path = "../vault_crypto.rs"]
+mod vault_crypto;
+
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const VAULT_STATE_KEY: &str = "vault_state";
 
@@ -435,8 +438,7 @@ fn load_vault() -> Result<Value, String> {
   if !path.exists() {
     return Ok(empty_vault());
   }
-  let connection =
-    Connection::open(&path).map_err(|error| format!("failed to open vault database: {error}"))?;
+  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   ensure_vault_state_table(&connection)?;
   let payload: Option<String> = connection
     .query_row(
@@ -457,8 +459,7 @@ fn save_vault(vault: &Value) -> Result<(), String> {
     std::fs::create_dir_all(parent)
       .map_err(|error| format!("failed to create vault directory: {error}"))?;
   }
-  let connection =
-    Connection::open(&path).map_err(|error| format!("failed to open vault database: {error}"))?;
+  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   ensure_vault_state_table(&connection)?;
   connection
     .execute(

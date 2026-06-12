@@ -4,7 +4,7 @@ Last updated: 2026-06-12
 
 Life Context Vault includes a local MCP stdio sidecar named `lcv-mcp`.
 
-The sidecar is designed for same-device AI clients such as Claude Desktop, Codex-like tools, Cursor-like tools, and other MCP clients. It reads and writes the user's local Vault SQLite file and exposes only controlled tools.
+The sidecar is designed for same-device AI clients such as Claude Desktop, Codex-like tools, Cursor-like tools, and other MCP clients. It reads and writes the user's local encrypted SQLCipher Vault file and exposes only controlled tools.
 
 ## Build
 
@@ -36,6 +36,8 @@ Use the **Connections** screen in the app to copy the current config. A developm
 ```
 
 When running inside the Tauri app, the Settings screen shows the exact native Vault path.
+
+The app and sidecar share the same Vault encryption key through the OS secure credential store. For automated smoke tests only, `LCV_VAULT_DB_KEY` can override that key.
 
 ## Tools
 
@@ -69,6 +71,8 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"life_context.propose_memory","arguments":{"text":"Tone preference: concise and calm","clientName":"Smoke Client"}}}' \
-  | LCV_VAULT_DB_PATH="$tmpdb" src-tauri/target/release/lcv-mcp
+  | LCV_VAULT_DB_PATH="$tmpdb" \
+    LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef \
+    src-tauri/target/release/lcv-mcp
 rm -f "$tmpdb"
 ```

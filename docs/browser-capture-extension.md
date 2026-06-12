@@ -4,7 +4,7 @@ Last updated: 2026-06-12
 
 Life Context Vault includes a Chrome Manifest V3 extension plus a Native Messaging host.
 
-The extension captures the current ChatGPT, Claude, or Gemini chat page and sends the text to the local native host. The native host writes a `passive_capture` Source, `PassiveCaptureEvent`, and unapproved `MemoryCandidate` records to the Vault.
+The extension captures the current ChatGPT, Claude, or Gemini chat page and sends the text to the local native host. The native host writes a `passive_capture` Source, `PassiveCaptureEvent`, and unapproved `MemoryCandidate` records to the encrypted local Vault.
 
 ## Safety Boundary
 
@@ -16,6 +16,7 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
   - `gemini.google.com`
 - The native host refuses capture when Passive Capture is off in the app.
 - The native host checks the app's allowed site list.
+- The native host opens the same SQLCipher Vault as the app, using the OS secure credential store for the Vault key.
 - Captured text becomes an Inbox candidate only.
 - ApprovedFact creation still requires review in the app.
 - Raw captured Source text follows the app's Passive Capture retention policy.

@@ -388,6 +388,7 @@ button:focus-visible {
 .table-row div,
 .connection-row div,
 .audit-row div {
+  min-width: 0;
   display: grid;
   gap: 4px;
 }
@@ -407,6 +408,7 @@ button:focus-visible {
 .audit-row span {
   color: #667267;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .connection-card {

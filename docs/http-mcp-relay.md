@@ -4,7 +4,7 @@ Last updated: 2026-06-12
 
 Life Context Vault includes an HTTP relay binary named `lcv-relay`.
 
-The relay is a local-first stepping stone toward hosted Remote MCP. It accepts MCP JSON-RPC over HTTP and forwards each request to the local `lcv-mcp` stdio sidecar, so both transports share the same Vault access boundary.
+The relay is a local-first stepping stone toward hosted Remote MCP. It accepts MCP JSON-RPC over HTTP and forwards each request to the local `lcv-mcp` stdio sidecar, so both transports share the same encrypted Vault access boundary.
 
 ## Build
 
@@ -63,6 +63,7 @@ LCV_RELAY_TOKEN=dev-local-token \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_MCP_COMMAND="$PWD/src-tauri/target/release/lcv-mcp" \
 LCV_VAULT_DB_PATH="$tmpdb" \
+LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef \
 src-tauri/target/release/lcv-relay
 ```
 

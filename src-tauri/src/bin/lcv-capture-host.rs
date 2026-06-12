@@ -8,6 +8,9 @@ use std::{
   time::{SystemTime, UNIX_EPOCH},
 };
 
+#[path = "../vault_crypto.rs"]
+mod vault_crypto;
+
 const VAULT_STATE_KEY: &str = "vault_state";
 const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
 
@@ -199,8 +202,7 @@ fn load_vault() -> Result<Value, String> {
   if !path.exists() {
     return Ok(empty_vault());
   }
-  let connection =
-    Connection::open(&path).map_err(|error| format!("failed to open vault database: {error}"))?;
+  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   ensure_vault_state_table(&connection)?;
   let payload: Option<String> = connection
     .query_row(
@@ -221,8 +223,7 @@ fn save_vault(vault: &Value) -> Result<(), String> {
     std::fs::create_dir_all(parent)
       .map_err(|error| format!("failed to create vault directory: {error}"))?;
   }
-  let connection =
-    Connection::open(&path).map_err(|error| format!("failed to open vault database: {error}"))?;
+  let connection = vault_crypto::open_encrypted_vault_connection(&path)?;
   ensure_vault_state_table(&connection)?;
   connection
     .execute(
@@ -560,6 +561,15 @@ mod tests {
 
   #[test]
   fn disabled_passive_capture_refuses_capture() {
+    let path = env::temp_dir().join(format!(
+      "lcv-capture-disabled-test-{}.sqlite3",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    env::set_var("LCV_VAULT_DB_PATH", &path);
+
     let result = capture_fragment(&json!({
       "type": "capture_fragment",
       "sourceClient": "chatgpt",
@@ -570,5 +580,7 @@ mod tests {
     .expect("capture response");
 
     assert_eq!(result.get("status").and_then(Value::as_str), Some("capture_paused"));
+    env::remove_var("LCV_VAULT_DB_PATH");
+    let _ = std::fs::remove_file(path);
   }
 }

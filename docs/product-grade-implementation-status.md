@@ -42,6 +42,11 @@ Last updated: 2026-06-12
   - `passive_capture_events`
   - `audit_events`
   - `facts_fts`
+- Added SQLCipher-backed local database encryption:
+  - macOS Keychain-managed Vault key by default
+  - `LCV_VAULT_DB_KEY` override for CI and smoke tests
+  - plaintext PoC SQLite `vault_state` migration into encrypted SQLite
+  - shared encrypted open path for the Tauri app, local MCP sidecar, and browser capture host
 - Added real local MCP stdio sidecar:
   - `life_context.request_context_pack`
   - `life_context.propose_memory`
@@ -69,7 +74,6 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Hosted remote MCP relay with public HTTPS, OAuth, pairing, and local Agent websocket.
-- SQLCipher or equivalent local database encryption with OS keychain-managed keys.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
@@ -83,9 +87,11 @@ Last updated: 2026-06-12
 - `npm run mcp:build`
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
-- HTTP relay smoke test for `/health`, unauthorized `/mcp`, and authorized `tools/list`
+- HTTP relay smoke test for `/health`, unauthorized `/mcp`, authorized `tools/list`, and encrypted `propose_memory` writes
 - `npm run capture:build`
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
+- SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
+- Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Browser UI checks:
@@ -95,6 +101,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: MCP and Relay setup grids stack without page-level horizontal overflow
   - desktop `1440x980`: Connections browser extension setup card displays native host instructions without horizontal overflow
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
+  - desktop `1440x980`: Settings storage panel displays without horizontal overflow
+  - mobile `390x844`: Settings storage panel stacks without page-level horizontal overflow
 - Extension static checks:
   - `node --check browser-extension/background.js`
   - `node --check browser-extension/content.js`
