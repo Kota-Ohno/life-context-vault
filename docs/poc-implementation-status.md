@@ -2,6 +2,8 @@
 
 Last updated: 2026-06-11
 
+This document is a historical snapshot of the first runnable PoC. The current product-grade implementation has moved beyond several gaps listed here; use `docs/product-grade-implementation-status.md` as the source of truth for current storage, encryption, MCP, Relay, Capture, OCR, and document-ingestion status.
+
 ## Implemented In This PoC
 
 - React + Vite local browser app.
@@ -43,7 +45,7 @@ Native smoke checks:
 - SQLite file created at `~/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3`.
 - SQLite `vault_state` table exists and stores a serialized Vault payload.
 
-## Known Remaining Gaps
+## Known Remaining Gaps At The Time
 
 - SQLite currently stores the canonical Vault JSON blob, not the full relational schema from the architecture doc.
 - Local database encryption is not implemented yet; encrypted backup export/restore is implemented.
@@ -51,4 +53,4 @@ Native smoke checks:
 - AI behavior is deterministic local PoC logic, not provider-backed LLM calls.
 - MCP adapter is not implemented.
 
-These gaps are intentional for the first fully runnable vertical slice. The native app shell and SQLite persistence are now present; the next storage step is relational tables plus database encryption.
+These gaps were intentional for the first fully runnable vertical slice. They are kept here for project history, not as current product status.
