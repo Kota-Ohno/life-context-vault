@@ -33,6 +33,7 @@ import {
   BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
+  addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   approveNativeCandidate,
   createNativeContextPackRequest,
@@ -763,14 +764,65 @@ export function App() {
   }
 
   function simulatePassiveCapture() {
+    void simulatePassiveCaptureThroughCore();
+  }
+
+  async function simulatePassiveCaptureThroughCore() {
     if (!captureText.trim()) {
       setNotice("Captureする会話断片を入力してください。");
       return;
     }
+    const conversationId = captureConversationId || "demo-thread";
+    const url = captureUrlForClient(captureClient, conversationId);
+    if (nativePath) {
+      try {
+        const saved = await saveNativeVault(state, nativeRevisionRef.current);
+        if (saved?.conflict && saved.currentState) {
+          const mergedState = mergeVaultStates(saved.currentState, state);
+          nativeRevisionRef.current = saved.currentUpdatedAt;
+          setNativeRevision(saved.currentUpdatedAt);
+          setState(mergedState);
+          setNotice("外部AI接続からの更新を取り込みました。Captureをもう一度実行してください。");
+          return;
+        }
+        if (saved?.updatedAt) {
+          nativeRevisionRef.current = saved.updatedAt;
+          setNativeRevision(saved.updatedAt);
+        }
+        const captured = await addNativePassiveCaptureEvent({
+          sourceClient: captureClient,
+          conversationId,
+          url,
+          text: captureText,
+          pageTitle: "Manual capture",
+          selected: true
+        });
+        if (!captured) {
+          setNotice("Desktop app外ではローカルCaptureとして処理します。");
+        } else {
+          nativeRevisionRef.current = captured.updatedAt;
+          setNativeRevision(captured.updatedAt);
+          setState(captured.state);
+          setNotice(
+            captured.accepted
+              ? `CaptureからMemory候補を${captured.candidateIds.length}件生成しました。承認されるまでAIには使われません。`
+              : captured.message
+          );
+          if (captured.accepted) {
+            setCaptureText("");
+            setView("inbox");
+          }
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでCaptureを保存できませんでした。");
+        return;
+      }
+    }
     const next = addPassiveCaptureEvent(state, {
       sourceClient: captureClient,
-      conversationId: captureConversationId || "demo-thread",
-      url: `https://${captureClient}.example/${captureConversationId || "demo-thread"}`,
+      conversationId,
+      url,
       text: captureText
     });
     apply(next, state.passiveCaptureSettings.enabled ? "CaptureからMemory候補を生成しました。" : "Captureは停止中です。");
@@ -2677,6 +2729,25 @@ function makeCaptureSetupCommand(extensionId: string): string {
     ? normalized
     : "<Chrome extension id>";
   return `npm run capture:build\nLCV_EXTENSION_ID=${id} npm run extension:host-manifest`;
+}
+
+function captureUrlForClient(client: ConnectorKind, conversationId: string): string {
+  const id = encodeURIComponent(conversationId || "demo-thread");
+  switch (client) {
+    case "claude_desktop":
+    case "claude_remote":
+      return `https://claude.ai/chat/${id}`;
+    case "gemini":
+      return `https://gemini.google.com/app/${id}`;
+    case "codex":
+    case "generic_mcp":
+      return `lcv-local://${client}/${id}`;
+    case "copy_fallback":
+      return `lcv-local://copy_fallback/${id}`;
+    case "chatgpt":
+    default:
+      return `https://chatgpt.com/c/${id}`;
+  }
 }
 
 function EmptyState({

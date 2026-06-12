@@ -162,6 +162,22 @@ struct NativeCandidateReviewResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativePassiveCaptureResult {
+  payload: String,
+  updated_at: Option<String>,
+  accepted: bool,
+  status: String,
+  message: String,
+  event_id: Option<String>,
+  source_id: Option<String>,
+  candidate_ids: Vec<String>,
+  detected_sensitivity: String,
+  retention_until: Option<String>,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -197,6 +213,19 @@ pub struct VaultCoreCandidateReviewResult {
   pub candidate_id: String,
   pub status: String,
   pub fact_id: Option<String>,
+}
+
+pub struct VaultCorePassiveCaptureResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub accepted: bool,
+  pub status: String,
+  pub message: String,
+  pub event_id: Option<String>,
+  pub source_id: Option<String>,
+  pub candidate_ids: Vec<String>,
+  pub detected_sensitivity: String,
+  pub retention_until: Option<String>,
 }
 
 pub struct VaultCoreRequestStatusResult {
@@ -1375,6 +1404,199 @@ pub fn add_source_with_candidates_at_path(
   })
 }
 
+pub fn add_passive_capture_event_at_path(
+  path: &Path,
+  source_client: &str,
+  conversation_id: &str,
+  url: &str,
+  text: &str,
+  page_title: Option<&str>,
+  selected: bool,
+) -> Result<VaultCorePassiveCaptureResult, String> {
+  let text = text.trim();
+  if text.is_empty() {
+    return Err("text is required.".to_string());
+  }
+  let source_client = source_client.trim();
+  let source_client = if source_client.is_empty() {
+    "generic_mcp"
+  } else {
+    source_client
+  };
+  let conversation_id = conversation_id.trim();
+  let conversation_id = if conversation_id.is_empty() {
+    "browser_unknown"
+  } else {
+    conversation_id
+  };
+  let url = url.trim();
+  if url.is_empty() {
+    return Err("url is required.".to_string());
+  }
+
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+  let current_payload = snapshot
+    .payload
+    .clone()
+    .unwrap_or_else(|| vault.to_string());
+
+  if !passive_capture_enabled(&vault) {
+    return Ok(VaultCorePassiveCaptureResult {
+      payload: current_payload,
+      updated_at: snapshot.updated_at,
+      accepted: false,
+      status: "capture_paused".to_string(),
+      message: "Passive Capture is off in Life Context Vault.".to_string(),
+      event_id: None,
+      source_id: None,
+      candidate_ids: Vec::new(),
+      detected_sensitivity: "public".to_string(),
+      retention_until: None,
+    });
+  }
+
+  if !passive_capture_site_allowed(&vault, source_client, url) {
+    return Ok(VaultCorePassiveCaptureResult {
+      payload: current_payload,
+      updated_at: snapshot.updated_at,
+      accepted: false,
+      status: "site_not_allowed".to_string(),
+      message: "This site is not in the Passive Capture allowlist.".to_string(),
+      event_id: None,
+      source_id: None,
+      candidate_ids: Vec::new(),
+      detected_sensitivity: "public".to_string(),
+      retention_until: None,
+    });
+  }
+
+  let now = now_iso();
+  let retention_until = days_from_now(passive_capture_retention_days(&vault));
+  let source_id = new_id("src");
+  let event_id = new_id("cap");
+  let detected_sensitivity = detect_sensitivity(text).to_string();
+  let sanitized = sanitize_source_body(text);
+  let title_detail = page_title
+    .map(normalized_text)
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "passive capture".to_string());
+  let origin = if is_local_capture_url(source_client, url) {
+    "local_mcp"
+  } else {
+    "passive_browser"
+  };
+  let candidates = extract_memory_candidates_for_source(&source_id, &sanitized, &now);
+  let candidate_ids = candidates
+    .iter()
+    .map(|candidate| str_field(candidate, "id"))
+    .collect::<Vec<_>>();
+  let processing_status = if candidate_ids.is_empty() {
+    "ignored"
+  } else {
+    "candidate_generated"
+  };
+
+  push_json_array(
+    &mut vault,
+    "sources",
+    json!({
+      "id": source_id,
+      "kind": "passive_capture",
+      "title": format!("{} - {}", client_label(source_client), title_detail),
+      "origin": origin,
+      "body": sanitized,
+      "createdAt": now,
+      "capturedAt": now,
+      "retentionUntil": retention_until,
+      "promotedToLongTerm": false,
+      "defaultSensitivity": detected_sensitivity,
+      "processingStatus": "ready",
+      "deletionState": "active"
+    }),
+  );
+  for candidate in candidates {
+    push_json_array(&mut vault, "candidates", candidate);
+  }
+  push_json_array(
+    &mut vault,
+    "passiveCaptureEvents",
+    json!({
+      "id": event_id,
+      "sourceClient": source_client,
+      "conversationId": conversation_id,
+      "urlHash": stable_hash(url),
+      "textFragmentRef": format!("{source_id}:body"),
+      "capturedAt": now,
+      "retentionUntil": retention_until,
+      "sensitivityGuess": detected_sensitivity,
+      "processingStatus": processing_status,
+      "sourceId": source_id,
+      "candidateIds": candidate_ids
+    }),
+  );
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "passive_capture_recorded",
+      "passive_capture_event",
+      &event_id,
+      &detected_sensitivity,
+      json!({
+        "sourceClient": source_client,
+        "conversationId": conversation_id,
+        "selected": selected,
+        "candidateCount": candidate_ids.len(),
+        "retentionUntil": retention_until,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  for candidate_id in &candidate_ids {
+    let sensitivity = vault
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|items| {
+        items
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == *candidate_id)
+      })
+      .map(|candidate| str_field(candidate, "detectedSensitivity"))
+      .unwrap_or_else(|| detected_sensitivity.clone());
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "candidate_generated",
+        "candidate",
+        candidate_id,
+        &sensitivity,
+        json!({
+          "sourceId": source_id,
+          "passiveCaptureEventId": event_id,
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCorePassiveCaptureResult {
+    payload,
+    updated_at,
+    accepted: true,
+    status: processing_status.to_string(),
+    message: "Captured text was added to Memory Inbox as unapproved candidate(s).".to_string(),
+    event_id: Some(event_id),
+    source_id: Some(source_id),
+    candidate_ids,
+    detected_sensitivity,
+    retention_until: Some(retention_until),
+  })
+}
+
 pub fn approve_candidate_at_path(
   path: &Path,
   candidate_id: &str,
@@ -2204,6 +2426,77 @@ fn source_origin(origin: &str) -> &'static str {
   }
 }
 
+fn passive_capture_enabled(vault: &Value) -> bool {
+  vault
+    .get("passiveCaptureSettings")
+    .and_then(|settings| settings.get("enabled"))
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn passive_capture_retention_days(vault: &Value) -> i64 {
+  vault
+    .get("passiveCaptureSettings")
+    .and_then(|settings| settings.get("retentionDays"))
+    .and_then(Value::as_i64)
+    .unwrap_or(14)
+    .clamp(1, 90)
+}
+
+fn passive_capture_site_allowed(vault: &Value, source_client: &str, url: &str) -> bool {
+  if is_local_capture_url(source_client, url) {
+    return true;
+  }
+  let Some(host) = host_from_url(url) else {
+    return false;
+  };
+  vault
+    .get("passiveCaptureSettings")
+    .and_then(|settings| settings.get("allowedSites"))
+    .and_then(Value::as_array)
+    .map(|sites| {
+      sites
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|site| host == site || host.ends_with(&format!(".{site}")))
+    })
+    .unwrap_or(false)
+}
+
+fn is_local_capture_url(source_client: &str, url: &str) -> bool {
+  matches!(source_client, "codex" | "generic_mcp" | "copy_fallback")
+    && (url.starts_with("lcv-local://") || url.starts_with("local://"))
+}
+
+fn host_from_url(url: &str) -> Option<String> {
+  let without_scheme = url.split("://").nth(1).unwrap_or(url);
+  let host = without_scheme
+    .split('/')
+    .next()
+    .unwrap_or_default()
+    .split(':')
+    .next()
+    .unwrap_or_default()
+    .trim()
+    .to_lowercase();
+  if host.is_empty() {
+    None
+  } else {
+    Some(host)
+  }
+}
+
+fn client_label(client: &str) -> &'static str {
+  match client {
+    "chatgpt" => "ChatGPT",
+    "claude_desktop" | "claude_remote" => "Claude",
+    "gemini" => "Gemini",
+    "codex" => "Codex",
+    "copy_fallback" => "Copy fallback",
+    _ => "AI chat",
+  }
+}
+
 fn extract_memory_candidates_for_source(source_id: &str, body: &str, created_at: &str) -> Vec<Value> {
   let mut candidates = Vec::new();
 
@@ -2556,6 +2849,20 @@ fn now_iso() -> String {
 fn minutes_from_now(minutes: i64) -> String {
   (Utc::now() + chrono::Duration::minutes(minutes))
     .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn days_from_now(days: i64) -> String {
+  (Utc::now() + chrono::Duration::days(days))
+    .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn stable_hash(text: &str) -> String {
+  let mut hash = 2166136261u32;
+  for byte in text.as_bytes() {
+    hash ^= u32::from(*byte);
+    hash = hash.wrapping_mul(16777619);
+  }
+  format!("hash_{hash:x}")
 }
 
 fn random_local_token() -> String {
@@ -3417,6 +3724,41 @@ fn update_native_candidate_status(
 }
 
 #[tauri::command]
+fn add_native_passive_capture_event(
+  app: AppHandle,
+  source_client: String,
+  conversation_id: String,
+  url: String,
+  text: String,
+  page_title: Option<String>,
+  selected: Option<bool>,
+) -> Result<NativePassiveCaptureResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = add_passive_capture_event_at_path(
+    &path,
+    &source_client,
+    &conversation_id,
+    &url,
+    &text,
+    page_title.as_deref(),
+    selected.unwrap_or(false),
+  )?;
+  Ok(NativePassiveCaptureResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    accepted: result.accepted,
+    status: result.status,
+    message: result.message,
+    event_id: result.event_id,
+    source_id: result.source_id,
+    candidate_ids: result.candidate_ids,
+    detected_sensitivity: result.detected_sensitivity,
+    retention_until: result.retention_until,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -3535,6 +3877,7 @@ pub fn run() {
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
+      add_native_passive_capture_event,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -3994,6 +4337,167 @@ mod tests {
         .map(Vec::is_empty)
         .unwrap_or(false)
     );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn passive_capture_site_policy_matches_allowed_browser_and_local_clients() {
+    let vault = empty_vault_json();
+
+    assert!(passive_capture_site_allowed(
+      &vault,
+      "chatgpt",
+      "https://chatgpt.com/c/123"
+    ));
+    assert!(passive_capture_site_allowed(
+      &vault,
+      "claude_remote",
+      "https://claude.ai/chat/123"
+    ));
+    assert!(passive_capture_site_allowed(
+      &vault,
+      "codex",
+      "lcv-local://codex/thread"
+    ));
+    assert!(passive_capture_site_allowed(
+      &vault,
+      "copy_fallback",
+      "lcv-local://copy_fallback/thread"
+    ));
+    assert!(!passive_capture_site_allowed(
+      &vault,
+      "chatgpt",
+      "https://example.com/chat/123"
+    ));
+  }
+
+  #[test]
+  fn native_passive_capture_refuses_when_paused_without_creating_events() {
+    use_test_vault_key();
+    let path = temp_vault_path("passive-paused");
+    let result = add_passive_capture_event_at_path(
+      &path,
+      "chatgpt",
+      "thread",
+      "https://chatgpt.com/c/thread",
+      "Tone preference: concise",
+      Some("ChatGPT"),
+      true,
+    )
+    .expect("passive capture response");
+    let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
+
+    assert!(!result.accepted);
+    assert_eq!(result.status, "capture_paused");
+    assert_eq!(
+      saved
+        .get("passiveCaptureEvents")
+        .and_then(Value::as_array)
+        .map(Vec::len),
+      Some(0)
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_passive_capture_refuses_unallowed_site() {
+    use_test_vault_key();
+    let path = temp_vault_path("passive-site");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    vault["passiveCaptureSettings"]["enabled"] = json!(true);
+    save_vault_json_with_projection(&mut connection, &vault).expect("seed vault");
+    drop(connection);
+
+    let result = add_passive_capture_event_at_path(
+      &path,
+      "chatgpt",
+      "thread",
+      "https://example.com/c/thread",
+      "Tone preference: concise",
+      Some("Example"),
+      true,
+    )
+    .expect("passive capture response");
+    let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
+
+    assert!(!result.accepted);
+    assert_eq!(result.status, "site_not_allowed");
+    assert_eq!(
+      saved
+        .get("passiveCaptureEvents")
+        .and_then(Value::as_array)
+        .map(Vec::len),
+      Some(0)
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_passive_capture_creates_candidates_not_facts_and_syncs_projection() {
+    use_test_vault_key();
+    let path = temp_vault_path("passive-capture");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    vault["passiveCaptureSettings"]["enabled"] = json!(true);
+    save_vault_json_with_projection(&mut connection, &vault).expect("seed vault");
+    drop(connection);
+
+    let result = add_passive_capture_event_at_path(
+      &path,
+      "chatgpt",
+      "thread",
+      "https://chatgpt.com/c/thread",
+      "Tone preference: concise and calm.\nPassword hunter2\nNeed to update address before moving.",
+      Some("ChatGPT thread"),
+      true,
+    )
+    .expect("passive capture");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source_body = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.first())
+      .and_then(|source| source.get("body"))
+      .and_then(Value::as_str)
+      .unwrap_or_default();
+    let facts_count = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+    let passive_event_count = saved
+      .get("passiveCaptureEvents")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default();
+
+    assert!(result.accepted);
+    assert_eq!(result.status, "candidate_generated");
+    assert!(!result.candidate_ids.is_empty());
+    assert_eq!(facts_count, 0);
+    assert_eq!(passive_event_count, 1);
+    assert!(source_body.contains("[REDACTED_SECRET]"));
+    assert!(!source_body.contains("hunter2"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_source_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
+      .expect("normalized source count");
+    let normalized_candidate_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .expect("normalized candidate count");
+    let normalized_fact_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("normalized fact count");
+    let normalized_capture_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM passive_capture_events", [], |row| row.get(0))
+      .expect("normalized capture count");
+
+    assert_eq!(normalized_source_count, 1);
+    assert_eq!(normalized_candidate_count, result.candidate_ids.len() as i64);
+    assert_eq!(normalized_fact_count, 0);
+    assert_eq!(normalized_capture_count, 1);
     remove_temp_vault(&path);
   }
 

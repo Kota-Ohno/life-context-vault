@@ -132,13 +132,19 @@ Last updated: 2026-06-12
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
   - native host `lcv-capture-host`
-  - capture writes `passive_capture` Source, `PassiveCaptureEvent`, and unapproved Inbox candidates
+  - capture writes `passive_capture` Source, `PassiveCaptureEvent`, and unapproved Inbox candidates through shared Rust Vault Core
   - host refuses capture unless Passive Capture is enabled and the site is allowed
+  - the host no longer owns extraction, redaction, persistence, or audit logic; it only adapts the Native Messaging protocol to Vault Core
 - Added Browser Capture host installer:
   - Connections accepts the unpacked Chrome extension id and installs the Chrome Native Messaging host manifest from the desktop app
   - extension ids are validated before writing
   - existing host manifests are backed up before replacement
   - manual command copy remains as fallback
+- Added Rust-owned Passive Capture path for the Tauri Control Center:
+  - `add_native_passive_capture_event` saves manual/demo Capture through Vault Core when Desktop storage is available
+  - browser-only preview keeps the TypeScript fallback
+  - Capture creates Sources, PassiveCaptureEvents, Candidates, and audit records, but never ApprovedFacts
+  - allowed-site checks are enforced by Vault Core for browser captures, while local Codex/MCP capture uses an explicit `lcv-local://` boundary
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -147,7 +153,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for passive capture and policy updates beyond the current native Context Pack/source/candidate review/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for policy updates and broader source lifecycle operations beyond the current native Context Pack/source/candidate review/passive capture/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -177,6 +183,7 @@ Last updated: 2026-06-12
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
+- Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
@@ -192,6 +199,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: extension setup code blocks fit without page-level horizontal overflow
   - desktop `1280x720`: Browser Capture host installer card accepts an extension id without page-level horizontal overflow
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
+  - desktop `1280x900`: Connections manual Capture can start Passive Capture, create an Inbox candidate, and keep Facts at zero
+  - mobile `390x844`: Connections Capture surfaces render without page-level horizontal overflow
   - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
@@ -213,11 +222,16 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Candidate review, Context Pack generation, MCP memory proposal, and MCP request status are present, while passive capture/policy updates still use the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Candidate review, Passive Capture, Context Pack generation, MCP memory proposal, and MCP request status are present, while policy updates and some source lifecycle operations still use the JSON snapshot projected into tables.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
 - Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
+- Passive Capture review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Passive Capture product review: accepted; manual/demo Capture, browser extension Capture, and local AI Capture now share one Vault Core path while preserving the Inbox-first user promise.
+- Passive Capture security review: accepted after fixing the `copy_fallback` local URL allowlist mismatch; paused captures, unallowed browser sites, secrets, and Fact creation are covered by tests.
+- Passive Capture technical review: accepted; capture host no longer duplicates extraction, redaction, persistence, or audit logic, and normalized capture tables are synced by the same encrypted save path.
+- Passive Capture UX review: accepted; desktop and mobile Connections surfaces render without page-level horizontal overflow, and manual Capture produces an Inbox candidate with zero Facts.
 
 ### Relay State Store Slice
 

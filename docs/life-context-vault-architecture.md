@@ -152,6 +152,27 @@ Initial command behavior:
 - Redact secret indicators and adjacent secret values before persistence.
 - Sync normalized `sources`, `source_chunks`, and `memory_candidates` tables before the command returns.
 
+### Passive Capture
+
+Passive Capture handles opt-in capture from everyday AI conversations and local AI connection logs.
+
+The capture adapters are intentionally thin:
+
+- Browser extension: captures the current supported AI chat page and sends a Native Messaging request.
+- Native host: validates the message shape and forwards it to Vault Core.
+- Manual Control Center capture: calls the same Vault Core command in the desktop app.
+- Local AI/MCP capture: uses an explicit local URL boundary such as `lcv-local://codex/...`.
+
+Vault Core owns all capture decisions:
+
+- Passive Capture must be enabled before any write.
+- Browser capture URLs must match the user's allowed site list.
+- Raw transcript fragments are stored as `passive_capture` Sources with retention metadata.
+- Secret indicators and adjacent values are redacted before persistence.
+- Capture creates `PassiveCaptureEvent` and `MemoryCandidate` records only.
+- Capture never creates ApprovedFacts; user review in Memory Inbox is still required.
+- Normalized `sources`, `source_chunks`, `memory_candidates`, `passive_capture_events`, and `audit_events` are refreshed before the command returns.
+
 ### Extraction Pipeline
 
 Extraction is allowed to use local parsers, OCR, local models, and cloud LLMs depending on policy.

@@ -153,6 +153,20 @@ interface NativeCandidateReviewPayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativePassiveCapturePayload {
+  payload: string;
+  updatedAt: string | null;
+  accepted: boolean;
+  status: "capture_paused" | "site_not_allowed" | "captured" | "candidate_generated" | "ignored";
+  message: string;
+  eventId: string | null;
+  sourceId: string | null;
+  candidateIds: string[];
+  detectedSensitivity: SensitivityTier;
+  retentionUntil: string | null;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -176,6 +190,20 @@ export interface NativeCandidateReviewResult {
   candidateId: string;
   status: CandidateStatus;
   factId: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativePassiveCaptureResult {
+  state: VaultState;
+  updatedAt: string | null;
+  accepted: boolean;
+  status: NativePassiveCapturePayload["status"];
+  message: string;
+  eventId: string | null;
+  sourceId: string | null;
+  candidateIds: string[];
+  detectedSensitivity: SensitivityTier;
+  retentionUntil: string | null;
   generatedBy: "native_vault_core";
 }
 
@@ -343,6 +371,39 @@ export async function updateNativeCandidateStatus(input: {
     candidateId: result.candidateId,
     status: result.status,
     factId: result.factId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function addNativePassiveCaptureEvent(input: {
+  sourceClient: string;
+  conversationId: string;
+  url: string;
+  text: string;
+  pageTitle?: string;
+  selected?: boolean;
+}): Promise<NativePassiveCaptureResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativePassiveCapturePayload>("add_native_passive_capture_event", {
+    sourceClient: input.sourceClient,
+    conversationId: input.conversationId,
+    url: input.url,
+    text: input.text,
+    pageTitle: input.pageTitle ?? null,
+    selected: input.selected ?? false
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    accepted: result.accepted,
+    status: result.status,
+    message: result.message,
+    eventId: result.eventId,
+    sourceId: result.sourceId,
+    candidateIds: result.candidateIds,
+    detectedSensitivity: result.detectedSensitivity,
+    retentionUntil: result.retentionUntil,
     generatedBy: result.generatedBy
   };
 }
