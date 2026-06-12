@@ -32,6 +32,7 @@ const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_RELAY_STATE_BACKUP_COUNT: usize = 3;
 const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
+const DEFAULT_MCP_SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -365,6 +366,7 @@ struct RelayStateInner {
   pending_authorizations: HashMap<String, PendingAuthorization>,
   auth_codes: HashMap<String, AuthCode>,
   access_tokens: HashMap<String, AccessToken>,
+  mcp_sessions: HashMap<String, McpSession>,
   pairing_sessions: HashMap<String, PairingSession>,
   pending_agent_responses: HashMap<String, Sender<Result<Option<Value>, String>>>,
   agent_sender: Option<Sender<String>>,
@@ -437,6 +439,15 @@ struct RelayHandoff {
   expires_at: SystemTime,
 }
 
+#[derive(Clone, Debug)]
+struct McpSession {
+  id: String,
+  client_id: String,
+  created_at: SystemTime,
+  last_seen_at: SystemTime,
+  expires_at: SystemTime,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PersistedRelayState {
   version: u32,
@@ -496,6 +507,10 @@ fn prune_request_events(
 
 fn prune_handoffs(handoffs: &mut HashMap<String, RelayHandoff>, now: SystemTime) {
   handoffs.retain(|_, handoff| now <= handoff.expires_at);
+}
+
+fn prune_mcp_sessions(sessions: &mut HashMap<String, McpSession>, now: SystemTime) {
+  sessions.retain(|_, session| now <= session.expires_at);
 }
 
 fn normalize_persisted_relay_state_tenant(
@@ -634,6 +649,7 @@ impl RelayState {
         pending_authorizations: HashMap::new(),
         auth_codes: HashMap::new(),
         access_tokens: HashMap::new(),
+        mcp_sessions: HashMap::new(),
         pairing_sessions: HashMap::new(),
         pending_agent_responses: HashMap::new(),
         agent_sender: None,
@@ -761,10 +777,63 @@ impl RelayState {
     })
   }
 
+  fn start_mcp_session(&self, client_id: String) -> McpSession {
+    let session = McpSession {
+      id: random_token("mcp_session"),
+      client_id,
+      created_at: SystemTime::now(),
+      last_seen_at: SystemTime::now(),
+      expires_at: seconds_from_now(DEFAULT_MCP_SESSION_TTL_SECONDS),
+    };
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_mcp_sessions(&mut inner.mcp_sessions, SystemTime::now());
+    inner
+      .mcp_sessions
+      .insert(session.id.clone(), session.clone());
+    session
+  }
+
+  fn client_has_mcp_session(&self, client_id: &str) -> bool {
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_mcp_sessions(&mut inner.mcp_sessions, SystemTime::now());
+    inner
+      .mcp_sessions
+      .values()
+      .any(|session| session.client_id == client_id)
+  }
+
+  fn touch_mcp_session(&self, session_id: &str, client_id: &str) -> Result<(), String> {
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_mcp_sessions(&mut inner.mcp_sessions, SystemTime::now());
+    let Some(session) = inner.mcp_sessions.get_mut(session_id) else {
+      return Err("mcp_session_not_found".to_string());
+    };
+    if session.client_id != client_id {
+      return Err("mcp_session_not_found".to_string());
+    }
+    session.last_seen_at = SystemTime::now();
+    session.expires_at = seconds_from_now(DEFAULT_MCP_SESSION_TTL_SECONDS);
+    Ok(())
+  }
+
+  fn terminate_mcp_session(&self, session_id: &str, client_id: &str) -> Result<(), String> {
+    let mut inner = self.inner.lock().expect("relay state");
+    prune_mcp_sessions(&mut inner.mcp_sessions, SystemTime::now());
+    let Some(session) = inner.mcp_sessions.get(session_id) else {
+      return Err("mcp_session_not_found".to_string());
+    };
+    if session.client_id != client_id {
+      return Err("mcp_session_not_found".to_string());
+    }
+    inner.mcp_sessions.remove(session_id);
+    Ok(())
+  }
+
   fn store_status(&self) -> Value {
     let mut inner = self.inner.lock().expect("relay state");
     let now_seconds = system_time_seconds(SystemTime::now());
     prune_handoffs(&mut inner.handoffs, SystemTime::now());
+    prune_mcp_sessions(&mut inner.mcp_sessions, SystemTime::now());
     prune_request_events(
       &mut inner.request_events,
       self.retention.request_event_retention_seconds,
@@ -807,21 +876,38 @@ impl RelayState {
         })
       })
       .collect();
+    let recent_mcp_sessions: Vec<Value> = inner
+      .mcp_sessions
+      .values()
+      .take(20)
+      .map(|session| {
+        json!({
+          "id": session.id,
+          "clientId": session.client_id,
+          "createdAt": system_time_seconds(session.created_at),
+          "lastSeenAt": system_time_seconds(session.last_seen_at),
+          "expiresAt": system_time_seconds(session.expires_at)
+        })
+      })
+      .collect();
     json!({
       "tenantId": self.tenant_id,
       "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
       "registeredClientCount": inner.registered_clients.len(),
       "requestEventCount": inner.request_events.len(),
       "handoffCount": inner.handoffs.len(),
+      "mcpSessionCount": inner.mcp_sessions.len(),
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
         "stateBackupCount": self.retention.state_backup_count,
         "handoffTtlSeconds": self.retention.handoff_ttl_seconds,
+        "mcpSessionTtlSeconds": DEFAULT_MCP_SESSION_TTL_SECONDS,
         "maxRequestEvents": MAX_RELAY_REQUEST_EVENTS
       },
       "recentRequestEvents": recent_events,
-      "recentHandoffs": recent_handoffs
+      "recentHandoffs": recent_handoffs,
+      "recentMcpSessions": recent_mcp_sessions
     })
   }
 
@@ -1063,6 +1149,13 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
         handle_mcp_request(request, config, state)
       }
     }
+    ("DELETE", "/mcp") => {
+      if cors_origin_for_request(request, config).is_none() {
+        cors_forbidden_response()
+      } else {
+        handle_mcp_session_delete(request, config, state)
+      }
+    }
     (method, "/mcp") => mcp_method_not_allowed(method, request, config),
     _ => json_response(404, json!({
       "error": "not_found",
@@ -1079,10 +1172,10 @@ fn mcp_method_not_allowed(
   HttpResponse::json(405, json!({
     "error": "method_not_allowed",
     "method": method,
-    "allowedMethods": ["POST", "OPTIONS"],
+    "allowedMethods": ["POST", "DELETE", "OPTIONS"],
     "message": "This Relay supports MCP JSON-RPC over POST /mcp. SSE GET /mcp is not enabled."
   }))
-  .with_header("Allow", "POST, OPTIONS")
+  .with_header("Allow", "POST, DELETE, OPTIONS")
   .with_cors_for_request(request, config)
 }
 
@@ -1560,6 +1653,24 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       &mcp_www_authenticate_challenge(config, required_scope),
     );
   };
+  if let Some(response) = mcp_session_error_for_request(
+    request,
+    config,
+    state,
+    &protocol_version,
+    &client_id,
+  ) {
+    record_relay_event(
+      state,
+      Some(client_id),
+      required_scope,
+      &method,
+      tool_name.as_deref(),
+      "rejected_session",
+      "http_session",
+    );
+    return response;
+  }
 
   match state.forward_to_agent(&request.body, &client_id) {
     Ok(Some(body)) => {
@@ -1572,9 +1683,14 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "fulfilled",
         "agent_websocket",
       );
-      return HttpResponse::json(200, body)
-        .with_mcp_protocol_version(&protocol_version)
-        .with_cors_for_request(request, config);
+      return fulfilled_mcp_response(
+        request,
+        config,
+        state,
+        &protocol_version,
+        &client_id,
+        body,
+      );
     }
     Ok(None) => {
       record_relay_event(
@@ -1602,9 +1718,14 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
             "fulfilled_handoff_cache",
             "relay_handoff_cache",
           );
-          return HttpResponse::json(200, handoff_body)
-            .with_mcp_protocol_version(&protocol_version)
-            .with_cors_for_request(request, config);
+          return fulfilled_mcp_response(
+            request,
+            config,
+            state,
+            &protocol_version,
+            &client_id,
+            handoff_body,
+          );
         }
         record_relay_event(
           state,
@@ -1641,9 +1762,14 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "fulfilled",
         "direct_sidecar_fallback",
       );
-      HttpResponse::json(200, body)
-        .with_mcp_protocol_version(&protocol_version)
-        .with_cors_for_request(request, config)
+      fulfilled_mcp_response(
+        request,
+        config,
+        state,
+        &protocol_version,
+        &client_id,
+        body,
+      )
     }
     Ok(None) => {
       record_relay_event(
@@ -1670,9 +1796,14 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
           "fulfilled_handoff_cache",
           "relay_handoff_cache",
         );
-        return HttpResponse::json(200, handoff_body)
-          .with_mcp_protocol_version(&protocol_version)
-          .with_cors_for_request(request, config);
+        return fulfilled_mcp_response(
+          request,
+          config,
+          state,
+          &protocol_version,
+          &client_id,
+          handoff_body,
+        );
       }
       record_relay_event(
         state,
@@ -1690,6 +1821,162 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       .with_mcp_protocol_version(&protocol_version)
     }
   }
+}
+
+fn handle_mcp_session_delete(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+) -> HttpResponse {
+  let protocol_version = match mcp_protocol_version_for_request(request) {
+    Ok(protocol_version) => protocol_version,
+    Err(message) => {
+      return mcp_json_response(request, config, 400, json!({
+        "error": "unsupported_protocol_version",
+        "message": message,
+        "supportedProtocolVersions": SUPPORTED_MCP_PROTOCOL_VERSIONS
+      }));
+    }
+  };
+  let Some(client_id) = mcp_authenticated_client(request, config, state) else {
+    record_relay_event(
+      state,
+      None,
+      "session",
+      "DELETE",
+      None,
+      "rejected_unauthorized",
+      "http_session",
+    );
+    return mcp_json_response(request, config, 401, json!({
+      "error": "unauthorized",
+      "message": "Missing or invalid Authorization bearer token."
+    }))
+    .with_mcp_protocol_version(&protocol_version)
+    .with_header(
+      "WWW-Authenticate",
+      &mcp_www_authenticate_challenge(config, "policy.read"),
+    );
+  };
+  let Some(session_id) = mcp_session_id_header(request) else {
+    record_relay_event(
+      state,
+      Some(client_id),
+      "session",
+      "DELETE",
+      None,
+      "missing_session",
+      "http_session",
+    );
+    return mcp_json_response(request, config, 400, json!({
+      "error": "missing_mcp_session",
+      "message": "DELETE /mcp requires MCP-Session-Id."
+    }))
+    .with_mcp_protocol_version(&protocol_version);
+  };
+  match state.terminate_mcp_session(&session_id, &client_id) {
+    Ok(()) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        "session",
+        "DELETE",
+        None,
+        "session_terminated",
+        "http_session",
+      );
+      HttpResponse::empty(204)
+        .with_mcp_protocol_version(&protocol_version)
+        .with_cors_for_request(request, config)
+    }
+    Err(_) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        "session",
+        "DELETE",
+        None,
+        "session_not_found",
+        "http_session",
+      );
+      mcp_json_response(request, config, 404, json!({
+        "error": "mcp_session_not_found",
+        "message": "MCP session is missing, expired, or belongs to another client."
+      }))
+      .with_mcp_protocol_version(&protocol_version)
+    }
+  }
+}
+
+fn fulfilled_mcp_response(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+  protocol_version: &str,
+  client_id: &str,
+  body: Value,
+) -> HttpResponse {
+  let mut response = HttpResponse::json(200, body.clone())
+    .with_mcp_protocol_version(protocol_version)
+    .with_cors_for_request(request, config);
+  if should_start_mcp_session(&request.body, &body) {
+    let session = state.start_mcp_session(client_id.to_string());
+    response = response.with_header("MCP-Session-Id", &session.id);
+  }
+  response
+}
+
+fn mcp_session_error_for_request(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+  protocol_version: &str,
+  client_id: &str,
+) -> Option<HttpResponse> {
+  if let Some(session_id) = mcp_session_id_header(request) {
+    if state.touch_mcp_session(&session_id, client_id).is_err() {
+      return Some(
+        mcp_json_response(request, config, 404, json!({
+          "error": "mcp_session_not_found",
+          "message": "MCP session is missing, expired, or belongs to another client."
+        }))
+        .with_mcp_protocol_version(protocol_version),
+      );
+    }
+    return None;
+  }
+  if !is_initialize_request(&request.body) && state.client_has_mcp_session(client_id) {
+    return Some(
+      mcp_json_response(request, config, 400, json!({
+        "error": "missing_mcp_session",
+        "message": "This client has an active MCP session and must include MCP-Session-Id."
+      }))
+      .with_mcp_protocol_version(protocol_version),
+    );
+  }
+  None
+}
+
+fn mcp_session_id_header(request: &HttpRequest) -> Option<String> {
+  request
+    .header("MCP-Session-Id")
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string)
+}
+
+fn is_initialize_request(body: &str) -> bool {
+  serde_json::from_str::<Value>(body)
+    .ok()
+    .and_then(|value| value.get("method").and_then(Value::as_str).map(str::to_string))
+    .as_deref()
+    == Some("initialize")
+}
+
+fn should_start_mcp_session(request_body: &str, response_body: &Value) -> bool {
+  is_initialize_request(request_body)
+    && response_body.get("result").is_some()
+    && response_body.get("error").is_none()
 }
 
 fn mcp_transport_header_error(
@@ -2112,7 +2399,7 @@ impl HttpResponse {
     let response = self
       .with_header("Access-Control-Allow-Origin", &origin)
       .with_header("Access-Control-Allow-Headers", RELAY_CORS_ALLOW_HEADERS)
-      .with_header("Access-Control-Allow-Methods", "POST, OPTIONS");
+      .with_header("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS");
     if origin == "*" {
       response
     } else {
@@ -2215,6 +2502,32 @@ fn mcp_www_authenticate_challenge(config: &RelayConfig, required_scope: &str) ->
     config.protected_resource_metadata_uri(),
     required_scope
   )
+}
+
+fn mcp_authenticated_client(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+) -> Option<String> {
+  let Some(token) = bearer_token(request) else {
+    return None;
+  };
+  if config.allow_static_bearer && token == config.token {
+    return Some("static-dev-token".to_string());
+  }
+  let Some(access_token) = state.access_token(token) else {
+    return None;
+  };
+  if SystemTime::now() > access_token.expires_at {
+    return None;
+  }
+  match access_token.resource.as_deref() {
+    Some(resource) if resource == config.mcp_resource_uri() => {}
+    Some(_) => return None,
+    None if !is_loopback_bind(&config.bind) => return None,
+    None => {}
+  }
+  Some(access_token.client_id)
 }
 
 fn mcp_authorized_client(
@@ -2447,6 +2760,14 @@ mod tests {
     headers
   }
 
+  fn authorized_mcp_delete_headers(token: &str, session_id: &str) -> Vec<(String, String)> {
+    vec![
+      ("Authorization".to_string(), format!("Bearer {token}")),
+      ("MCP-Session-Id".to_string(), session_id.to_string()),
+      ("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()),
+    ]
+  }
+
   fn public_test_config() -> RelayConfig {
     RelayConfig {
       bind: "0.0.0.0:8765".to_string(),
@@ -2479,7 +2800,7 @@ mod tests {
         .iter()
         .find(|(name, _)| name == "Allow")
         .map(|(_, value)| value.as_str()),
-      Some("POST, OPTIONS")
+      Some("POST, DELETE, OPTIONS")
     );
     let body = String::from_utf8(response.body).expect("response body");
     assert!(body.contains("method_not_allowed"));
@@ -2511,6 +2832,11 @@ mod tests {
       response_header(&allowed_response, "Access-Control-Allow-Headers")
         .unwrap_or_default()
         .contains("MCP-Protocol-Version")
+    );
+    assert!(
+      response_header(&allowed_response, "Access-Control-Allow-Methods")
+        .unwrap_or_default()
+        .contains("DELETE")
     );
 
     let denied = HttpRequest {
@@ -3240,6 +3566,149 @@ mod tests {
     assert_eq!(response.status, 202);
     let body = String::from_utf8(response.body).expect("pending body");
     assert!(body.contains("pending_agent_offline"));
+  }
+
+  #[test]
+  fn initialize_response_starts_memory_only_mcp_session() {
+    let state = RelayState::new();
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: authorized_mcp_post_headers("test-token"),
+      body: r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(),
+    };
+    let response = fulfilled_mcp_response(
+      &request,
+      &test_config(),
+      &state,
+      "2025-11-25",
+      "static-dev-token",
+      json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {},
+          "serverInfo": { "name": "life-context-vault", "version": "0.1.0" }
+        }
+      }),
+    );
+    let session_id = response_header(&response, "MCP-Session-Id")
+      .expect("session id")
+      .to_string();
+
+    assert!(session_id.starts_with("mcp_session_"));
+    let status = state.store_status();
+    assert_eq!(status.get("mcpSessionCount").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+      status
+        .get("recentMcpSessions")
+        .and_then(Value::as_array)
+        .and_then(|sessions| sessions.first())
+        .and_then(|session| session.get("id"))
+        .and_then(Value::as_str),
+      Some(session_id.as_str())
+    );
+    let status_text = status.to_string();
+    assert!(status_text.contains("static-dev-token"));
+    assert!(!status_text.contains("serverInfo"));
+    assert!(state.touch_mcp_session(&session_id, "static-dev-token").is_ok());
+  }
+
+  #[test]
+  fn active_mcp_session_requires_session_id_on_later_requests() {
+    let state = RelayState::new();
+    state.start_mcp_session("static-dev-token".to_string());
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: authorized_mcp_post_headers("test-token"),
+      body: r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string(),
+    };
+
+    let response = handle_mcp_request(
+      &request,
+      &RelayConfig {
+        allow_direct_sidecar: false,
+        ..test_config()
+      },
+      &state,
+    );
+    let body = String::from_utf8(response.body).expect("missing session body");
+
+    assert_eq!(response.status, 400);
+    assert!(body.contains("missing_mcp_session"));
+  }
+
+  #[test]
+  fn unknown_mcp_session_id_returns_not_found_before_forwarding() {
+    let state = RelayState::new();
+    let mut headers = authorized_mcp_post_headers("test-token");
+    headers.push(("MCP-Session-Id".to_string(), "mcp_session_missing".to_string()));
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers,
+      body: r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string(),
+    };
+
+    let response = handle_mcp_request(
+      &request,
+      &RelayConfig {
+        allow_direct_sidecar: false,
+        ..test_config()
+      },
+      &state,
+    );
+    let body = String::from_utf8(response.body).expect("session body");
+
+    assert_eq!(response.status, 404);
+    assert!(body.contains("mcp_session_not_found"));
+  }
+
+  #[test]
+  fn delete_mcp_terminates_session_for_same_client_only() {
+    let state = RelayState::new();
+    let session = state.start_mcp_session("static-dev-token".to_string());
+    let request = HttpRequest {
+      method: "DELETE".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: authorized_mcp_delete_headers("test-token", &session.id),
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &state);
+
+    assert_eq!(response.status, 204);
+    assert_eq!(
+      response_header(&response, "MCP-Protocol-Version"),
+      Some("2025-11-25")
+    );
+    assert!(state.touch_mcp_session(&session.id, "static-dev-token").is_err());
+  }
+
+  #[test]
+  fn delete_mcp_rejects_session_owned_by_another_client() {
+    let state = RelayState::new();
+    let session = state.start_mcp_session("client_other".to_string());
+    let request = HttpRequest {
+      method: "DELETE".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: authorized_mcp_delete_headers("test-token", &session.id),
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &state);
+    let body = String::from_utf8(response.body).expect("delete body");
+
+    assert_eq!(response.status, 404);
+    assert!(body.contains("mcp_session_not_found"));
+    assert!(state.touch_mcp_session(&session.id, "client_other").is_ok());
   }
 
   #[test]

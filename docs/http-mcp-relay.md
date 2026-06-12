@@ -118,8 +118,9 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 - `POST /relay/handoff`
 - `GET /agent/ws?...` for the local Agent WebSocket
 - `POST /mcp`
+- `DELETE /mcp`
 - `OPTIONS /mcp`
-- `GET /mcp` returns `405 Method Not Allowed` with `Allow: POST, OPTIONS`; SSE GET transport is not enabled in the current Relay.
+- `GET /mcp` returns `405 Method Not Allowed` with `Allow: POST, DELETE, OPTIONS`; SSE GET transport is not enabled in the current Relay.
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
@@ -127,9 +128,11 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 
 `POST /mcp` validates `MCP-Protocol-Version` when the header is present. Missing versions are treated as the 2025-03-26 default for older local clients. Supported versions are 2025-03-26, 2025-06-18, and 2025-11-25; unsupported versions receive `400 unsupported_protocol_version` before authorization or forwarding.
 
-The current relay is stateless for MCP HTTP requests: it does not return `MCP-Session-Id`, and inbound session ids are ignored. Full Streamable HTTP SSE/session semantics remain a hosted-connector hardening item; `GET /mcp` intentionally returns `405` until that path is implemented.
+When an MCP `initialize` request is fulfilled, the relay returns a memory-only `MCP-Session-Id` bound to the authenticated client id. Later requests that include that session id must match the same client; unknown, expired, or cross-client session ids receive `404 mcp_session_not_found`. If the same client has an active session and omits `MCP-Session-Id` on a non-initialize POST, the relay returns `400 missing_mcp_session`. `DELETE /mcp` with the same bearer token and session id terminates the session and returns `204`. Session ids expire after 24 hours, are never written to the relay state store, and `/relay/state` exposes only session metadata.
 
-`OPTIONS /mcp`, `POST /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
+Full Streamable HTTP SSE/resumability semantics remain a hosted-connector hardening item; `GET /mcp` intentionally returns `405` until that path is implemented.
+
+`OPTIONS /mcp`, `POST /mcp`, `DELETE /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
 
 `GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 
@@ -152,6 +155,7 @@ Request metadata is pruned by both count and time:
 - `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS` can expire old OAuth client registrations when a hosted or shared relay needs stricter rotation.
 - `LCV_RELAY_STATE_BACKUP_COUNT` keeps compact metadata-only state backups next to the state file. Default is `3`; `0` disables backups.
 - `LCV_RELAY_HANDOFF_TTL_SECONDS` controls memory-only Context Pack handoff lifetime. Default is `600`.
+- `MCP-Session-Id` entries are memory-only, expire after 24 hours, and are exposed in `/relay/state` only as id/client/time metadata for local diagnostics.
 
 Tenant isolation is explicit:
 
@@ -167,6 +171,7 @@ It does not persist:
 - Raw Source text.
 - Context Pack bodies.
 - OAuth access tokens or authorization codes.
+- MCP session ids.
 
 If `LCV_RELAY_STATE_PATH` is not set, the relay stores this metadata at the platform app-data location:
 
@@ -205,6 +210,7 @@ The desktop Control Center uses the same endpoint after a user confirms a Contex
   - `life_context.get_policy_summary` -> `policy.read`
   - `life_context.get_request_status` -> `request.status`
 - OAuth approval requires a server-side pending authorization session. `/oauth/approve` cannot mint a code from query parameters alone.
+- MCP HTTP sessions are memory-only, client-bound, and terminable through `DELETE /mcp`; they do not grant broader access than the bearer token that created them.
 - The relay does not implement its own Vault reads. It forwards through `lcv-agent` to `lcv-mcp`, or through direct sidecar fallback only when explicitly allowed for local development.
 - The relay does not store Context Pack bodies or MCP request bodies.
 - Confirmed Context Pack handoff bodies are memory-only, TTL-bound, admin-gated, client-bound, and excluded from relay state persistence and backups.
