@@ -1015,11 +1015,23 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("POST", "/relay/handoff") => relay_handoff(request, config, state),
     ("OPTIONS", "/mcp") => HttpResponse::empty(204).with_cors(),
     ("POST", "/mcp") => handle_mcp_request(request, config, state),
+    (method, "/mcp") => mcp_method_not_allowed(method),
     _ => json_response(404, json!({
       "error": "not_found",
       "message": "Use POST /mcp for MCP JSON-RPC over HTTP."
     })),
   }
+}
+
+fn mcp_method_not_allowed(method: &str) -> HttpResponse {
+  HttpResponse::json(405, json!({
+    "error": "method_not_allowed",
+    "method": method,
+    "allowedMethods": ["POST", "OPTIONS"],
+    "message": "This Relay supports MCP JSON-RPC over POST /mcp. SSE GET /mcp is not enabled."
+  }))
+  .with_header("Allow", "POST, OPTIONS")
+  .with_cors()
 }
 
 fn protected_resource_metadata(config: &RelayConfig) -> HttpResponse {
@@ -2049,6 +2061,7 @@ fn reason_phrase(status: u16) -> &'static str {
     400 => "Bad Request",
     401 => "Unauthorized",
     404 => "Not Found",
+    405 => "Method Not Allowed",
     500 => "Internal Server Error",
     _ => "OK",
   }
@@ -2072,6 +2085,32 @@ mod tests {
       allow_direct_sidecar: true,
       retention: RelayRetentionPolicy::default(),
     }
+  }
+
+  #[test]
+  fn get_mcp_returns_method_not_allowed_boundary() {
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &RelayState::new());
+    assert_eq!(response.status, 405);
+    assert_eq!(response.reason, "Method Not Allowed");
+    assert_eq!(
+      response
+        .headers
+        .iter()
+        .find(|(name, _)| name == "Allow")
+        .map(|(_, value)| value.as_str()),
+      Some("POST, OPTIONS")
+    );
+    let body = String::from_utf8(response.body).expect("response body");
+    assert!(body.contains("method_not_allowed"));
+    assert!(body.contains("POST /mcp"));
   }
 
   #[test]

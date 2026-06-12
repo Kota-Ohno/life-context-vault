@@ -101,6 +101,7 @@ Remote clients should use OAuth discovery instead of the static token. Public or
 - `GET /agent/ws?...` for the local Agent WebSocket
 - `POST /mcp`
 - `OPTIONS /mcp`
+- `GET /mcp` returns `405 Method Not Allowed` with `Allow: POST, OPTIONS`; SSE GET transport is not enabled in the current Relay.
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
