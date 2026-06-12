@@ -13,6 +13,7 @@ import {
   purgeExpiredPassiveCaptures,
   searchFacts,
   updateContextPackItemVisibility,
+  updateSourceBody,
   updateSourceMetadata
 } from "./vault";
 
@@ -236,6 +237,30 @@ describe("vault flow", () => {
     expect(state.contextPacks[0].warnings[0].kind).toBe("stale_fact");
     expect(rebuilt.items[0].sourceTitles).toEqual([]);
     expect(rebuilt.sourceSnippets).toEqual([]);
+  });
+
+  it("re-extracts source body into candidates and moves linked facts back to review", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Lease note",
+      body: "Need to renew lease by 2027-01-15."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const pack = buildContextPack(state, "What should I remember about lease renewal?");
+    state = savePackForTest(state, pack);
+
+    state = updateSourceBody(state, state.sources[0].id, {
+      body: "Need to update utility contract by 2027-02-01."
+    });
+
+    expect(state.sources[0].body).toContain("utility contract");
+    expect(state.facts[0].status).toBe("needs_review");
+    expect(state.facts[0].reviewReason).toBe("source_updated");
+    expect(state.contextPacks[0].confirmationStatus).toBe("cancelled");
+    expect(state.contextPacks[0].warnings[0].kind).toBe("stale_fact");
+    expect(state.candidates.some((candidate) => candidate.proposedFactText.includes("utility contract"))).toBe(true);
+    expect(searchFacts(state, "lease")).toEqual([]);
   });
 
   it("lets users minimize a context pack before it leaves to AI", () => {

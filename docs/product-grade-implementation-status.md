@@ -165,6 +165,12 @@ Last updated: 2026-06-12
   - editing Source metadata refreshes normalized Source projection and cancels Context Packs that included linked Facts
   - Source titles in Context Pack items are now filtered by Source deletion state, sensitivity ceiling, and `secret_never_send`
   - Sources rows expose a compact edit form so users can correct provenance labels and keep important passive captures before TTL purge
+- Added Rust-owned Source body re-extraction path for the Tauri Control Center:
+  - `update_native_source_body` updates Raw Source text through Vault Core with secret redaction before persistence
+  - body edits archive old unapproved candidates from that Source and regenerate MemoryCandidates only
+  - linked active Facts move to `needs_review` with `source_updated` metadata instead of being silently rewritten
+  - existing Context Packs that included affected Facts are cancelled before an external AI can reuse stale Pack contents
+  - Sources rows expose a body edit form with explicit copy that saving re-extracts candidates and sends linked Facts back to review
 - Added Rust-owned Fact lifecycle path for the Tauri Control Center:
   - `update_native_fact_lifecycle` supports keep active, mark needs review, hide, delete, and restore through Vault Core
   - hiding, deleting, or moving a Fact to review cancels existing Context Packs that included that Fact
@@ -182,7 +188,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for Raw Source body re-extraction/editing and advanced Fact merge/versioning beyond the current native Context Pack generation/minimization/confirmation/source ingest/source lifecycle/source metadata/fact lifecycle/fact metadata/candidate review/passive capture/policy settings/MCP proposal/status commands.
+- Advanced Fact merge/versioning beyond the current native Context Pack generation/minimization/confirmation/source ingest/source lifecycle/source metadata/source body re-extraction/fact lifecycle/fact metadata/candidate review/passive capture/policy settings/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -214,6 +220,7 @@ Last updated: 2026-06-12
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
+- Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
 - Native Fact lifecycle tests proving hidden Facts invalidate affected Context Packs and disappear from search, while kept review Facts become active again
 - Native Fact metadata tests proving edits sync FTS, clear blank date fields, reject `secret_never_send`, and invalidate affected Context Packs
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
@@ -242,6 +249,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Sources lifecycle row stacks badges and actions without page-level horizontal overflow
   - desktop `1280x920`: Sources metadata edit form updates title/sensitivity/long-term retention and returns to the Source row without page-level horizontal overflow
   - mobile `390x844`: Sources metadata edit form stacks fields and lifecycle actions without page-level horizontal overflow
+  - desktop `1280x720`: Sources body edit form is accessible by label, saves edited body text, regenerates one candidate, moves the linked Fact to the Search review queue, and has no page-level horizontal overflow
+  - mobile `390x844`: Sources body edit form keeps textarea, warning copy, and action buttons inside the row without page-level horizontal overflow
   - desktop `1280x920`: Search review queue shows `needs_review` Facts with keep/hide/delete actions, and keep moves the Fact back into active results without page-level horizontal overflow
   - mobile `390x844`: Search review queue and active Fact lifecycle actions stack without page-level horizontal overflow
   - desktop `1280x920`: Search Fact edit form keeps the form open on empty text, updates text/domain/sensitivity/date metadata, and returns to the result row without page-level horizontal overflow
@@ -269,7 +278,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Source metadata editing, Fact lifecycle, Fact metadata editing, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while Raw Source body re-extraction/editing and advanced Fact merge/versioning remain future work.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Source metadata editing, Source body re-extraction, Fact lifecycle, Fact metadata editing, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while advanced Fact merge/versioning remains future work.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -294,6 +303,11 @@ Last updated: 2026-06-12
 - Source Metadata security review: accepted; Source title exposure is filtered by Source sensitivity/deletion state, and metadata edits invalidate existing Context Packs with stale provenance.
 - Source Metadata technical review: accepted; Source metadata writes go through Vault Core, sync normalized Source projection, audit `source_updated`, and share the same Pack invalidation guard as Source lifecycle.
 - Source Metadata UX review: accepted; desktop and mobile Sources metadata edit forms render without page-level horizontal overflow, and the long-term retention checkbox stays compact inside the existing row pattern.
+- Source Body Re-extraction review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Source Body Re-extraction product review: accepted; users can now correct captured or uploaded Source text and get fresh Inbox candidates without silently changing approved life context.
+- Source Body Re-extraction security review: accepted; body edits re-run secret redaction, keep regenerated memories as unapproved candidates, move linked Facts out of AI retrieval, and cancel affected Context Packs.
+- Source Body Re-extraction technical review: accepted; Source body writes go through Vault Core, sync normalized Sources/Candidates/Facts/FTS/Context Pack projections, and audit `source_updated` plus regenerated candidates.
+- Source Body Re-extraction UX review: accepted after adding explicit `label`/input associations; desktop and mobile Sources body edit forms render without page-level horizontal overflow and clearly warn about re-extraction/review effects.
 - Fact Lifecycle review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
 - Fact Lifecycle product review: accepted; review-needed Facts are no longer invisible after Source deletion, and active Facts can be removed from future AI context from the Search surface.
 - Fact Lifecycle security review: accepted; hide/delete/review actions invalidate existing Context Packs and active-only search keeps non-active Facts out of retrieval.

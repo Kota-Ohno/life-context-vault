@@ -5,6 +5,7 @@ import {
   FactMetadataUpdate,
   LifeContextDomain,
   SensitivityTier,
+  SourceBodyUpdate,
   SourceLifecycleAction,
   SourceMetadataUpdate,
   SourceKind,
@@ -204,6 +205,18 @@ interface NativeSourceMetadataPayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeSourceBodyPayload {
+  payload: string;
+  updatedAt: string | null;
+  sourceId: string;
+  candidateIds: string[];
+  affectedCandidateCount: number;
+  affectedFactCount: number;
+  invalidatedPackCount: number;
+  detectedSensitivity: SensitivityTier;
+  generatedBy: "native_vault_core";
+}
+
 interface NativeFactLifecyclePayload {
   payload: string;
   updatedAt: string | null;
@@ -292,6 +305,18 @@ export interface NativeSourceMetadataResult {
   updatedAt: string | null;
   sourceId: string;
   invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeSourceBodyResult {
+  state: VaultState;
+  updatedAt: string | null;
+  sourceId: string;
+  candidateIds: string[];
+  affectedCandidateCount: number;
+  affectedFactCount: number;
+  invalidatedPackCount: number;
+  detectedSensitivity: SensitivityTier;
   generatedBy: "native_vault_core";
 }
 
@@ -652,6 +677,29 @@ export async function updateNativeSourceMetadata(
     updatedAt: result.updatedAt,
     sourceId: result.sourceId,
     invalidatedPackCount: result.invalidatedPackCount,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeSourceBody(
+  sourceId: string,
+  input: SourceBodyUpdate
+): Promise<NativeSourceBodyResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceBodyPayload>("update_native_source_body", {
+    sourceId,
+    body: input.body
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
+    candidateIds: result.candidateIds,
+    affectedCandidateCount: result.affectedCandidateCount,
+    affectedFactCount: result.affectedFactCount,
+    invalidatedPackCount: result.invalidatedPackCount,
+    detectedSensitivity: result.detectedSensitivity,
     generatedBy: result.generatedBy
   };
 }

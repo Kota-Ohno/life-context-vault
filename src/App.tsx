@@ -29,7 +29,7 @@ import {
   Upload,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AiAccessServiceStatus,
   BrowserCaptureHostInstallResult,
@@ -60,6 +60,7 @@ import {
   updateNativeFactMetadata,
   updateNativePassiveCaptureSettings,
   updateNativeSourceMetadata,
+  updateNativeSourceBody,
   updateNativeSourceLifecycle,
   uninstallLoginItem
 } from "./nativeStorage";
@@ -99,6 +100,7 @@ import {
   updateCandidateStatus,
   updateContextPackItemVisibility,
   updateSourceMetadata,
+  updateSourceBody,
   updateSourceLifecycle
 } from "./vault";
 import {
@@ -116,6 +118,7 @@ import {
   MemoryCandidate,
   PassiveCaptureSettings,
   SensitivityTier,
+  SourceBodyUpdate,
   SourceLifecycleAction,
   SourceMetadataUpdate,
   SourceKind,
@@ -698,6 +701,49 @@ export function App() {
       updateSourceMetadata(state, sourceId, input),
       sourceMetadataNotice(activeSourcePackCount(state, sourceId))
     );
+    return true;
+  }
+
+  async function editSourceBody(sourceId: string, input: SourceBodyUpdate): Promise<boolean> {
+    const source = state.sources.find((item) => item.id === sourceId);
+    if (!source) {
+      setNotice("Sourceが見つかりませんでした。");
+      return false;
+    }
+    if (source.deletionState !== "active") {
+      setNotice("停止または消去されたSource本文は編集できません。先に復元してください。");
+      return false;
+    }
+    if (!input.body.trim()) {
+      setNotice("Source本文を入力してください。");
+      return false;
+    }
+    if (nativePath) {
+      try {
+        const updated = await updateNativeSourceBody(sourceId, input);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(sourceBodyNotice(
+            updated.candidateIds.length,
+            updated.affectedFactCount,
+            updated.invalidatedPackCount
+          ));
+          return true;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでSource本文を保存できませんでした。");
+        return false;
+      }
+    }
+    const affectedFactCount = activeLinkedFactCount(state, sourceId);
+    const next = updateSourceBody(state, sourceId, input);
+    apply(next, sourceBodyNotice(
+      Math.max(0, next.candidates.length - state.candidates.length),
+      affectedFactCount,
+      activeSourcePackCount(state, sourceId)
+    ));
     return true;
   }
 
@@ -1407,6 +1453,7 @@ export function App() {
             handleFileUpload={handleFileUpload}
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
+            editSourceBody={editSourceBody}
           />
         )}
         {view === "connections" && (
@@ -1870,7 +1917,8 @@ function SourcesView({
   addManualSource,
   handleFileUpload,
   changeSourceLifecycle,
-  editSourceMetadata
+  editSourceMetadata,
+  editSourceBody
 }: {
   sources: VaultState["sources"];
   candidates: VaultState["candidates"];
@@ -1883,6 +1931,7 @@ function SourcesView({
   handleFileUpload: (file: File) => void;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
+  editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
 }) {
   return (
     <section className="view-grid">
@@ -1948,6 +1997,7 @@ function SourcesView({
               <SourceRow
                 changeSourceLifecycle={changeSourceLifecycle}
                 editSourceMetadata={editSourceMetadata}
+                editSourceBody={editSourceBody}
                 key={source.id}
                 linkedCandidateCount={linkedCandidateCount}
                 linkedFactCount={linkedFactCountValue}
@@ -1967,22 +2017,38 @@ function SourceRow({
   linkedCandidateCount,
   linkedFactCount,
   changeSourceLifecycle,
-  editSourceMetadata
+  editSourceMetadata,
+  editSourceBody
 }: {
   source: VaultState["sources"][number];
   linkedCandidateCount: number;
   linkedFactCount: number;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
+  editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<SourceMetadataUpdate | null>(null);
+  const [bodyDraft, setBodyDraft] = useState<string | null>(null);
   const retentionLabel = sourceRetentionLabel(source);
   const canPromote = Boolean(source.retentionUntil);
 
   return (
     <div className="table-row source-row">
       <div className="source-main">
-        {draft ? (
+        {bodyDraft !== null ? (
+          <div className="source-edit-form source-body-edit-form">
+            <Textarea
+              label="Source本文"
+              value={bodyDraft}
+              onChange={setBodyDraft}
+              placeholder="再抽出したい本文"
+            />
+            <div className="trust-note">
+              <RefreshCw size={16} />
+              <span>保存すると未承認候補を再生成します。既存のApprovedFactは再確認待ちになり、関連Context Packは無効化されます。</span>
+            </div>
+          </div>
+        ) : draft ? (
           <div className="source-edit-form">
             <Input
               label="Sourceタイトル"
@@ -2039,7 +2105,25 @@ function SourceRow({
       </div>
       <div className="source-actions">
         <SensitivityBadge sensitivity={source.defaultSensitivity} />
-        {draft ? (
+        {bodyDraft !== null ? (
+          <>
+            <button
+              className="primary-button"
+              onClick={async () => {
+                const saved = await editSourceBody(source.id, { body: bodyDraft });
+                if (saved) setBodyDraft(null);
+              }}
+              type="button"
+            >
+              <RefreshCw size={16} />
+              保存して再抽出
+            </button>
+            <button className="secondary-button" onClick={() => setBodyDraft(null)} type="button">
+              <X size={16} />
+              取消
+            </button>
+          </>
+        ) : draft ? (
           <>
             <button
               className="primary-button"
@@ -2058,20 +2142,32 @@ function SourceRow({
             </button>
           </>
         ) : (
-          <button
-            className="secondary-button"
-            onClick={() =>
-              setDraft({
-                title: source.title,
-                defaultSensitivity: source.defaultSensitivity,
-                promotedToLongTerm: source.promotedToLongTerm ?? false
-              })
-            }
-            type="button"
-          >
-            <Settings size={16} />
-            編集
-          </button>
+          <>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                setDraft({
+                  title: source.title,
+                  defaultSensitivity: source.defaultSensitivity,
+                  promotedToLongTerm: source.promotedToLongTerm ?? false
+                })
+              }
+              type="button"
+            >
+              <Settings size={16} />
+              編集
+            </button>
+            {source.deletionState === "active" && source.body && (
+              <button
+                className="secondary-button"
+                onClick={() => setBodyDraft(source.body)}
+                type="button"
+              >
+                <RefreshCw size={16} />
+                本文編集
+              </button>
+            )}
+          </>
         )}
         {source.deletionState === "active" && (
           <button
@@ -3017,7 +3113,7 @@ function SearchView({
           </div>
           <div className="trust-note">
             <ShieldAlert size={16} />
-            <span>Sourceが停止または本文消去されたFactです。保持するとContext Pack候補へ戻り、非表示/削除すると既存Packも無効化されます。</span>
+            <span>Sourceが停止・本文消去・本文更新されたFactです。保持するとContext Pack候補へ戻り、非表示/削除すると既存Packも無効化されます。</span>
           </div>
           <div className="domain-list">
             {reviewFacts.map((fact) => (
@@ -3369,11 +3465,19 @@ function Input({
   placeholder?: string;
   type?: string;
 }) {
+  const inputId = useId();
+
   return (
-    <label className="field">
-      <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={type} />
-    </label>
+    <div className="field">
+      <label htmlFor={inputId}>{label}</label>
+      <input
+        id={inputId}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        type={type}
+      />
+    </div>
   );
 }
 
@@ -3388,11 +3492,18 @@ function Textarea({
   onChange: (value: string) => void;
   placeholder?: string;
 }) {
+  const textareaId = useId();
+
   return (
-    <label className="field">
-      <span>{label}</span>
-      <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
-    </label>
+    <div className="field">
+      <label htmlFor={textareaId}>{label}</label>
+      <textarea
+        id={textareaId}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+      />
+    </div>
   );
 }
 
@@ -3467,8 +3578,20 @@ function sourceMetadataNotice(invalidatedPackCount: number): string {
   return `Sourceを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
 }
 
+function sourceBodyNotice(
+  candidateCount: number,
+  affectedFactCount: number,
+  invalidatedPackCount: number
+): string {
+  return `Source本文を保存し、${candidateCount}件の候補を再生成しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
 function linkedFactCount(state: VaultState, sourceId: string): number {
   return state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).length;
+}
+
+function activeLinkedFactCount(state: VaultState, sourceId: string): number {
+  return state.facts.filter((fact) => fact.status === "active" && fact.sourceIds.includes(sourceId)).length;
 }
 
 function activeSourcePackCount(state: VaultState, sourceId: string): number {

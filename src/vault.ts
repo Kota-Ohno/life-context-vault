@@ -17,6 +17,7 @@ import {
   PassiveCaptureSettings,
   RawSource,
   SensitivityTier,
+  SourceBodyUpdate,
   SourceLifecycleAction,
   SourceMetadataUpdate,
   SourceKind,
@@ -598,6 +599,86 @@ export function updateSourceMetadata(
         promotedToLongTerm,
         invalidatedPackCount: invalidatedPacks.length
       }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+export function updateSourceBody(
+  state: VaultState,
+  sourceId: string,
+  input: SourceBodyUpdate
+): VaultState {
+  const source = state.sources.find((item) => item.id === sourceId);
+  const body = input.body.trim();
+  if (!source || source.deletionState !== "active" || !body) return state;
+
+  const now = nowIso();
+  const sanitized = sanitizeSecretMaterial(body);
+  const nextSensitivity = sanitized.secretFound ? "secret_never_send" : detectSensitivity(body);
+  const updatedSource: RawSource = {
+    ...source,
+    body: sanitized.text,
+    defaultSensitivity: nextSensitivity,
+    processingStatus: "ready"
+  };
+  const newCandidates = extractCandidates(updatedSource).map((candidate) => ({
+    ...candidate,
+    createdAt: now
+  }));
+  const archivedCandidates = state.candidates.map((candidate) =>
+    candidate.sourceIds.includes(sourceId) &&
+    ["new", "needs_user_detail", "blocked_sensitive"].includes(candidate.status)
+      ? { ...candidate, status: "archived" as const, reviewedAt: now }
+      : candidate
+  );
+  const affectedFactIds = new Set(
+    state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).map((fact) => fact.id)
+  );
+  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+    kind: "stale_fact",
+    message: "根拠Source本文が更新されたため、このContext Packは無効化されました。"
+  });
+  const invalidatedPacks = nextPacks.filter(
+    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
+  );
+  const invalidatedRequestIds = new Set(
+    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  );
+
+  return {
+    ...state,
+    sources: state.sources.map((item) => (item.id === sourceId ? updatedSource : item)),
+    candidates: [...newCandidates, ...archivedCandidates],
+    facts: state.facts.map((fact) =>
+      fact.sourceIds.includes(sourceId) && fact.status === "active"
+        ? {
+            ...fact,
+            status: "needs_review" as const,
+            updatedAt: now,
+            reviewReason: "source_updated" as const,
+            reviewSourceId: sourceId
+          }
+        : fact
+    ),
+    contextPacks: nextPacks,
+    contextPackRequests: state.contextPackRequests.map((request) =>
+      invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+    ),
+    auditEvents: [
+      audit("source_updated", "source", sourceId, nextSensitivity, {
+        title: source.title,
+        action: "body_reextracted",
+        candidateCount: newCandidates.length,
+        affectedFactCount: affectedFactIds.size,
+        invalidatedPackCount: invalidatedPacks.length
+      }),
+      ...newCandidates.map((candidate) =>
+        audit("candidate_generated", "candidate", candidate.id, candidate.detectedSensitivity, {
+          sourceId,
+          regenerated: true
+        })
+      ),
       ...state.auditEvents
     ]
   };

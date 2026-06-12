@@ -335,6 +335,7 @@ button {
 }
 
 .field span,
+.field label,
 .search-controls label span {
   color: #4d5a52;
   font-size: 13px;
@@ -580,6 +581,10 @@ button:focus-visible {
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.source-body-edit-form textarea {
+  min-height: 140px;
 }
 
 .source-edit-grid {

@@ -130,6 +130,8 @@ Required behavior:
 - Deleting a RawSource must remove or disable linked source chunks.
 - Facts derived from deleted sources must be marked as needing review unless the user explicitly keeps them.
 - Material updates to Source title, default sensitivity, or retention metadata require a user action, a `source_updated` audit event, search/projection refresh, and invalidation of existing Context Packs that include facts linked to the Source.
+- Material updates to Source body require a user action, fresh secret redaction, pending-candidate archival, MemoryCandidate re-extraction, linked active Facts marked `needs_review` with `source_updated`, and invalidation of existing Context Packs that include facts linked to the Source.
+- RawSource body re-extraction must never update or create ApprovedFacts automatically; the user must approve new candidates or keep reviewed Facts explicitly.
 - Source titles may be included in Context Packs only when the Source is active, allowed by sensitivity policy, and not `secret_never_send`.
 
 ### SourceChunk
@@ -675,6 +677,7 @@ PoC deletion semantics:
 - Deleting a RawSource does not automatically delete approved facts, but linked facts become `needs_review` unless user chooses to keep them.
 - Deleting or purging a RawSource must invalidate existing ContextPacks that include facts linked to that Source.
 - Updating RawSource title, default sensitivity, or retention metadata must invalidate existing ContextPacks that include facts linked to that Source.
+- Updating RawSource body must archive pending candidates from the previous body, create fresh MemoryCandidates only, mark linked active Facts as `needs_review`, and invalidate existing ContextPacks that include those Facts.
 - Deleting an ApprovedFact does not delete the source.
 
 Tier 4 values detected during extraction should be redacted before ordinary persistence where possible.

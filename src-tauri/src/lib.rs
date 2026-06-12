@@ -222,6 +222,20 @@ struct NativeSourceMetadataResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NativeSourceBodyResult {
+  payload: String,
+  updated_at: Option<String>,
+  source_id: String,
+  candidate_ids: Vec<String>,
+  affected_candidate_count: usize,
+  affected_fact_count: usize,
+  invalidated_pack_count: usize,
+  detected_sensitivity: String,
+  generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NativeFactLifecycleResult {
   payload: String,
   updated_at: Option<String>,
@@ -319,6 +333,17 @@ pub struct VaultCoreSourceMetadataResult {
   pub updated_at: Option<String>,
   pub source_id: String,
   pub invalidated_pack_count: usize,
+}
+
+pub struct VaultCoreSourceBodyResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub source_id: String,
+  pub candidate_ids: Vec<String>,
+  pub affected_candidate_count: usize,
+  pub affected_fact_count: usize,
+  pub invalidated_pack_count: usize,
+  pub detected_sensitivity: String,
 }
 
 pub struct VaultCoreFactLifecycleResult {
@@ -2164,6 +2189,121 @@ pub fn update_source_metadata_at_path(
   })
 }
 
+pub fn update_source_body_at_path(
+  path: &Path,
+  source_id: &str,
+  body: &str,
+) -> Result<VaultCoreSourceBodyResult, String> {
+  let source_id = source_id.trim();
+  if source_id.is_empty() {
+    return Err("sourceId is required.".to_string());
+  }
+  let body = body.trim();
+  if body.is_empty() {
+    return Err("body is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let detected_sensitivity = detect_sensitivity(body).to_string();
+  let sanitized = sanitize_source_body(body);
+  let source_title = {
+    let Some(sources) = vault.get_mut("sources").and_then(Value::as_array_mut) else {
+      return Err("Vault has no sources array.".to_string());
+    };
+    let Some(source) = sources
+      .iter_mut()
+      .find(|source| str_field(source, "id") == source_id)
+    else {
+      return Err(format!("Source was not found: {source_id}"));
+    };
+    if str_field(source, "deletionState") != "active" {
+      return Err("only active Sources can be edited. Restore the Source before editing its body.".to_string());
+    }
+    source["body"] = Value::String(sanitized.clone());
+    source["defaultSensitivity"] = Value::String(detected_sensitivity.clone());
+    source["processingStatus"] = Value::String("ready".to_string());
+    str_field(source, "title")
+  };
+
+  let affected_candidate_count = archive_pending_candidates_for_source(&mut vault, source_id, &now);
+  let affected_fact_ids =
+    mark_source_facts_needing_review_with_reason(&mut vault, source_id, &now, "source_updated");
+  let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
+    &mut vault,
+    &affected_fact_ids,
+    "stale_fact",
+    "根拠Source本文が更新されたため、このContext Packは無効化されました。",
+  );
+  let candidates = extract_memory_candidates_for_source(source_id, &sanitized, &now);
+  let candidate_ids = candidates
+    .iter()
+    .map(|candidate| str_field(candidate, "id"))
+    .collect::<Vec<_>>();
+  for candidate in candidates {
+    push_json_array(&mut vault, "candidates", candidate);
+  }
+
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "source_updated",
+      "source",
+      source_id,
+      &detected_sensitivity,
+      json!({
+        "title": source_title,
+        "action": "body_reextracted",
+        "candidateCount": candidate_ids.len(),
+        "affectedCandidateCount": affected_candidate_count,
+        "affectedFactCount": affected_fact_ids.len(),
+        "invalidatedPackCount": invalidated_pack_count,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  for candidate_id in &candidate_ids {
+    let sensitivity = vault
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|items| {
+        items
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == *candidate_id)
+      })
+      .map(|candidate| str_field(candidate, "detectedSensitivity"))
+      .unwrap_or_else(|| detected_sensitivity.clone());
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "candidate_generated",
+        "candidate",
+        candidate_id,
+        &sensitivity,
+        json!({
+          "sourceId": source_id,
+          "regenerated": true,
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceBodyResult {
+    payload,
+    updated_at,
+    source_id: source_id.to_string(),
+    candidate_ids,
+    affected_candidate_count,
+    affected_fact_count: affected_fact_ids.len(),
+    invalidated_pack_count,
+    detected_sensitivity,
+  })
+}
+
 pub fn update_fact_lifecycle_at_path(
   path: &Path,
   fact_id: &str,
@@ -3977,6 +4117,15 @@ fn archive_pending_candidates_for_source(vault: &mut Value, source_id: &str, now
 }
 
 fn mark_source_facts_needing_review(vault: &mut Value, source_id: &str, now: &str) -> Vec<String> {
+  mark_source_facts_needing_review_with_reason(vault, source_id, now, "source_deleted")
+}
+
+fn mark_source_facts_needing_review_with_reason(
+  vault: &mut Value,
+  source_id: &str,
+  now: &str,
+  reason: &str,
+) -> Vec<String> {
   let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
     return Vec::new();
   };
@@ -3988,7 +4137,7 @@ fn mark_source_facts_needing_review(vault: &mut Value, source_id: &str, now: &st
       let fact_id = str_field(fact, "id");
       fact["status"] = Value::String("needs_review".to_string());
       fact["updatedAt"] = Value::String(now.to_string());
-      fact["reviewReason"] = Value::String("source_deleted".to_string());
+      fact["reviewReason"] = Value::String(reason.to_string());
       fact["reviewSourceId"] = Value::String(source_id.to_string());
       affected.push(fact_id);
     }
@@ -5279,6 +5428,27 @@ fn update_native_source_metadata(
 }
 
 #[tauri::command]
+fn update_native_source_body(
+  app: AppHandle,
+  source_id: String,
+  body: String,
+) -> Result<NativeSourceBodyResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_source_body_at_path(&path, &source_id, &body)?;
+  Ok(NativeSourceBodyResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    candidate_ids: result.candidate_ids,
+    affected_candidate_count: result.affected_candidate_count,
+    affected_fact_count: result.affected_fact_count,
+    invalidated_pack_count: result.invalidated_pack_count,
+    detected_sensitivity: result.detected_sensitivity,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn update_native_fact_lifecycle(
   app: AppHandle,
   fact_id: String,
@@ -5455,6 +5625,7 @@ pub fn run() {
       update_native_access_policy,
       update_native_source_lifecycle,
       update_native_source_metadata,
+      update_native_source_body,
       update_native_fact_lifecycle,
       update_native_fact_metadata,
       ai_access_service_status,
@@ -5992,6 +6163,109 @@ mod tests {
 
     assert!(search.is_empty());
     assert_eq!(normalized_status, "needs_review");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_body_update_reextracts_candidates_and_reviews_facts() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-body-update");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Lease note",
+      "Need to renew lease by 2027-01-15.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about lease renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+
+    let result = update_source_body_at_path(
+      &path,
+      &source_result.source_id,
+      "Need to update utility contract by 2027-02-01.",
+    )
+    .expect("source body update");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .expect("source");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .expect("fact");
+    let pack = saved
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let generated_candidate = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|candidates| {
+        candidates
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == result.candidate_ids[0])
+      })
+      .expect("regenerated candidate");
+
+    assert_eq!(result.candidate_ids.len(), 1);
+    assert_eq!(result.affected_fact_count, 1);
+    assert_eq!(result.invalidated_pack_count, 1);
+    assert_eq!(
+      source.get("body").and_then(Value::as_str),
+      Some("Need to update utility contract by 2027-02-01.")
+    );
+    assert_eq!(fact.get("status").and_then(Value::as_str), Some("needs_review"));
+    assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_updated"));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
+    assert_eq!(
+      generated_candidate.get("status").and_then(Value::as_str),
+      Some("new")
+    );
+    assert!(generated_candidate
+      .get("proposedFactText")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .contains("utility contract"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    let normalized_body: String = connection
+      .query_row(
+        "SELECT body FROM sources WHERE id = ?1",
+        params![source_result.source_id],
+        |row| row.get(0),
+      )
+      .expect("normalized source body");
+    let normalized_candidate_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .expect("normalized candidate count");
+
+    assert!(search.is_empty());
+    assert_eq!(normalized_body, "Need to update utility contract by 2027-02-01.");
+    assert_eq!(normalized_candidate_count, 2);
     remove_temp_vault(&path);
   }
 

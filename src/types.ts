@@ -48,6 +48,10 @@ export type SourceMetadataUpdate = {
   promotedToLongTerm?: boolean;
 };
 
+export type SourceBodyUpdate = {
+  body: string;
+};
+
 export type ConnectorKind =
   | "claude_desktop"
   | "chatgpt"
@@ -206,7 +210,7 @@ export type ApprovedFact = {
   createdAt: string;
   approvedAt: string;
   updatedAt: string;
-  reviewReason?: "source_deleted";
+  reviewReason?: "source_deleted" | "source_updated";
   reviewSourceId?: string;
 };
 

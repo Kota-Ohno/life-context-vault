@@ -162,6 +162,8 @@ Source lifecycle is also a typed Vault Core command in the desktop path. Soft de
 
 Source metadata edits are typed Vault Core commands too. Editing Source title, default sensitivity, or passive-capture long-term retention refreshes normalized Source projection, writes a `source_updated` audit event, and cancels existing Context Packs that included linked Facts because their provenance labels or Source exposure policy may now be stale.
 
+Source body edits use a separate re-extraction command. Updating Raw Source text re-runs secret redaction and candidate extraction, archives old unapproved candidates from that Source, creates new MemoryCandidates only, and moves linked active Facts to `needs_review` with `source_updated` metadata. The command never rewrites an ApprovedFact automatically. Any existing Context Pack that included affected Facts is cancelled before another AI client can use it.
+
 ### Passive Capture
 
 Passive Capture handles opt-in capture from everyday AI conversations and local AI connection logs.
