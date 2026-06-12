@@ -49,3 +49,6 @@ sha2 = "0.10.9"
 tungstenite = "0.28.0"
 tauri = { version = "2.11.2", features = [] }
 tauri-plugin-log = "2"
+pdf-extract = "0.7.12"
+quick-xml = "0.31.0"
+zip = "0.6.6"

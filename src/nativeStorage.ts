@@ -29,6 +29,13 @@ export interface NativeVaultSnapshot {
   updatedAt: string | null;
 }
 
+export interface NativeDocumentExtractionResult {
+  text: string;
+  detectedKind: string;
+  warnings: string[];
+  generatedBy: "native_document_extractor";
+}
+
 interface NativeVaultSnapshotPayload {
   payload: string | null;
   updatedAt: string | null;
@@ -87,6 +94,16 @@ export async function getNativeVaultPath(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("vault_storage_path");
+}
+
+export async function extractNativeDocumentText(input: {
+  fileName: string;
+  mimeType: string;
+  contentBase64: string;
+}): Promise<NativeDocumentExtractionResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<NativeDocumentExtractionResult>("extract_native_document_text", input);
 }
 
 export interface AiAccessServiceStatus {

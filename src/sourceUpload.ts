@@ -1,4 +1,5 @@
 export const MAX_TEXT_SOURCE_BYTES = 2 * 1024 * 1024;
+export const MAX_NATIVE_DOCUMENT_SOURCE_BYTES = 12 * 1024 * 1024;
 
 export const SUPPORTED_TEXT_SOURCE_EXTENSIONS = [
   ".txt",
@@ -16,6 +17,35 @@ export const SUPPORTED_TEXT_SOURCE_EXTENSIONS = [
 
 export const SUPPORTED_TEXT_SOURCE_ACCEPT = SUPPORTED_TEXT_SOURCE_EXTENSIONS.join(",");
 export const SUPPORTED_TEXT_SOURCE_LABEL = "TXT, MD, CSV, TSV, JSON, YAML, LOG";
+
+export const SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".pptx",
+  ".xlsx",
+  ".odt",
+  ".ods",
+  ".odp"
+] as const;
+
+export const OCR_DOCUMENT_EXTENSIONS = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".heic",
+  ".heif",
+  ".tif",
+  ".tiff",
+  ".webp"
+] as const;
+
+export const LEGACY_OFFICE_EXTENSIONS = [".doc", ".xls", ".ppt"] as const;
+
+export const SUPPORTED_SOURCE_ACCEPT = [
+  ...SUPPORTED_TEXT_SOURCE_EXTENSIONS,
+  ...SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS
+].join(",");
+export const SUPPORTED_SOURCE_LABEL = "TXT, PDF, DOCX, PPTX, XLSX, ODT/ODS/ODP";
 
 const supportedMimeTypes = new Set([
   "application/json",
@@ -35,6 +65,13 @@ export type TextSourceFileDecision =
   | { supported: true }
   | { supported: false; reason: "too_large" | "unsupported_type" };
 
+export type SourceFileDecision =
+  | { supported: true; extraction: "browser_text" | "native_document" }
+  | {
+      supported: false;
+      reason: "too_large" | "native_required" | "ocr_required" | "legacy_office" | "unsupported_type";
+    };
+
 export function describeTextSourceFile(
   file: Pick<File, "name" | "size" | "type">
 ): TextSourceFileDecision {
@@ -50,6 +87,48 @@ export function describeTextSourceFile(
     SUPPORTED_TEXT_SOURCE_EXTENSIONS.includes(extension as (typeof SUPPORTED_TEXT_SOURCE_EXTENSIONS)[number])
   ) {
     return { supported: true };
+  }
+
+  return { supported: false, reason: "unsupported_type" };
+}
+
+export function describeSourceFile(
+  file: Pick<File, "name" | "size" | "type">,
+  nativeExtractionAvailable: boolean
+): SourceFileDecision {
+  const extension = fileExtension(file.name);
+  const mimeType = file.type.toLowerCase();
+  const isTextLike =
+    mimeType.startsWith("text/") ||
+    supportedMimeTypes.has(mimeType) ||
+    SUPPORTED_TEXT_SOURCE_EXTENSIONS.includes(extension as (typeof SUPPORTED_TEXT_SOURCE_EXTENSIONS)[number]);
+  if (isTextLike) {
+    if (file.size > MAX_TEXT_SOURCE_BYTES) return { supported: false, reason: "too_large" };
+    return { supported: true, extraction: "browser_text" };
+  }
+
+  const isNativeDocument =
+    supportedNativeMimeTypes.has(mimeType) ||
+    SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS.includes(
+      extension as (typeof SUPPORTED_NATIVE_DOCUMENT_EXTENSIONS)[number]
+    );
+  if (isNativeDocument) {
+    if (file.size > MAX_NATIVE_DOCUMENT_SOURCE_BYTES) return { supported: false, reason: "too_large" };
+    if (!nativeExtractionAvailable) return { supported: false, reason: "native_required" };
+    return { supported: true, extraction: "native_document" };
+  }
+
+  if (
+    mimeType.startsWith("image/") ||
+    OCR_DOCUMENT_EXTENSIONS.includes(extension as (typeof OCR_DOCUMENT_EXTENSIONS)[number])
+  ) {
+    return { supported: false, reason: "ocr_required" };
+  }
+  if (
+    legacyOfficeMimeTypes.has(mimeType) ||
+    LEGACY_OFFICE_EXTENSIONS.includes(extension as (typeof LEGACY_OFFICE_EXTENSIONS)[number])
+  ) {
+    return { supported: false, reason: "legacy_office" };
   }
 
   return { supported: false, reason: "unsupported_type" };
@@ -88,3 +167,19 @@ function fileExtension(name: string): string {
   if (index < 0) return "";
   return name.slice(index).toLowerCase();
 }
+
+const supportedNativeMimeTypes = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.presentation",
+  "application/vnd.oasis.opendocument.spreadsheet"
+]);
+
+const legacyOfficeMimeTypes = new Set([
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint"
+]);

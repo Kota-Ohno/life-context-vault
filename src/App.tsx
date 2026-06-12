@@ -41,6 +41,7 @@ import {
   confirmNativeContextPack,
   createNativeContextPackRequest,
   denyNativeContextPackRequest,
+  extractNativeDocumentText,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
@@ -70,10 +71,11 @@ import {
   saveRuntimePreferences
 } from "./runtimePreferences";
 import {
+  MAX_NATIVE_DOCUMENT_SOURCE_BYTES,
   MAX_TEXT_SOURCE_BYTES,
-  SUPPORTED_TEXT_SOURCE_ACCEPT,
-  SUPPORTED_TEXT_SOURCE_LABEL,
-  describeTextSourceFile,
+  SUPPORTED_SOURCE_ACCEPT,
+  SUPPORTED_SOURCE_LABEL,
+  describeSourceFile,
   formatFileSize,
   looksLikeReadableText
 } from "./sourceUpload";
@@ -625,31 +627,58 @@ export function App() {
   }
 
   async function handleFileUpload(file: File) {
-    const support = describeTextSourceFile(file);
+    const support = describeSourceFile(file, Boolean(nativePath));
     if (!support.supported) {
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
       return;
     }
 
     let text = "";
-    try {
-      text = await file.text();
-    } catch {
-      setUploadFeedback({
-        tone: "attention",
-        title: "ファイルを読めませんでした",
-        body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、Manual sourceに貼り付けてください。"
-      });
-      return;
-    }
+    let extractionDetail = "";
+    if (support.extraction === "browser_text") {
+      try {
+        text = await file.text();
+      } catch {
+        setUploadFeedback({
+          tone: "attention",
+          title: "ファイルを読めませんでした",
+          body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、Manual sourceに貼り付けてください。"
+        });
+        return;
+      }
 
-    if (!looksLikeReadableText(text)) {
-      setUploadFeedback({
-        tone: "attention",
-        title: "テキストとして読めませんでした",
-        body: "PDF、画像、Word文書などのバイナリ文書はまだ候補化しません。誤った記憶を作らないため、テキスト化した内容だけをSourceにしてください。"
-      });
-      return;
+      if (!looksLikeReadableText(text)) {
+        setUploadFeedback({
+          tone: "attention",
+          title: "テキストとして読めませんでした",
+          body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないためSource化していません。"
+        });
+        return;
+      }
+    } else {
+      try {
+        const extracted = await extractNativeDocumentText({
+          fileName: file.name,
+          mimeType: file.type,
+          contentBase64: await fileToBase64(file)
+        });
+        if (!extracted) {
+          setUploadFeedback(unsupportedFileFeedback(file, "native_required"));
+          return;
+        }
+        text = extracted.text;
+        extractionDetail = ` ${documentExtractionLabel(extracted.detectedKind)}としてローカル抽出しました。${extracted.warnings.join(" ")}`;
+      } catch (error) {
+        setUploadFeedback({
+          tone: "attention",
+          title: "文書を抽出できませんでした",
+          body:
+            error instanceof Error
+              ? error.message
+              : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合はManual sourceに貼り付けてください。"
+        });
+        return;
+      }
     }
 
     const addStatus = await addSourceThroughCore(
@@ -659,7 +688,7 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。`
+      `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -668,7 +697,7 @@ export function App() {
         title: file.name,
         body: text
       });
-      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。`);
+      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`);
       setView("inbox");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
@@ -2089,14 +2118,14 @@ function SourcesView({
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Upload</p>
-            <h3>テキスト文書を追加</h3>
+            <h3>文書を追加</h3>
           </div>
         </div>
         <label className="drop-zone">
           <Upload size={24} />
-          <span>{SUPPORTED_TEXT_SOURCE_LABEL}</span>
+          <span>{SUPPORTED_SOURCE_LABEL}</span>
           <input
-            accept={SUPPORTED_TEXT_SOURCE_ACCEPT}
+            accept={SUPPORTED_SOURCE_ACCEPT}
             type="file"
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -2114,7 +2143,7 @@ function SourcesView({
             </div>
           </div>
         )}
-        <p className="muted">PDF/画像/Wordは誤抽出を避けるため、OCR/文書抽出パイプラインが入るまでSource化しません。</p>
+        <p className="muted">PDF/OfficeはDesktopでローカル抽出します。画像OCRと旧Office形式は、誤記憶を避けるためProvider接続までSource化しません。</p>
       </div>
 
       <div className="panel wide">
@@ -3749,20 +3778,70 @@ function sourceBodyNotice(
 
 function unsupportedFileFeedback(
   file: Pick<File, "name" | "size">,
-  reason: "too_large" | "unsupported_type"
+  reason: "too_large" | "native_required" | "ocr_required" | "legacy_office" | "unsupported_type"
 ): UploadFeedback {
   if (reason === "too_large") {
     return {
       tone: "attention",
       title: "ファイルが大きすぎます",
-      body: `${file.name} は ${formatFileSize(file.size)} です。現在のローカル候補化は ${formatFileSize(MAX_TEXT_SOURCE_BYTES)} までのテキストSourceだけを扱います。`
+      body: `${file.name} は ${formatFileSize(file.size)} です。テキストSourceは ${formatFileSize(MAX_TEXT_SOURCE_BYTES)} まで、PDF/Officeのローカル抽出は ${formatFileSize(MAX_NATIVE_DOCUMENT_SOURCE_BYTES)} までです。`
+    };
+  }
+  if (reason === "native_required") {
+    return {
+      tone: "attention",
+      title: "Desktop appで開いてください",
+      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewではSource化せず、Desktop appのローカルVault Coreで抽出してください。`
+    };
+  }
+  if (reason === "ocr_required") {
+    return {
+      tone: "attention",
+      title: "画像OCRはまだ未接続です",
+      body: `${file.name} は画像として検出しました。OCR Providerを接続するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+    };
+  }
+  if (reason === "legacy_office") {
+    return {
+      tone: "attention",
+      title: "旧Office形式は変換してください",
+      body: `${file.name} は旧Officeバイナリ形式です。DOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。`
     };
   }
   return {
     tone: "attention",
     title: "まだ対応していない形式です",
-    body: `${file.name} はSource化しませんでした。対応形式は ${SUPPORTED_TEXT_SOURCE_LABEL} です。PDF、画像、Word文書はテキスト化してManual sourceに貼り付けてください。`
+    body: `${file.name} はSource化しませんでした。対応形式は ${SUPPORTED_SOURCE_LABEL} です。`
   };
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 32 * 1024;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function documentExtractionLabel(kind: string): string {
+  switch (kind) {
+    case "pdf":
+      return "PDF";
+    case "docx":
+      return "DOCX";
+    case "pptx":
+      return "PPTX";
+    case "xlsx":
+      return "XLSX";
+    case "opendocument":
+      return "OpenDocument";
+    case "text":
+      return "テキスト";
+    default:
+      return "文書";
+  }
 }
 
 function linkedFactCount(state: VaultState, sourceId: string): number {

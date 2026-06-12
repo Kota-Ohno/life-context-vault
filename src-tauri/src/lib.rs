@@ -1,4 +1,7 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+  engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+  Engine as _,
+};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -8,7 +11,7 @@ use std::{
   collections::HashSet,
   env,
   fs,
-  io::{Read, Write},
+  io::{Cursor, Read, Write},
   net::TcpStream,
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
@@ -27,6 +30,9 @@ const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
 const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
 const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const LOGIN_ITEM_LABEL: &str = "dev.life-context-vault.ai-access";
+const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
+const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
@@ -159,6 +165,15 @@ struct NativeSourceIngestResult {
   source_id: String,
   candidate_ids: Vec<String>,
   detected_sensitivity: String,
+  generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeDocumentExtractionResult {
+  text: String,
+  detected_kind: String,
+  warnings: Vec<String>,
   generated_by: String,
 }
 
@@ -3878,6 +3893,361 @@ fn client_label(client: &str) -> &'static str {
   }
 }
 
+#[derive(Clone, Copy)]
+enum NativeDocumentKind {
+  Text,
+  Pdf,
+  Docx,
+  Pptx,
+  Xlsx,
+  OpenDocument,
+}
+
+impl NativeDocumentKind {
+  fn label(self) -> &'static str {
+    match self {
+      NativeDocumentKind::Text => "text",
+      NativeDocumentKind::Pdf => "pdf",
+      NativeDocumentKind::Docx => "docx",
+      NativeDocumentKind::Pptx => "pptx",
+      NativeDocumentKind::Xlsx => "xlsx",
+      NativeDocumentKind::OpenDocument => "opendocument",
+    }
+  }
+}
+
+fn extract_native_document_text_from_base64(
+  file_name: &str,
+  mime_type: &str,
+  content_base64: &str,
+) -> Result<NativeDocumentExtractionResult, String> {
+  let payload = content_base64
+    .split_once(',')
+    .map(|(_, content)| content)
+    .unwrap_or(content_base64)
+    .trim();
+  let bytes = STANDARD
+    .decode(payload)
+    .map_err(|error| format!("文書データを読み込めませんでした: {error}"))?;
+  if bytes.len() > MAX_NATIVE_DOCUMENT_BYTES {
+    return Err(format!(
+      "この文書は大きすぎます。ローカル抽出は{}MBまでです。",
+      MAX_NATIVE_DOCUMENT_BYTES / 1024 / 1024
+    ));
+  }
+  let kind = detect_native_document_kind(file_name, mime_type, &bytes)?;
+  let mut warnings = Vec::new();
+  let text = match kind {
+    NativeDocumentKind::Text => extract_plain_text_document(&bytes)?,
+    NativeDocumentKind::Pdf => pdf_extract::extract_text_from_mem(&bytes)
+      .map_err(|error| format!("PDF本文を抽出できませんでした: {error}"))?,
+    NativeDocumentKind::Docx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_docx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::Pptx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_pptx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::Xlsx => {
+      let (text, document_warnings) = extract_zip_xml_document_text(&bytes, is_xlsx_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+    NativeDocumentKind::OpenDocument => {
+      let (text, document_warnings) =
+        extract_zip_xml_document_text(&bytes, is_opendocument_text_entry)?;
+      warnings.extend(document_warnings);
+      text
+    }
+  };
+  let text = normalize_extracted_document_text(text, &mut warnings)?;
+  Ok(NativeDocumentExtractionResult {
+    text,
+    detected_kind: kind.label().to_string(),
+    warnings,
+    generated_by: "native_document_extractor".to_string(),
+  })
+}
+
+fn detect_native_document_kind(
+  file_name: &str,
+  mime_type: &str,
+  bytes: &[u8],
+) -> Result<NativeDocumentKind, String> {
+  let extension = Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    .map(|value| value.to_lowercase())
+    .unwrap_or_default();
+  let mime_type = mime_type.to_lowercase();
+  let is_zip = bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06");
+
+  if mime_type.starts_with("text/")
+    || matches!(
+      extension.as_str(),
+      "txt" | "text" | "md" | "markdown" | "csv" | "tsv" | "json" | "jsonl" | "yaml" | "yml"
+        | "log"
+    )
+  {
+    return Ok(NativeDocumentKind::Text);
+  }
+  if mime_type == "application/pdf" || extension == "pdf" || bytes.starts_with(b"%PDF-") {
+    return Ok(NativeDocumentKind::Pdf);
+  }
+  if extension == "docx"
+    || mime_type
+      == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  {
+    return Ok(NativeDocumentKind::Docx);
+  }
+  if extension == "pptx"
+    || mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+  {
+    return Ok(NativeDocumentKind::Pptx);
+  }
+  if extension == "xlsx"
+    || mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  {
+    return Ok(NativeDocumentKind::Xlsx);
+  }
+  if matches!(extension.as_str(), "odt" | "ods" | "odp")
+    || matches!(
+      mime_type.as_str(),
+      "application/vnd.oasis.opendocument.text"
+        | "application/vnd.oasis.opendocument.spreadsheet"
+        | "application/vnd.oasis.opendocument.presentation"
+    )
+  {
+    return Ok(NativeDocumentKind::OpenDocument);
+  }
+  if mime_type.starts_with("image/")
+    || matches!(
+      extension.as_str(),
+      "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "tif" | "tiff"
+    )
+  {
+    return Err(
+      "画像OCRはまだこのローカル抽出パイプラインでは扱いません。OCR Providerを設定するまでは、テキスト化した内容をManual sourceへ貼り付けてください。"
+        .to_string(),
+    );
+  }
+  if matches!(extension.as_str(), "doc" | "xls" | "ppt")
+    || bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0])
+  {
+    return Err(
+      "旧Officeバイナリ形式はまだ安全に抽出しません。DOCX/PPTX/XLSX、PDF、またはテキストへ変換してから追加してください。"
+        .to_string(),
+    );
+  }
+  if is_zip {
+    return Err("ZIP系文書として検出しましたが、対応するOffice/OpenDocument形式ではありません。".to_string());
+  }
+  Err(
+    "このファイル形式はまだSource化できません。対応形式は TXT/MD/CSV/JSON/YAML/LOG/PDF/DOCX/PPTX/XLSX/ODT/ODS/ODP です。"
+      .to_string(),
+  )
+}
+
+fn extract_plain_text_document(bytes: &[u8]) -> Result<String, String> {
+  let text = String::from_utf8(bytes.to_vec())
+    .map_err(|_| "このテキスト文書はUTF-8として読めませんでした。".to_string())?;
+  if !looks_like_readable_document_text(&text) {
+    return Err("本文がテキストとして読めませんでした。PDF/画像/Office文書はネイティブ抽出経由で追加してください。".to_string());
+  }
+  Ok(text)
+}
+
+fn looks_like_readable_document_text(text: &str) -> bool {
+  if text.trim().is_empty() {
+    return false;
+  }
+  let sample = text.chars().take(4096).collect::<String>();
+  let trimmed = sample.trim_start();
+  if trimmed.starts_with("%PDF-")
+    || trimmed.starts_with("PK\u{0003}\u{0004}")
+    || trimmed.starts_with("\u{0089}PNG")
+    || trimmed.starts_with("GIF87a")
+    || trimmed.starts_with("GIF89a")
+  {
+    return false;
+  }
+  if sample.contains('\0') {
+    return false;
+  }
+  let total = sample.chars().count().max(1);
+  let control_count = sample
+    .chars()
+    .filter(|character| {
+      character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+    })
+    .count();
+  control_count * 100 < total * 2
+}
+
+fn extract_zip_xml_document_text<F>(
+  bytes: &[u8],
+  include_entry: F,
+) -> Result<(String, Vec<String>), String>
+where
+  F: Fn(&str) -> bool,
+{
+  let cursor = Cursor::new(bytes);
+  let mut archive = zip::ZipArchive::new(cursor)
+    .map_err(|error| format!("文書ZIPを開けませんでした: {error}"))?;
+  if archive.len() > 2_000 {
+    return Err("この文書は内部ファイル数が多すぎるため、安全のため抽出しません。".to_string());
+  }
+
+  let mut parts = Vec::new();
+  let mut warnings = Vec::new();
+  for index in 0..archive.len() {
+    let mut file = archive
+      .by_index(index)
+      .map_err(|error| format!("文書内ファイルを読めませんでした: {error}"))?;
+    let name = file.name().to_string();
+    if !include_entry(&name) {
+      continue;
+    }
+    if file.size() > MAX_NATIVE_XML_ENTRY_BYTES {
+      warnings.push(format!(
+        "{name} は大きすぎるため抽出から除外しました。"
+      ));
+      continue;
+    }
+    let mut xml = Vec::new();
+    file
+      .read_to_end(&mut xml)
+      .map_err(|error| format!("文書XMLを読めませんでした: {error}"))?;
+    let text = extract_visible_text_from_xml(&xml)?;
+    if !text.trim().is_empty() {
+      parts.push(text);
+    }
+  }
+
+  if parts.is_empty() {
+    return Err("この文書から抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。".to_string());
+  }
+  Ok((parts.join("\n"), warnings))
+}
+
+fn is_docx_text_entry(name: &str) -> bool {
+  name == "word/document.xml"
+    || name.starts_with("word/header")
+    || name.starts_with("word/footer")
+    || name == "word/footnotes.xml"
+    || name == "word/endnotes.xml"
+    || name == "word/comments.xml"
+}
+
+fn is_pptx_text_entry(name: &str) -> bool {
+  (name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
+    || (name.starts_with("ppt/notesSlides/notesSlide") && name.ends_with(".xml"))
+}
+
+fn is_xlsx_text_entry(name: &str) -> bool {
+  name == "xl/sharedStrings.xml"
+    || (name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml"))
+}
+
+fn is_opendocument_text_entry(name: &str) -> bool {
+  name == "content.xml"
+}
+
+fn extract_visible_text_from_xml(bytes: &[u8]) -> Result<String, String> {
+  let mut reader = quick_xml::Reader::from_reader(bytes);
+  reader.trim_text(true);
+  let mut buffer = Vec::new();
+  let mut output = String::new();
+
+  loop {
+    match reader.read_event_into(&mut buffer) {
+      Ok(quick_xml::events::Event::Text(event)) => {
+        let text = event
+          .unescape()
+          .map_err(|error| format!("文書XMLの本文を読めませんでした: {error}"))?;
+        append_visible_text(&mut output, text.as_ref());
+      }
+      Ok(quick_xml::events::Event::CData(event)) => {
+        let text = String::from_utf8_lossy(event.as_ref());
+        append_visible_text(&mut output, &text);
+      }
+      Ok(quick_xml::events::Event::End(event)) => {
+        if is_xml_block_name(event.name().as_ref()) {
+          append_visible_break(&mut output);
+        }
+      }
+      Ok(quick_xml::events::Event::Empty(event)) => {
+        if is_xml_break_name(event.name().as_ref()) {
+          append_visible_break(&mut output);
+        }
+      }
+      Ok(quick_xml::events::Event::Eof) => break,
+      Err(error) => return Err(format!("文書XMLを解析できませんでした: {error}")),
+      _ => {}
+    }
+    buffer.clear();
+  }
+
+  Ok(output)
+}
+
+fn append_visible_text(output: &mut String, text: &str) {
+  let text = text.trim();
+  if text.is_empty() {
+    return;
+  }
+  let needs_space = output
+    .chars()
+    .last()
+    .map(|character| !character.is_whitespace())
+    .unwrap_or(false);
+  if needs_space {
+    output.push(' ');
+  }
+  output.push_str(text);
+}
+
+fn append_visible_break(output: &mut String) {
+  if !output.ends_with('\n') {
+    output.push('\n');
+  }
+}
+
+fn is_xml_block_name(name: &[u8]) -> bool {
+  matches!(
+    name,
+    b"p" | b"tr" | b"row" | b"text:p" | b"text:h" | b"table:table-row"
+  ) || name.ends_with(b":p")
+    || name.ends_with(b":tr")
+}
+
+fn is_xml_break_name(name: &[u8]) -> bool {
+  matches!(name, b"br" | b"w:br" | b"text:line-break") || name.ends_with(b":br")
+}
+
+fn normalize_extracted_document_text(
+  text: String,
+  warnings: &mut Vec<String>,
+) -> Result<String, String> {
+  let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
+  text = text.replace('\0', "");
+  if text.trim().is_empty() {
+    return Err("抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。".to_string());
+  }
+  let char_count = text.chars().count();
+  if char_count > MAX_EXTRACTED_TEXT_CHARS {
+    text = text.chars().take(MAX_EXTRACTED_TEXT_CHARS).collect();
+    warnings.push(format!(
+      "抽出本文が長いため、先頭{}文字だけをSource化しました。",
+      MAX_EXTRACTED_TEXT_CHARS
+    ));
+  }
+  Ok(text)
+}
+
 fn extract_memory_candidates_for_source(source_id: &str, body: &str, created_at: &str) -> Vec<Value> {
   let mut candidates = Vec::new();
 
@@ -5447,6 +5817,15 @@ fn add_native_source_with_candidates(
 }
 
 #[tauri::command]
+fn extract_native_document_text(
+  file_name: String,
+  mime_type: String,
+  content_base64: String,
+) -> Result<NativeDocumentExtractionResult, String> {
+  extract_native_document_text_from_base64(&file_name, &mime_type, &content_base64)
+}
+
+#[tauri::command]
 fn approve_native_candidate(
   app: AppHandle,
   candidate_id: String,
@@ -5806,6 +6185,7 @@ pub fn run() {
       update_native_context_pack_item_visibility,
       confirm_native_context_pack,
       deny_native_context_pack_request,
+      extract_native_document_text,
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
@@ -5913,6 +6293,63 @@ mod tests {
 
   fn use_test_vault_key() {
     std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+  }
+
+  fn zipped_document(entries: &[(&str, &str)]) -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::FileOptions::default();
+    for (name, body) in entries {
+      writer
+        .start_file(*name, options)
+        .expect("start zip entry");
+      writer.write_all(body.as_bytes()).expect("write zip entry");
+    }
+    writer.finish().expect("finish zip").into_inner()
+  }
+
+  #[test]
+  fn native_document_extraction_reads_docx_text_without_fact_creation() {
+    let bytes = zipped_document(&[(
+      "word/document.xml",
+      r#"
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p><w:r><w:t>Insurance policy renewal is due on 2027-08-31.</w:t></w:r></w:p>
+            <w:p><w:r><w:t>Contact the insurer before moving address.</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+      "#,
+    )]);
+    let result = extract_native_document_text_from_base64(
+      "insurance.docx",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      &STANDARD.encode(bytes),
+    )
+    .expect("extract docx text");
+
+    assert_eq!(result.detected_kind, "docx");
+    assert!(result
+      .text
+      .contains("Insurance policy renewal is due on 2027-08-31."));
+    assert!(result
+      .text
+      .contains("Contact the insurer before moving address."));
+    assert_eq!(result.generated_by, "native_document_extractor");
+  }
+
+  #[test]
+  fn native_document_extraction_refuses_images_without_ocr_provider() {
+    let result = extract_native_document_text_from_base64(
+      "scan.png",
+      "image/png",
+      &STANDARD.encode(b"\x89PNG\r\n"),
+    );
+    let error = match result {
+      Ok(_) => panic!("image extraction should fail without OCR provider"),
+      Err(error) => error,
+    };
+    assert!(error.contains("画像OCR"));
   }
 
   fn benchmark_size_from_env(name: &str, default: usize) -> usize {

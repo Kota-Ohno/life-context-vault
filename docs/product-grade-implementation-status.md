@@ -191,9 +191,14 @@ Last updated: 2026-06-12
   - Inbox shows a conflict badge, warning copy, and prioritizes the suspected old Fact in the explicit replacement choices
   - Source body re-extraction moves linked Facts to `needs_review` before conflict annotation so regenerated candidates do not self-conflict against the same edited Source
 - Added safe text-upload guard for document Sources:
-  - Sources upload now accepts only text-like formats within the local extraction size ceiling
-  - PDFs, images, office documents, unreadable binary content, and oversized files are rejected before RawSource or MemoryCandidate creation
-  - the Upload card explains the safe fallback to Manual source text until OCR/document extraction is available
+  - Browser-only upload now accepts only text-like formats within the local extraction size ceiling
+  - unreadable binary content, images without OCR, legacy Office binaries, unsupported files, and oversized files are rejected before RawSource or MemoryCandidate creation
+  - the Upload card explains the safe fallback to Manual source text when local extraction or OCR/provider extraction is unavailable
+- Added native document extraction for Desktop uploads:
+  - PDF, DOCX, PPTX, XLSX, and OpenDocument files are extracted locally through a Tauri Vault boundary before Source creation
+  - extracted document text flows into the existing RawSource -> MemoryCandidate path and still never creates ApprovedFacts automatically
+  - native extraction rejects images without OCR Provider, legacy Office binaries, unsupported archives, unreadable files, zip-entry overages, and oversized uploads before RawSource creation
+  - Upload UX now explains local PDF/Office extraction separately from OCR/provider gaps
 - Added explicit large-scale retrieval benchmark coverage:
   - ignored Rust benchmark seeds an encrypted SQLite Vault with 100,000 ApprovedFacts and 500,000 SourceChunks by default
   - benchmark measures Vault Core FTS search and Context Pack generation on the same normalized schema used by the app and MCP sidecars
@@ -206,7 +211,7 @@ Last updated: 2026-06-12
 - Public HTTPS deployment and durable hosted relay domain.
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
-- Provider-backed LLM extraction and full PDF/OCR/office-document ingestion beyond the current safe text-upload guard.
+- OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
 
@@ -237,7 +242,8 @@ Last updated: 2026-06-12
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Context Pack minimization tests proving user-hidden items are removed from the AI-bound Pack, retained as exclusions, and remain absent after confirmation and `get_request_status`
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
-- Text upload guard tests proving supported text-like files are accepted while PDF/image-style binaries, unreadable text, and oversized files are rejected before Source creation
+- Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images and legacy Office binaries are blocked, and oversized files are rejected before Source creation
+- Native document extraction tests proving DOCX XML text can be extracted locally while image OCR is refused without an OCR Provider
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
 - Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
@@ -363,6 +369,16 @@ Last updated: 2026-06-12
 - Context Pack Minimization security review: accepted; removed items stay in `excludedItems` as `user_hidden`, source snippets and max sensitivity are recalculated, and external AI retrieves only the confirmed edited Pack.
 - Context Pack Minimization technical review: accepted; Pack item visibility, confirmation, and denial now have Rust-owned Vault Core commands with projection sync and audit events.
 - Context Pack Minimization UX review: accepted; desktop and mobile Requests screens show send counts, removed Facts, and restore controls without horizontal overflow.
+
+### Native Document Extraction Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, dependency, and UX passes.
+- Product fit: accepted; important life documents such as PDFs and modern Office files can now become reviewable MemoryCandidates without forcing users to manually paste extracted text.
+- Security/privacy: accepted; extraction is local in the Desktop path, unsupported/OCR-required/legacy/oversized files are rejected before RawSource creation, and extracted text still creates only unapproved Candidates until the user approves Facts.
+- Technical design: accepted; native extraction is behind one Tauri command, uses bounded input size, ZIP entry count, ZIP entry size, and extracted text limits, and then reuses the existing Source ingestion pipeline.
+- Dependency review: accepted with constraints; `pdf-extract`, `quick-xml`, and `zip` were added for local extraction, with `zip` pinned to the Rust-1.77-compatible 0.6 series rather than the latest MSRV-heavy release.
+- UX review: accepted; Upload now separates local PDF/Office extraction from OCR/provider gaps and keeps failure messages specific enough for non-developer users.
+- Verification: `npm test`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml`, `git diff --check`, and `npm run tauri:build` passed. Browser layout checks covered Sources Upload at desktop `1280x720` and mobile `390x844` with no page-level or Upload-card horizontal overflow. `cargo fmt` remains unavailable because `rustfmt` is not installed for the local stable toolchain.
 
 ### Large Retrieval Benchmark Slice
 

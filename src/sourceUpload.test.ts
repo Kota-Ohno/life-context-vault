@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_NATIVE_DOCUMENT_SOURCE_BYTES,
   MAX_TEXT_SOURCE_BYTES,
+  describeSourceFile,
   describeTextSourceFile,
   formatFileSize,
   looksLikeReadableText
@@ -31,7 +33,7 @@ describe("source upload safety", () => {
     ).toEqual({ supported: true });
   });
 
-  it("rejects unsupported binary document families before Source creation", () => {
+  it("keeps the legacy text-only helper conservative", () => {
     expect(
       describeTextSourceFile({
         name: "insurance-policy.pdf",
@@ -48,6 +50,65 @@ describe("source upload safety", () => {
     ).toEqual({ supported: false, reason: "unsupported_type" });
   });
 
+  it("allows native PDF and Office extraction in the Desktop app", () => {
+    expect(
+      describeSourceFile(
+        {
+          name: "insurance-policy.pdf",
+          size: 420,
+          type: "application/pdf"
+        },
+        true
+      )
+    ).toEqual({ supported: true, extraction: "native_document" });
+    expect(
+      describeSourceFile(
+        {
+          name: "benefits.docx",
+          size: 420,
+          type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        },
+        true
+      )
+    ).toEqual({ supported: true, extraction: "native_document" });
+  });
+
+  it("requires the native extractor for binary documents", () => {
+    expect(
+      describeSourceFile(
+        {
+          name: "insurance-policy.pdf",
+          size: 420,
+          type: "application/pdf"
+        },
+        false
+      )
+    ).toEqual({ supported: false, reason: "native_required" });
+  });
+
+  it("blocks OCR and legacy Office documents until a safe extractor exists", () => {
+    expect(
+      describeSourceFile(
+        {
+          name: "scan.png",
+          size: 420,
+          type: "image/png"
+        },
+        true
+      )
+    ).toEqual({ supported: false, reason: "ocr_required" });
+    expect(
+      describeSourceFile(
+        {
+          name: "old-benefits.doc",
+          size: 420,
+          type: "application/msword"
+        },
+        true
+      )
+    ).toEqual({ supported: false, reason: "legacy_office" });
+  });
+
   it("rejects oversized text sources for the current local extractor", () => {
     expect(
       describeTextSourceFile({
@@ -55,6 +116,19 @@ describe("source upload safety", () => {
         size: MAX_TEXT_SOURCE_BYTES + 1,
         type: "text/csv"
       })
+    ).toEqual({ supported: false, reason: "too_large" });
+  });
+
+  it("rejects oversized native documents before extraction", () => {
+    expect(
+      describeSourceFile(
+        {
+          name: "huge-policy.pdf",
+          size: MAX_NATIVE_DOCUMENT_SOURCE_BYTES + 1,
+          type: "application/pdf"
+        },
+        true
+      )
     ).toEqual({ supported: false, reason: "too_large" });
   });
 
