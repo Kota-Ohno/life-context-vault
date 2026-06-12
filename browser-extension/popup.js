@@ -5,6 +5,7 @@ const button = document.querySelector("#capture");
 const status = document.querySelector("#status");
 const autoCapture = document.querySelector("#auto-capture");
 const lastCapture = document.querySelector("#last-capture");
+const openApp = document.querySelector("#open-app");
 const deleteSource = document.querySelector("#delete-source");
 
 void initializePopup();
@@ -68,6 +69,24 @@ deleteSource.addEventListener("click", async () => {
   }
 });
 
+openApp.addEventListener("click", async () => {
+  openApp.disabled = true;
+  setStatus("Opening Life Context Vault...", "");
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "LCV_OPEN_CONTROL_CENTER"
+    });
+    if (!result?.ok) {
+      throw new Error(result?.error ?? "Open app failed");
+    }
+    setStatus("Opened Life Context Vault. Review recent candidates in Memory Inbox.", "ok");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Open app failed", "error");
+  } finally {
+    await refreshLastCapture();
+  }
+});
+
 async function initializePopup() {
   const stored = await chrome.storage.local.get({
     [STORAGE_AUTO_CAPTURE]: false,
@@ -99,6 +118,7 @@ function renderLastCapture(meta) {
   if (!meta) {
     lastCapture.textContent = "No recent capture in this browser.";
     delete lastCapture.dataset.state;
+    openApp.disabled = true;
     deleteSource.disabled = true;
     return;
   }
@@ -108,6 +128,7 @@ function renderLastCapture(meta) {
   const length = meta.textLength ? `, ${meta.textLength} chars` : "";
   lastCapture.textContent = `${time}: ${client}${meta.status}${mode} / ${meta.candidateCount ?? 0} candidate(s)${length}`;
   lastCapture.dataset.state = meta.ok ? "ok" : "attention";
+  openApp.disabled = false;
   deleteSource.disabled = !meta.sourceId || meta.status === "source_purged";
 }
 

@@ -23,6 +23,7 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
 - ApprovedFact creation still requires review in the app.
 - Raw captured Source text follows the app's Passive Capture retention policy.
 - The popup can delete the latest captured Source body from the local Vault by `sourceId`. The native host only allows this for browser passive-capture Sources.
+- The popup can ask the native host to open the Life Context Vault Control Center after a capture. This returns only launch status metadata, not Vault content, Source body text, or candidate text.
 - Secrets are redacted by Vault Core before storage when detected.
 - The host does not implement its own extraction, redaction, persistence, or audit logic.
 
@@ -80,9 +81,10 @@ browser-extension/native-host.dev.json
 4. Open ChatGPT, Claude, or Gemini in Chrome.
 5. Click the Life Context Vault extension.
 6. Click **Capture current chat**, or turn on **Auto capture supported AI pages** for debounced page-change capture.
-7. If the last capture was wrong, click **Delete recent captured Source** in the popup to purge that captured Source body from the local Vault.
-8. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
-9. Review the generated candidate in **Memory Inbox**.
+7. Click **Open app to review Inbox** to bring the Control Center forward.
+8. If the last capture was wrong, click **Delete recent captured Source** in the popup to purge that captured Source body from the local Vault.
+9. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
+10. Review the generated candidate in **Memory Inbox**.
 
 ## Native Message
 
@@ -123,3 +125,13 @@ The popup delete action sends:
 ```
 
 The host refuses this action unless the Source is a browser `passive_capture` Source.
+
+The popup open-app action sends:
+
+```json
+{
+  "type": "open_control_center"
+}
+```
+
+The host opens the bundled Life Context Vault app when it can resolve the app bundle or sibling app binary, and replies with launch status metadata only.

@@ -85,6 +85,23 @@ button:disabled {
   cursor: wait;
 }
 
+.secondary-action {
+  border-color: #5f6b62;
+  background: #ffffff;
+  color: #26352b;
+}
+
+.secondary-action:hover:not(:disabled) {
+  background: #eef4ec;
+}
+
+.secondary-action:disabled {
+  border-color: #d7ddd4;
+  background: #f3f5f1;
+  color: #8b958d;
+  cursor: default;
+}
+
 .delete-capture {
   border-color: #9c3b25;
   background: #fff7f3;

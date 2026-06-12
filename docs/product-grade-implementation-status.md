@@ -269,7 +269,7 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including SSE/session transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
-- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, and popup deletion of the latest captured Source body. Remaining product-hardening: extension-side recent captured Source review/open-in-app flow and durable delta queues across page reloads.
+- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture. Remaining product-hardening: durable delta queues across page reloads.
 - OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
 ## Verification
@@ -744,6 +744,13 @@ Last updated: 2026-06-13
 - Technical design: first successful capture uses `captureMode: "full"`; later captures compute appended text by prefix/direct/overlap matching and send `captureMode: "delta"` with metadata-only `textLength`. If overlap is unclear, the extension falls back to full capture rather than guessing.
 - Verification: extension static checks cover content/background/popup changes. A Node VM check verified prefix, overlap, and rewrite fallback behavior against the actual content script helper. `npm run product:check` passed.
 
+### Browser Capture Open App Slice
+
+- Product fit: after a popup or Auto Capture, users can open the Control Center from the extension and continue directly to Memory Inbox review instead of wondering where the saved candidate went.
+- Security/privacy: the extension still stores and displays only recent capture metadata. The open-app action sends no transcript, Source body, Candidate text, Vault content, or Context Pack body back to Chrome.
+- Technical design: the popup sends `LCV_OPEN_CONTROL_CENTER` to the background service worker, which asks the Native Messaging host to launch the known app bundle or sibling app binary. The host does not accept a user-supplied command or path.
+- Verification: capture-host unit tests cover app-bundle and sibling-binary resolution. Extension static checks cover popup/background JavaScript. Headless Chrome rendered the popup at `360x620` with the new open-app button visible and no horizontal overflow. `npm run product:check` passed.
+
 ### Remote MCP Method Boundary Slice
 
 - Product fit: hosted-client smoke tests against `/mcp` now get an explicit method boundary instead of a generic 404 when they probe with GET.
@@ -770,8 +777,8 @@ Last updated: 2026-06-13
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
 
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
-- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state.
+- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state plus an open-app review path.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, including SSE/session semantics and real hosted-client certification, remains before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: browser Capture recent-source review/open-in-app flow, durable delta queues across page reloads, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: browser Capture durable delta queues across page reloads and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.

@@ -5,10 +5,14 @@ use serde_json::{json, Value};
 use std::{
   env,
   io::{self, Read, Write},
-  path::PathBuf,
+  path::{Path, PathBuf},
+  process::{Command, Stdio},
 };
 
 const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "macos")]
+const APP_BUNDLE_IDENTIFIER: &str = "dev.life-context-vault.poc";
+const CONTROL_CENTER_BINARY_NAME: &str = "life-context-vault";
 
 fn main() {
   if let Err(error) = run() {
@@ -31,6 +35,7 @@ fn handle_message(message: &Value) -> Result<Value, String> {
     "ping" => Ok(json!({ "ok": true, "status": "ready" })),
     "capture_fragment" => capture_fragment(message),
     "delete_capture_source" => delete_capture_source(message),
+    "open_control_center" => open_control_center(),
     other => Err(format!("unsupported message type: {other}")),
   }
 }
@@ -76,6 +81,96 @@ fn delete_capture_source(message: &Value) -> Result<Value, String> {
     "invalidatedPackCount": result.invalidated_pack_count,
     "message": "Recent captured Source body was deleted from the local Vault."
   }))
+}
+
+fn open_control_center() -> Result<Value, String> {
+  let launch_method = launch_control_center()?;
+  Ok(json!({
+    "ok": true,
+    "status": "opening_control_center",
+    "launchMethod": launch_method,
+    "message": "Life Context Vault Control Center is opening. Review recent Capture candidates in Memory Inbox."
+  }))
+}
+
+fn launch_control_center() -> Result<&'static str, String> {
+  let host_path =
+    env::current_exe().map_err(|error| format!("failed to resolve capture host path: {error}"))?;
+
+  #[cfg(target_os = "macos")]
+  {
+    if let Some(app_bundle) = app_bundle_for_host_path(&host_path) {
+      let mut command = Command::new("open");
+      command.arg(app_bundle);
+      spawn_detached(&mut command)?;
+      return Ok("macos_app_bundle");
+    }
+  }
+
+  let sibling = control_center_binary_candidate_for_host(&host_path);
+  if sibling.exists() {
+    let mut command = Command::new(sibling);
+    spawn_detached(&mut command)?;
+    return Ok("sibling_binary");
+  }
+
+  #[cfg(target_os = "macos")]
+  {
+    let mut command = Command::new("open");
+    command.arg("-b").arg(APP_BUNDLE_IDENTIFIER);
+    run_command_status(&mut command)?;
+    Ok("macos_bundle_identifier")
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    Err("Life Context Vault app binary was not found near the Capture host.".to_string())
+  }
+}
+
+fn spawn_detached(command: &mut Command) -> Result<(), String> {
+  command
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .map(|_| ())
+    .map_err(|error| format!("failed to open Life Context Vault Control Center: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn run_command_status(command: &mut Command) -> Result<(), String> {
+  let status = command
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .map_err(|error| format!("failed to open Life Context Vault Control Center: {error}"))?;
+  if status.success() {
+    Ok(())
+  } else {
+    Err("Life Context Vault app is not registered with Launch Services.".to_string())
+  }
+}
+
+fn control_center_binary_candidate_for_host(host_path: &Path) -> PathBuf {
+  let binary_name = if cfg!(target_os = "windows") {
+    format!("{CONTROL_CENTER_BINARY_NAME}.exe")
+  } else {
+    CONTROL_CENTER_BINARY_NAME.to_string()
+  };
+  host_path
+    .parent()
+    .map(|parent| parent.join(&binary_name))
+    .unwrap_or_else(|| PathBuf::from(&binary_name))
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_for_host_path(host_path: &Path) -> Option<PathBuf> {
+  host_path
+    .ancestors()
+    .find(|path| path.extension().and_then(|extension| extension.to_str()) == Some("app"))
+    .map(Path::to_path_buf)
 }
 
 fn read_native_message() -> Result<Value, String> {
@@ -173,6 +268,37 @@ mod tests {
     let payload = response.to_string().into_bytes();
     let length = payload.len() as u32;
     assert_eq!(u32::from_ne_bytes(length.to_ne_bytes()), length);
+  }
+
+  #[test]
+  fn control_center_binary_candidate_uses_sibling_app_binary() {
+    let host = PathBuf::from("/tmp/Life Context Vault.app/Contents/MacOS/lcv-capture-host");
+    let candidate = control_center_binary_candidate_for_host(&host);
+    let expected_name = if cfg!(target_os = "windows") {
+      "life-context-vault.exe"
+    } else {
+      "life-context-vault"
+    };
+
+    assert_eq!(
+      candidate.file_name().and_then(|name| name.to_str()),
+      Some(expected_name)
+    );
+    assert!(!candidate.display().to_string().contains("capture-host"));
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn app_bundle_is_resolved_from_bundled_capture_host_path() {
+    let host = PathBuf::from(
+      "/Applications/Life Context Vault.app/Contents/MacOS/lcv-capture-host",
+    );
+    let bundle = app_bundle_for_host_path(&host).expect("bundle path");
+
+    assert_eq!(
+      bundle,
+      PathBuf::from("/Applications/Life Context Vault.app")
+    );
   }
 
   #[test]

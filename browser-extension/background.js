@@ -32,6 +32,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "LCV_OPEN_CONTROL_CENTER") {
+    openControlCenter().then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Open app failed"
+      });
+    });
+    return true;
+  }
+
   return false;
 });
 
@@ -85,6 +95,16 @@ async function deleteCapturedSource(sourceId) {
   });
   if (!result?.ok) {
     throw new Error(result?.error ?? result?.message ?? "Delete failed");
+  }
+  return result;
+}
+
+async function openControlCenter() {
+  const result = await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
+    type: "open_control_center"
+  });
+  if (!result?.ok) {
+    throw new Error(result?.error ?? result?.message ?? "Open app failed");
   }
   return result;
 }
