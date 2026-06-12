@@ -217,6 +217,10 @@ Last updated: 2026-06-12
   - benchmark measures Vault Core FTS search and Context Pack generation on the same normalized schema used by the app and MCP sidecars
   - `npm run retrieval:bench` runs the benchmark without adding cost to normal test runs
   - `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT` can reduce or expand the synthetic dataset for local profiling
+- Added product release qualification commands:
+  - `npm run product:check` runs frontend tests/build, Rust tests, Rust release binary build, format check when rustfmt is installed, and `git diff --check`
+  - `npm run product:check:full` additionally runs the Tauri sidecar integration build and large retrieval benchmark
+  - `product:check` can run smaller benchmark profiles through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -225,7 +229,7 @@ Last updated: 2026-06-12
 - Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, and backup controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
-- Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
+- CI-hosted or scheduled retrieval performance tracking; local release qualification now has an explicit product check wrapper, while the 100k Fact / 500k SourceChunk benchmark remains opt-in because of dataset size.
 
 ## Verification
 
@@ -275,6 +279,7 @@ Last updated: 2026-06-12
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
+- Product release check wrapper covering standard app/Rust/release-binary checks and optional full Tauri + retrieval benchmark qualification
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
@@ -408,6 +413,14 @@ Last updated: 2026-06-12
 - Technical design: accepted; the benchmark is ignored by default, exposed through `npm run retrieval:bench`, configurable through `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT`, and measures the shared Vault Core path used by the Control Center and MCP sidecar.
 - Operations: accepted; normal `npm test`/`cargo test` remain fast while release qualification has a repeatable command and documented P95 targets.
 - Verification: `npm test`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run retrieval:bench`, `git diff --check`, and `npm run tauri:build` passed. `cargo fmt` could not run because `rustfmt` is not installed for the local stable toolchain.
+
+### Product Release Check Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate operations, developer-experience, maintainability, and performance-risk passes.
+- Product fit: accepted; release qualification now has a named command instead of relying on a remembered checklist, which is important before opening Life Context Vault to everyday AI users.
+- Developer experience: accepted; `product:check` keeps the default loop bounded, while `product:check:full` adds Tauri sidecar integration and the large retrieval benchmark for release candidates.
+- Performance risk: accepted; full checks keep the 100k Fact / 500k SourceChunk benchmark opt-in, and smaller benchmark profiles can be run through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`.
+- Verification: `npm run product:check` and `npm run product:check -- --include-bench --bench-facts 100 --bench-chunks-per-fact 1` passed. Both explicitly skipped `cargo fmt` because rustfmt is not installed for the local stable toolchain.
 
 ### Relay State Store Slice
 

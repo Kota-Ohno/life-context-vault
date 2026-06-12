@@ -21,6 +21,8 @@
     "agent:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-agent",
     "capture:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-capture-host",
     "retrieval:bench": "cargo test --release --manifest-path src-tauri/Cargo.toml large_scale_retrieval_benchmark_100k_facts_500k_chunks -- --ignored --nocapture",
+    "product:check": "node scripts/run-product-release-checks.mjs",
+    "product:check:full": "node scripts/run-product-release-checks.mjs --full",
     "extension:host-manifest": "node scripts/write-native-host-manifest.mjs"
   },
   "dependencies": {

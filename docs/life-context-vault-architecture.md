@@ -380,6 +380,15 @@ The product-grade performance gate is an explicit opt-in benchmark rather than a
 npm run retrieval:bench
 ```
 
+Release qualification should use the product check wrapper:
+
+```bash
+npm run product:check
+npm run product:check:full
+```
+
+`product:check` runs the standard app, Rust, release-binary, format-if-available, and diff checks. `product:check:full` additionally runs the Tauri sidecar integration build and the large retrieval benchmark. Smaller local benchmark runs can pass `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>` to `product:check`.
+
 The benchmark defaults to an encrypted local SQLite Vault with 100,000 ApprovedFacts and 500,000 SourceChunks. It measures:
 
 - FTS search over AI-eligible ApprovedFacts.
