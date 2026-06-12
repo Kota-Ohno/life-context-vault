@@ -33,6 +33,7 @@ import {
   BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
+  createNativeContextPackRequest,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
@@ -539,12 +540,35 @@ export function App() {
     apply(next, "承認済みFactとして保存しました。");
   }
 
-  function buildPack() {
+  async function buildPack() {
     if (!question.trim()) {
       setNotice("質問を入力してください。");
       return;
     }
     const client = state.connectorSessions.find((session) => session.id === requestClientId);
+    if (nativePath) {
+      try {
+        const built = await createNativeContextPackRequest({
+          clientId: requestClientId,
+          clientName: client?.clientName ?? "Unknown AI",
+          taskText: question,
+          purpose: "普段使うAIへの回答文脈",
+          approvalMode: "explicit_sensitive"
+        });
+        if (built) {
+          nativeRevisionRef.current = built.updatedAt;
+          setNativeRevision(built.updatedAt);
+          setState(built.state);
+          setNotice("Vault CoreでContext Requestを受け取り、短命Context Packを生成しました。");
+          setActiveRequestId(built.requestId);
+          setActivePackId(built.packId);
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを生成できませんでした。");
+        return;
+      }
+    }
     const requested = createContextPackRequest(state, {
       clientId: requestClientId,
       clientName: client?.clientName ?? "Unknown AI",
@@ -2023,7 +2047,7 @@ function ContextRequestsView({
   requestClientId: string;
   setRequestClientId: (value: string) => void;
   connectors: ConnectorSession[];
-  buildPack: () => void;
+  buildPack: () => void | Promise<void>;
   requests: ContextPackRequest[];
   setActiveRequest: (request: ContextPackRequest) => void;
   currentRequest: ContextPackRequest | null;

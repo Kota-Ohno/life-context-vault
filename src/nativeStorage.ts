@@ -124,6 +124,22 @@ export type NativeFactSearchResult = ApprovedFact & {
   rank: number;
 };
 
+interface NativeContextPackBuildPayload {
+  payload: string;
+  updatedAt: string | null;
+  requestId: string;
+  packId: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeContextPackBuildResult {
+  state: VaultState;
+  updatedAt: string | null;
+  requestId: string;
+  packId: string | null;
+  generatedBy: "native_vault_core";
+}
+
 export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -196,4 +212,34 @@ export async function searchNativeFacts(options: {
     sensitivity: options.sensitivity === "all" ? null : options.sensitivity,
     limit: options.limit ?? 80
   });
+}
+
+export async function createNativeContextPackRequest(input: {
+  clientId: string;
+  clientName: string;
+  taskText: string;
+  purpose?: string;
+  sensitivityCeiling?: SensitivityTier;
+  approvalMode?: "auto_low_risk" | "always_review" | "explicit_sensitive";
+}): Promise<NativeContextPackBuildResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeContextPackBuildPayload>(
+    "create_native_context_pack_request",
+    {
+      clientId: input.clientId,
+      clientName: input.clientName,
+      taskText: input.taskText,
+      purpose: input.purpose ?? null,
+      sensitivityCeiling: input.sensitivityCeiling ?? null,
+      approvalMode: input.approvalMode ?? null
+    }
+  );
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    requestId: result.requestId,
+    packId: result.packId,
+    generatedBy: result.generatedBy
+  };
 }

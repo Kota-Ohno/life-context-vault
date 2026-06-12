@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -109,7 +110,7 @@ struct LoginItemStatus {
   last_error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeFactSearchResult {
   id: String,
@@ -127,6 +128,16 @@ struct NativeFactSearchResult {
   approved_at: String,
   updated_at: String,
   rank: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeContextPackBuildResult {
+  payload: String,
+  updated_at: Option<String>,
+  request_id: String,
+  pack_id: Option<String>,
+  generated_by: String,
 }
 
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -847,6 +858,781 @@ fn search_facts_in_connection(
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| format!("failed to collect fact search results: {error}"));
   results
+}
+
+fn create_native_context_pack_request_in_connection(
+  connection: &Connection,
+  vault: &mut Value,
+  client_id: &str,
+  client_name: &str,
+  task_text: &str,
+  purpose: Option<&str>,
+  sensitivity_ceiling: Option<&str>,
+  approval_mode: Option<&str>,
+) -> Result<(String, String), String> {
+  let task_text = task_text.trim();
+  if task_text.is_empty() {
+    return Err("taskText is required.".to_string());
+  }
+
+  let now = now_iso();
+  let expires_at = minutes_from_now(10);
+  let request_id = new_id("req");
+  let pack_id = new_id("pack");
+  let task_domain = classify_domain(task_text);
+  let ceiling = sensitivity_ceiling
+    .filter(|value| !value.trim().is_empty())
+    .map(ToString::to_string)
+    .unwrap_or_else(|| policy_ceiling_for_client(vault, client_id));
+  let approval_mode = approval_mode.unwrap_or("explicit_sensitive");
+  let facts = rank_context_facts_in_connection(connection, task_text, &ceiling, 24)?;
+  let mut items = Vec::new();
+  let mut excluded_items = Vec::new();
+  let mut source_snippets = Vec::new();
+
+  for fact in facts {
+    if fact.sensitivity == "secret_never_send" {
+      excluded_items.push(json!({
+        "referencedId": fact.id,
+        "reason": "secret_never_send"
+      }));
+      continue;
+    }
+    if sensitivity_rank(&fact.sensitivity) > sensitivity_rank(&ceiling) {
+      excluded_items.push(json!({
+        "referencedId": fact.id,
+        "reason": "sensitivity_policy"
+      }));
+      continue;
+    }
+    if fact.status != "active" {
+      excluded_items.push(json!({
+        "referencedId": fact.id,
+        "reason": match fact.status.as_str() {
+          "expired" => "expired",
+          "deleted" => "deleted",
+          _ => "user_hidden"
+        }
+      }));
+      continue;
+    }
+    if fact
+      .valid_until
+      .as_deref()
+      .map(is_expired)
+      .unwrap_or(false)
+    {
+      excluded_items.push(json!({
+        "referencedId": fact.id,
+        "reason": "expired"
+      }));
+      continue;
+    }
+
+    let source_titles = source_titles_in_connection(connection, &fact.source_ids)?;
+    let snippet = source_snippet_for_fact(connection, &fact, &ceiling)?;
+    items.push(json!({
+      "id": new_id("ctxitem"),
+      "factId": fact.id.clone(),
+      "itemText": fact.fact_text.clone(),
+      "reasonIncluded": if fact.domain == task_domain {
+        "質問の領域と一致しています。"
+      } else {
+        "本人の背景情報として回答を調整できます。"
+      },
+      "sensitivity": fact.sensitivity.clone(),
+      "sourceTitles": source_titles,
+      "validFrom": fact.valid_from.clone(),
+      "validUntil": fact.valid_until.clone(),
+      "confidence": fact.confidence.clone()
+    }));
+
+    if let Some(snippet) = snippet {
+      source_snippets.push(snippet);
+    }
+  }
+
+  let max_sensitivity_included = items
+    .iter()
+    .filter_map(|item| item.get("sensitivity").and_then(Value::as_str))
+    .max_by_key(|sensitivity| sensitivity_rank(sensitivity))
+    .unwrap_or("public")
+    .to_string();
+  let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
+  let requires_confirmation = approval_mode == "always_review"
+    || sensitivity_rank(&max_sensitivity_included) >= sensitivity_rank("private_consequential");
+  let confirmation_status = if requires_confirmation {
+    "pending_user_confirmation"
+  } else {
+    "not_required"
+  };
+  let request_status = if requires_confirmation {
+    "pending_user_confirmation"
+  } else {
+    "fulfilled"
+  };
+
+  let request = json!({
+    "id": request_id,
+    "clientId": client_id,
+    "clientName": client_name,
+    "taskText": task_text,
+    "purpose": purpose.unwrap_or("Answer with user-approved life context"),
+    "requestedDomains": [task_domain],
+    "sensitivityCeiling": ceiling,
+    "approvalMode": approval_mode,
+    "createdAt": now,
+    "expiresAt": expires_at,
+    "status": request_status
+  });
+  let pack = json!({
+    "id": pack_id,
+    "requestId": request_id,
+    "taskText": task_text,
+    "taskDomain": task_domain,
+    "riskLevel": classify_risk(task_text),
+    "generatedAt": now,
+    "expiresAt": expires_at,
+    "maxSensitivityIncluded": max_sensitivity_included,
+    "items": items,
+    "sourceSnippets": source_snippets,
+    "excludedItems": excluded_items,
+    "warnings": warnings,
+    "confirmationStatus": confirmation_status
+  });
+
+  push_json_array(vault, "contextPackRequests", request);
+  push_json_array(vault, "contextPacks", pack);
+  touch_connector_in_vault(vault, client_id, &now);
+  push_json_array(
+    vault,
+    "auditEvents",
+    audit_event(
+      "context_pack_requested",
+      "context_pack_request",
+      &request_id,
+      &ceiling,
+      json!({
+        "clientName": client_name,
+        "purpose": purpose.unwrap_or("Answer with user-approved life context"),
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  push_json_array(
+    vault,
+    "auditEvents",
+    audit_event(
+      "context_pack_generated",
+      "context_pack",
+      &pack_id,
+      &max_sensitivity_included,
+      json!({
+        "requestId": request_id,
+        "itemCount": vault
+          .get("contextPacks")
+          .and_then(Value::as_array)
+          .and_then(|packs| packs.first())
+          .and_then(|pack| pack.get("items"))
+          .and_then(Value::as_array)
+          .map(|items| items.len())
+          .unwrap_or(0),
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  Ok((request_id, pack_id))
+}
+
+fn rank_context_facts_in_connection(
+  connection: &Connection,
+  task_text: &str,
+  ceiling: &str,
+  limit: usize,
+) -> Result<Vec<NativeFactSearchResult>, String> {
+  let task_domain = classify_domain(task_text);
+  let lower_task = task_text.to_lowercase();
+  let tokens = search_tokens(task_text);
+  let mut candidates = Vec::<NativeFactSearchResult>::new();
+
+  for fact in search_facts_in_connection(connection, task_text, None, None, 200)? {
+    push_unique_fact(&mut candidates, fact);
+  }
+  for fact in context_candidate_facts_in_connection(connection, task_text)? {
+    push_unique_fact(&mut candidates, fact);
+  }
+
+  let mut scored = candidates
+    .into_iter()
+    .map(|fact| {
+      let haystack = format!("{} {}", fact.fact_text.to_lowercase(), fact.domain.to_lowercase());
+      let token_score = tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count() as i64
+        * 3;
+      let domain_score = if fact.domain == task_domain {
+        4
+      } else if is_stable_background_fact(&fact) {
+        1
+      } else {
+        0
+      };
+      let bridge_score = cross_domain_bridge_score(&lower_task, &fact.domain);
+      let sensitivity_penalty = if sensitivity_rank(&fact.sensitivity) >= sensitivity_rank("sensitive") {
+        -1
+      } else {
+        0
+      };
+      let policy_bonus = if sensitivity_rank(&fact.sensitivity) <= sensitivity_rank(ceiling) {
+        1
+      } else {
+        0
+      };
+      (
+        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus,
+        fact,
+      )
+    })
+    .filter(|(score, _)| *score > 0)
+    .collect::<Vec<_>>();
+
+  scored.sort_by(|(left_score, left_fact), (right_score, right_fact)| {
+    right_score
+      .cmp(left_score)
+      .then_with(|| right_fact.updated_at.cmp(&left_fact.updated_at))
+  });
+  Ok(scored
+    .into_iter()
+    .take(limit)
+    .map(|(_, fact)| fact)
+    .collect())
+}
+
+fn context_candidate_facts_in_connection(
+  connection: &Connection,
+  task_text: &str,
+) -> Result<Vec<NativeFactSearchResult>, String> {
+  let domains = context_candidate_domains(task_text);
+  let domains_sql = domains
+    .iter()
+    .map(|domain| format!("'{domain}'"))
+    .collect::<Vec<_>>()
+    .join(", ");
+  let stable_types_sql = [
+    "identity",
+    "preference",
+    "relationship",
+    "life_event",
+    "goal",
+    "routine",
+    "constraint",
+    "support_need",
+    "place_context",
+    "background_profile",
+  ]
+  .iter()
+  .map(|fact_type| format!("'{fact_type}'"))
+  .collect::<Vec<_>>()
+  .join(", ");
+  let sql = format!(
+    "SELECT
+       id,
+       fact_text,
+       domain,
+       fact_type,
+       source_ids,
+       sensitivity,
+       confidence,
+       status,
+       valid_from,
+       valid_until,
+       due_date,
+       created_at,
+       approved_at,
+       updated_at,
+       0.0 AS rank
+     FROM facts
+     WHERE domain IN ({domains_sql})
+        OR fact_type IN ({stable_types_sql})
+     ORDER BY updated_at DESC
+     LIMIT 300"
+  );
+  let mut statement = connection
+    .prepare(&sql)
+    .map_err(|error| format!("failed to prepare context fact candidates: {error}"))?;
+  let results = statement
+    .query_map([], row_to_native_fact_search_result)
+    .map_err(|error| format!("failed to run context fact candidates: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("failed to collect context fact candidates: {error}"))?;
+  Ok(results)
+}
+
+fn push_unique_fact(facts: &mut Vec<NativeFactSearchResult>, fact: NativeFactSearchResult) {
+  if !facts.iter().any(|existing| existing.id == fact.id) {
+    facts.push(fact);
+  }
+}
+
+fn source_titles_in_connection(
+  connection: &Connection,
+  source_ids: &[String],
+) -> Result<Vec<String>, String> {
+  source_ids
+    .iter()
+    .map(|source_id| {
+      connection
+        .query_row(
+          "SELECT title FROM sources WHERE id = ?1",
+          params![source_id],
+          |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map(|title| title.unwrap_or_else(|| "Unknown source".to_string()))
+        .map_err(|error| format!("failed to read source title {source_id}: {error}"))
+    })
+    .collect()
+}
+
+fn source_snippet_for_fact(
+  connection: &Connection,
+  fact: &NativeFactSearchResult,
+  ceiling: &str,
+) -> Result<Option<Value>, String> {
+  for source_id in &fact.source_ids {
+    let source = connection
+      .query_row(
+        "SELECT id, title, default_sensitivity, deletion_state
+         FROM sources
+         WHERE id = ?1",
+        params![source_id],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+          ))
+        },
+      )
+      .optional()
+      .map_err(|error| format!("failed to read source snippet metadata {source_id}: {error}"))?;
+    let Some((source_id, title, sensitivity, deletion_state)) = source else {
+      continue;
+    };
+    if deletion_state != "active"
+      || sensitivity == "secret_never_send"
+      || sensitivity_rank(&sensitivity) > sensitivity_rank(ceiling)
+    {
+      continue;
+    }
+    return Ok(Some(json!({
+      "id": new_id("snippet"),
+      "sourceId": source_id,
+      "title": title,
+      "text": fact.fact_text,
+      "sensitivity": sensitivity,
+      "reasonIncluded": "Raw Source本文ではなく、承認済みFact本文だけを根拠として含めています。"
+    })));
+  }
+  Ok(None)
+}
+
+fn context_pack_warnings(
+  connection: &Connection,
+  items: &[Value],
+  excluded_items: &[Value],
+) -> Result<Vec<Value>, String> {
+  let mut warnings = Vec::new();
+  let sensitive_ids = items
+    .iter()
+    .filter(|item| {
+      item
+        .get("sensitivity")
+        .and_then(Value::as_str)
+        .map(|sensitivity| sensitivity_rank(sensitivity) >= sensitivity_rank("private_consequential"))
+        .unwrap_or(false)
+    })
+    .filter_map(|item| {
+      item
+        .get("factId")
+        .and_then(Value::as_str)
+        .map(|fact_id| Value::String(fact_id.to_string()))
+    })
+    .collect::<Vec<_>>();
+  if !sensitive_ids.is_empty() {
+    warnings.push(json!({
+      "kind": "sensitive_context",
+      "message": "このContext Packには私的またはセンシティブな背景情報が含まれます。",
+      "relatedIds": sensitive_ids
+    }));
+  }
+
+  let low_confidence_ids = items
+    .iter()
+    .filter(|item| {
+      item
+        .get("confidence")
+        .and_then(Value::as_str)
+        .map(|confidence| confidence == "inferred_and_confirmed")
+        .unwrap_or(false)
+    })
+    .filter_map(|item| {
+      item
+        .get("factId")
+        .and_then(Value::as_str)
+        .map(|fact_id| Value::String(fact_id.to_string()))
+    })
+    .collect::<Vec<_>>();
+  if !low_confidence_ids.is_empty() {
+    warnings.push(json!({
+      "kind": "low_confidence",
+      "message": "一部の背景情報は推定後に確認された情報です。必要ならSourceを確認してください。",
+      "relatedIds": low_confidence_ids
+    }));
+  }
+
+  let expired_ids = excluded_items
+    .iter()
+    .filter(|item| item.get("reason").and_then(Value::as_str) == Some("expired"))
+    .filter_map(|item| {
+      item
+        .get("referencedId")
+        .and_then(Value::as_str)
+        .map(|fact_id| Value::String(fact_id.to_string()))
+    })
+    .collect::<Vec<_>>();
+  if !expired_ids.is_empty() {
+    warnings.push(json!({
+      "kind": "stale_fact",
+      "message": "期限切れまたは古い可能性がある背景情報は除外されました。",
+      "relatedIds": expired_ids
+    }));
+  }
+
+  let policy_limited_ids = excluded_items
+    .iter()
+    .filter(|item| item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy"))
+    .filter_map(|item| {
+      item
+        .get("referencedId")
+        .and_then(Value::as_str)
+        .map(|fact_id| Value::String(fact_id.to_string()))
+    })
+    .collect::<Vec<_>>();
+  if !policy_limited_ids.is_empty() {
+    warnings.push(json!({
+      "kind": "policy_limited",
+      "message": "一部の背景情報はAI接続の感度ポリシーにより除外されました。",
+      "relatedIds": policy_limited_ids
+    }));
+  }
+
+  let mut source_deleted_ids = Vec::new();
+  for fact_id in items
+    .iter()
+    .filter_map(|item| item.get("factId").and_then(Value::as_str))
+  {
+    if fact_has_deleted_source(connection, fact_id)? {
+      source_deleted_ids.push(Value::String(fact_id.to_string()));
+    }
+  }
+  if !source_deleted_ids.is_empty() {
+    warnings.push(json!({
+      "kind": "source_deleted",
+      "message": "根拠Sourceが削除または無効化されたFactがあります。",
+      "relatedIds": source_deleted_ids
+    }));
+  }
+
+  Ok(warnings)
+}
+
+fn fact_has_deleted_source(connection: &Connection, fact_id: &str) -> Result<bool, String> {
+  let source_ids_json = connection
+    .query_row(
+      "SELECT source_ids FROM facts WHERE id = ?1",
+      params![fact_id],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| format!("failed to read fact sources {fact_id}: {error}"))?;
+  let Some(source_ids_json) = source_ids_json else {
+    return Ok(false);
+  };
+  for source_id in parse_json_string_array(source_ids_json) {
+    let deletion_state = connection
+      .query_row(
+        "SELECT deletion_state FROM sources WHERE id = ?1",
+        params![source_id],
+        |row| row.get::<_, String>(0),
+      )
+      .optional()
+      .map_err(|error| format!("failed to read source deletion state: {error}"))?;
+    if deletion_state.as_deref() != Some("active") {
+      return Ok(true);
+    }
+  }
+  Ok(false)
+}
+
+fn search_tokens(text: &str) -> Vec<String> {
+  text
+    .to_lowercase()
+    .split_whitespace()
+    .map(|token| token.trim_matches(|character: char| !character.is_alphanumeric()).to_string())
+    .filter(|token| !token.is_empty())
+    .collect()
+}
+
+fn context_candidate_domains(task_text: &str) -> Vec<&'static str> {
+  let task_domain = classify_domain(task_text);
+  let lower = task_text.to_lowercase();
+  let mut domains = vec![task_domain];
+  if contains_any(&lower, &["job", "work", "employer", "転職", "勤務先", "仕事"]) {
+    domains.extend([
+      "contracts_and_policies",
+      "procedures_and_obligations",
+      "finance_and_benefits",
+    ]);
+  }
+  if contains_any(&lower, &["move", "moving", "address", "引っ越", "住所"]) {
+    domains.extend([
+      "home_and_places",
+      "contracts_and_policies",
+      "procedures_and_obligations",
+      "documents_and_evidence",
+    ]);
+  }
+  let mut deduped = Vec::new();
+  for domain in domains {
+    if !deduped.contains(&domain) {
+      deduped.push(domain);
+    }
+  }
+  deduped
+}
+
+fn is_stable_background_fact(fact: &NativeFactSearchResult) -> bool {
+  [
+    "identity",
+    "preference",
+    "relationship",
+    "life_event",
+    "goal",
+    "routine",
+    "constraint",
+    "support_need",
+    "place_context",
+    "background_profile",
+  ]
+  .contains(&fact.fact_type.as_str())
+    && [
+      "identity_and_profile",
+      "values_goals_and_preferences",
+      "life_events_and_plans",
+      "routines_and_logistics",
+      "home_and_places",
+      "work_and_education",
+      "relationships_and_household",
+      "constraints_and_accessibility",
+    ]
+    .contains(&fact.domain.as_str())
+}
+
+fn classify_domain(text: &str) -> &'static str {
+  let lower = text.to_lowercase();
+  if contains_any(&lower, &["health", "medical", "doctor", "disability", "care", "病院", "健康", "障害", "介護"]) {
+    "health_and_care"
+  } else if contains_any(&lower, &["finance", "benefit", "pension", "tax", "bank", "payment", "money", "給付", "年金", "税", "銀行", "支払"]) {
+    "finance_and_benefits"
+  } else if contains_any(&lower, &["work", "job", "school", "employer", "student", "勤務", "仕事", "学校", "転職", "職場"]) {
+    "work_and_education"
+  } else if contains_any(&lower, &["family", "partner", "child", "household", "家族", "配偶者", "子ども", "世帯"]) {
+    "relationships_and_household"
+  } else if contains_any(&lower, &["home", "address", "lease", "rent", "utility", "housing", "住所", "住居", "賃貸", "家"]) {
+    "home_and_places"
+  } else if contains_any(&lower, &["contract", "policy", "insurance", "warranty", "契約", "保険", "保証"]) {
+    "contracts_and_policies"
+  } else if contains_any(&lower, &["deadline", "submit", "renew", "procedure", "form", "期限", "提出", "更新", "手続"]) {
+    "procedures_and_obligations"
+  } else if contains_any(&lower, &["goal", "priority", "preference", "tone", "目標", "優先", "好み", "口調"]) {
+    "values_goals_and_preferences"
+  } else if contains_any(&lower, &["routine", "schedule", "habit", "commute", "予定", "習慣", "通勤"]) {
+    "routines_and_logistics"
+  } else if contains_any(&lower, &["move", "moving", "travel", "plan", "引っ越", "旅行", "予定", "計画"]) {
+    "life_events_and_plans"
+  } else {
+    "documents_and_evidence"
+  }
+}
+
+fn classify_risk(text: &str) -> &'static str {
+  let sensitivity = detect_sensitivity(text);
+  if sensitivity == "sensitive" || sensitivity == "secret_never_send" {
+    "high"
+  } else if sensitivity == "private_consequential"
+    || contains_any(
+      &text.to_lowercase(),
+      &["contract", "deadline", "benefit", "health", "legal", "money", "契約", "期限", "給付", "健康", "法務", "お金"],
+    )
+  {
+    "medium"
+  } else {
+    "low"
+  }
+}
+
+fn detect_sensitivity(text: &str) -> &'static str {
+  let lower = text.to_lowercase();
+  if contains_any(&lower, &["password", "passcode", "api key", "token", "secret", "private key", "recovery code", "パスワード", "秘密鍵", "my number", "national id", "bank account", "口座番号", "マイナンバー"]) {
+    "secret_never_send"
+  } else if contains_any(&lower, &["health", "medical", "doctor", "diagnosis", "disability", "benefit", "legal", "minor", "病院", "診断", "障害", "給付", "法律", "未成年"]) {
+    "sensitive"
+  } else if contains_any(&lower, &["finance", "tax", "pension", "insurance", "contract", "rent", "salary", "payment", "税", "年金", "保険", "契約", "家賃", "給与", "支払"]) {
+    "private_consequential"
+  } else if contains_any(&lower, &["name", "address", "phone", "email", "family", "名前", "住所", "電話", "メール", "家族"]) {
+    "personal"
+  } else {
+    "public"
+  }
+}
+
+fn cross_domain_bridge_score(task: &str, domain: &str) -> i64 {
+  if contains_any(task, &["job", "work", "employer", "転職", "勤務先", "仕事"])
+    && ["contracts_and_policies", "procedures_and_obligations", "finance_and_benefits"].contains(&domain)
+  {
+    return 2;
+  }
+  if contains_any(task, &["move", "moving", "address", "引っ越", "住所"])
+    && [
+      "home_and_places",
+      "contracts_and_policies",
+      "procedures_and_obligations",
+      "documents_and_evidence",
+    ]
+    .contains(&domain)
+  {
+    return 2;
+  }
+  0
+}
+
+fn sensitivity_rank(sensitivity: &str) -> i64 {
+  match sensitivity {
+    "public" => 0,
+    "personal" => 1,
+    "private_consequential" => 2,
+    "sensitive" => 3,
+    "secret_never_send" => 4,
+    _ => 4,
+  }
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+  needles.iter().any(|needle| text.contains(needle))
+}
+
+fn is_expired(value: &str) -> bool {
+  if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
+    return datetime.with_timezone(&Utc) <= Utc::now();
+  }
+  if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+    return date < Utc::now().date_naive();
+  }
+  false
+}
+
+fn policy_ceiling_for_client(vault: &Value, client_id: &str) -> String {
+  value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .map(|policy| str_field(policy, "sensitivityCeiling"))
+    .filter(|ceiling| !ceiling.is_empty())
+    .unwrap_or_else(|| "private_consequential".to_string())
+}
+
+fn push_json_array(value: &mut Value, key: &str, item: Value) {
+  if !value.get(key).map(Value::is_array).unwrap_or(false) {
+    value[key] = json!([]);
+  }
+  if let Some(items) = value.get_mut(key).and_then(Value::as_array_mut) {
+    items.insert(0, item);
+  }
+}
+
+fn touch_connector_in_vault(vault: &mut Value, client_id: &str, now: &str) {
+  let Some(sessions) = vault.get_mut("connectorSessions").and_then(Value::as_array_mut) else {
+    return;
+  };
+  for session in sessions {
+    if str_field(session, "id") != client_id {
+      continue;
+    }
+    let status = str_field(session, "status");
+    if status == "available" || status == "needs_pairing" {
+      session["status"] = Value::String("connected".to_string());
+    }
+    session["lastUsedAt"] = Value::String(now.to_string());
+  }
+}
+
+fn audit_event(
+  event_type: &str,
+  subject_type: &str,
+  subject_id: &str,
+  sensitivity: &str,
+  metadata: Value,
+) -> Value {
+  json!({
+    "id": new_id("audit"),
+    "eventType": event_type,
+    "actor": "vault_core",
+    "subjectType": subject_type,
+    "subjectId": subject_id,
+    "occurredAt": now_iso(),
+    "sensitivity": sensitivity,
+    "metadata": metadata
+  })
+}
+
+fn empty_vault_json() -> Value {
+  json!({
+    "version": 2,
+    "sources": [],
+    "candidates": [],
+    "facts": [],
+    "accessPolicies": [],
+    "passiveCaptureSettings": {
+      "enabled": false,
+      "retentionDays": 14,
+      "allowedSites": ["chat.openai.com", "chatgpt.com", "claude.ai", "gemini.google.com"]
+    },
+    "passiveCaptureEvents": [],
+    "connectorSessions": [],
+    "contextPackRequests": [],
+    "contextPacks": [],
+    "auditEvents": []
+  })
+}
+
+fn new_id(prefix: &str) -> String {
+  let nanos = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_nanos())
+    .unwrap_or_default();
+  format!("{prefix}_{nanos}")
+}
+
+fn now_iso() -> String {
+  Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn minutes_from_now(minutes: i64) -> String {
+  (Utc::now() + chrono::Duration::minutes(minutes))
+    .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn random_local_token() -> String {
@@ -1623,6 +2409,45 @@ fn search_vault_facts(
 }
 
 #[tauri::command]
+fn create_native_context_pack_request(
+  app: AppHandle,
+  client_id: String,
+  client_name: String,
+  task_text: String,
+  purpose: Option<String>,
+  sensitivity_ceiling: Option<String>,
+  approval_mode: Option<String>,
+) -> Result<NativeContextPackBuildResult, String> {
+  let mut connection = open_vault_db(&app)?;
+  let snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+  let mut vault = snapshot
+    .payload
+    .as_deref()
+    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+    .unwrap_or_else(empty_vault_json);
+  let (request_id, pack_id) = create_native_context_pack_request_in_connection(
+    &connection,
+    &mut vault,
+    &client_id,
+    &client_name,
+    &task_text,
+    purpose.as_deref(),
+    sensitivity_ceiling.as_deref(),
+    approval_mode.as_deref(),
+  )?;
+  let payload = vault.to_string();
+  let save_result = save_vault_state_payload(&mut connection, &payload, None)?;
+  let saved_snapshot = load_vault_state_snapshot_from_connection(&connection)?;
+  Ok(NativeContextPackBuildResult {
+    payload: saved_snapshot.payload.unwrap_or(payload),
+    updated_at: save_result.updated_at,
+    request_id,
+    pack_id: Some(pack_id),
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -1737,6 +2562,7 @@ pub fn run() {
       save_vault_state,
       vault_storage_path,
       search_vault_facts,
+      create_native_context_pack_request,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -2060,6 +2886,221 @@ mod tests {
 
     assert!(!result.conflict);
     assert_eq!(Some(projection), result.updated_at);
+  }
+
+  #[test]
+  fn native_context_pack_uses_approved_facts_and_fact_only_snippets() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [
+        {
+          "id": "src_policy",
+          "kind": "document",
+          "title": "Insurance PDF",
+          "origin": "user_upload",
+          "body": "RAW_POLICY_BODY account number 123456 should never be copied.",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "capturedAt": "2026-06-12T00:00:00.000Z",
+          "defaultSensitivity": "personal",
+          "processingStatus": "ready",
+          "deletionState": "active"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "cand_unapproved",
+          "sourceIds": ["src_policy"],
+          "proposedFactText": "Unapproved candidate text must not become trusted context.",
+          "domain": "contracts_and_policies",
+          "candidateType": "note",
+          "detectedSensitivity": "personal",
+          "confidence": "high",
+          "status": "new",
+          "createdAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact_insurance",
+          "factText": "Insurance policy renews on 2026-09-01.",
+          "domain": "contracts_and_policies",
+          "factType": "deadline",
+          "sourceIds": ["src_policy"],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_chatgpt",
+          "clientId": "conn_chatgpt",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["contracts_and_policies"],
+          "sensitivityCeiling": "private_consequential",
+          "requiresApprovalAbove": "personal",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    let (request_id, pack_id) = create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I check for insurance renewal?",
+      Some("普段使うAIへの回答文脈"),
+      None,
+      Some("explicit_sensitive"),
+    )
+    .expect("native context pack");
+
+    let request = vault
+      .get("contextPackRequests")
+      .and_then(Value::as_array)
+      .and_then(|requests| requests.first())
+      .expect("request");
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    let snippets = pack
+      .get("sourceSnippets")
+      .and_then(Value::as_array)
+      .expect("snippets");
+
+    assert_eq!(request.get("id").and_then(Value::as_str), Some(request_id.as_str()));
+    assert_eq!(pack.get("id").and_then(Value::as_str), Some(pack_id.as_str()));
+    assert_eq!(
+      request.get("status").and_then(Value::as_str),
+      Some("pending_user_confirmation")
+    );
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+      items[0].get("factId").and_then(Value::as_str),
+      Some("fact_insurance")
+    );
+    assert!(
+      items
+        .iter()
+        .all(|item| item.get("itemText").and_then(Value::as_str) != Some("Unapproved candidate text must not become trusted context."))
+    );
+    assert_eq!(snippets.len(), 1);
+    assert_eq!(
+      snippets[0].get("text").and_then(Value::as_str),
+      Some("Insurance policy renews on 2026-09-01.")
+    );
+    assert!(
+      !snippets[0]
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .contains("RAW_POLICY_BODY")
+    );
+  }
+
+  #[test]
+  fn native_context_pack_excludes_facts_above_policy_ceiling() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_health",
+          "factText": "Doctor follow-up is scheduled for next month.",
+          "domain": "health_and_care",
+          "factType": "support_need",
+          "sourceIds": [],
+          "sensitivity": "sensitive",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_copy",
+          "clientId": "conn_copy_fallback",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["health_and_care"],
+          "sensitivityCeiling": "personal",
+          "requiresApprovalAbove": "public",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_copy_fallback",
+      "Copy Context Pack",
+      "Help me prepare for the doctor follow-up.",
+      None,
+      None,
+      Some("explicit_sensitive"),
+    )
+    .expect("native context pack");
+
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    let excluded = pack
+      .get("excludedItems")
+      .and_then(Value::as_array)
+      .expect("excluded");
+    let warnings = pack.get("warnings").and_then(Value::as_array).expect("warnings");
+
+    assert!(items.is_empty());
+    assert!(excluded.iter().any(|item| {
+      item.get("referencedId").and_then(Value::as_str) == Some("fact_health")
+        && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
+    }));
+    assert!(warnings.iter().any(|warning| {
+      warning.get("kind").and_then(Value::as_str) == Some("policy_limited")
+    }));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("not_required")
+    );
   }
 
   #[test]
