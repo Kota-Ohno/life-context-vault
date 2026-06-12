@@ -149,6 +149,8 @@ export async function detectNativeLegacyOfficeProviderCandidates(): Promise<Nati
   return invoke<NativeLegacyOfficeProviderCandidate[]>("detect_legacy_office_provider_candidates");
 }
 
+export type AiAccessRelayMode = "local_managed" | "hosted_agent" | "local_external" | "offline" | "unknown";
+
 export interface AiAccessServiceStatus {
   managedByApp: boolean;
   relayManagedRunning: boolean;
@@ -158,6 +160,7 @@ export interface AiAccessServiceStatus {
   relayUrl: string;
   mcpServerUrl: string;
   relayStateStatusUrl: string;
+  relayMode: AiAccessRelayMode;
   pairingCode: string | null;
   lastError: string | null;
 }
@@ -422,6 +425,14 @@ export async function startAiAccessServices(): Promise<AiAccessServiceStatus | n
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<AiAccessServiceStatus>("start_ai_access_services");
+}
+
+export async function startAiAccessAgentForRelay(agentWebsocketUrl: string): Promise<AiAccessServiceStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<AiAccessServiceStatus>("start_ai_access_agent_for_relay", {
+    agentWebsocketUrl
+  });
 }
 
 export async function stopAiAccessServices(): Promise<AiAccessServiceStatus | null> {

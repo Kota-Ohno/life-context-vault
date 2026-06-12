@@ -52,6 +52,7 @@ struct AiAccessSupervisor {
   relay: Option<Child>,
   agent: Option<Child>,
   pairing_code: Option<String>,
+  external_relay_base_url: Option<String>,
   relay_token: String,
   handoff_secret: String,
   last_error: Option<String>,
@@ -63,6 +64,7 @@ impl Default for AiAccessSupervisor {
       relay: None,
       agent: None,
       pairing_code: None,
+      external_relay_base_url: None,
       relay_token: random_local_token(),
       handoff_secret: random_local_token(),
       last_error: None,
@@ -103,6 +105,7 @@ struct AiAccessServiceStatus {
   relay_url: String,
   mcp_server_url: String,
   relay_state_status_url: String,
+  relay_mode: String,
   pairing_code: Option<String>,
   last_error: Option<String>,
 }
@@ -6615,18 +6618,84 @@ fn should_block_external_relay_start(
   relay_reachable && !relay_managed_running && !agent_connected
 }
 
+fn validate_agent_websocket_url(url: &str) -> Result<String, String> {
+  let trimmed = url.trim();
+  if trimmed.len() > 2048 {
+    return Err("Agent WebSocket URL is too long.".to_string());
+  }
+  if trimmed.chars().any(char::is_whitespace) {
+    return Err("Agent WebSocket URL must not include whitespace.".to_string());
+  }
+  let rest = trimmed
+    .strip_prefix("wss://")
+    .ok_or_else(|| "Hosted Agent WebSocket URL must start with wss://.".to_string())?;
+  if trimmed.contains('#') {
+    return Err("Agent WebSocket URL must not include a fragment.".to_string());
+  }
+  let (authority, path_and_query) = rest
+    .split_once('/')
+    .ok_or_else(|| "Agent WebSocket URL must include /agent/ws.".to_string())?;
+  if authority.is_empty() || authority.contains('@') {
+    return Err("Agent WebSocket URL must include a relay host and no userinfo.".to_string());
+  }
+  let (path, query) = path_and_query
+    .split_once('?')
+    .ok_or_else(|| "Agent WebSocket URL must include a pairing_code query parameter.".to_string())?;
+  if path != "agent/ws" {
+    return Err("Agent WebSocket URL must point exactly to /agent/ws.".to_string());
+  }
+  let has_pairing_code = query
+    .split('&')
+    .any(|part| part.strip_prefix("pairing_code=").is_some_and(|value| !value.is_empty()));
+  if !has_pairing_code {
+    return Err("Agent WebSocket URL must include a non-empty pairing_code query parameter.".to_string());
+  }
+  Ok(trimmed.to_string())
+}
+
+fn relay_base_url_from_agent_websocket_url(url: &str) -> Option<String> {
+  let rest = if let Some(rest) = url.strip_prefix("wss://") {
+    rest
+  } else {
+    return None;
+  };
+  let authority = rest.split('/').next()?.trim();
+  if authority.is_empty() || authority.contains('@') {
+    None
+  } else {
+    Some(format!("https://{authority}"))
+  }
+}
+
 fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStatus {
   let relay_managed_running = refresh_child(&mut supervisor.relay);
   let agent_managed_running = refresh_child(&mut supervisor.agent);
+  let local_relay_reachable = relay_reachable();
+  let local_agent_connected = agent_connected();
+  let external_base_url = supervisor.external_relay_base_url.clone();
+  let using_external_relay = external_base_url.is_some() && !relay_managed_running;
+  let relay_url = external_base_url
+    .clone()
+    .unwrap_or_else(|| LOCAL_RELAY_BASE_URL.to_string());
+  let relay_mode = if relay_managed_running {
+    "local_managed"
+  } else if using_external_relay {
+    "hosted_agent"
+  } else if local_relay_reachable {
+    "local_external"
+  } else {
+    "offline"
+  };
   AiAccessServiceStatus {
     managed_by_app: true,
     relay_managed_running,
     agent_managed_running,
-    relay_reachable: relay_reachable(),
-    agent_connected: agent_connected(),
-    relay_url: LOCAL_RELAY_BASE_URL.to_string(),
-    mcp_server_url: format!("{LOCAL_RELAY_BASE_URL}/mcp"),
-    relay_state_status_url: format!("{LOCAL_RELAY_BASE_URL}/relay/state"),
+    relay_reachable: if using_external_relay { false } else { local_relay_reachable },
+    agent_connected: if using_external_relay { false } else { local_agent_connected },
+    relay_url: relay_url.clone(),
+    mcp_server_url: format!("{relay_url}/mcp"),
+    relay_state_status_url: format!("{relay_url}/relay/state"),
+    relay_mode: relay_mode.to_string(),
     pairing_code: supervisor.pairing_code.clone(),
     last_error: supervisor.last_error.clone(),
   }
@@ -6640,6 +6709,7 @@ fn stop_managed_ai_access(app: &AppHandle) {
   stop_child(&mut supervisor.agent);
   stop_child(&mut supervisor.relay);
   supervisor.pairing_code = None;
+  supervisor.external_relay_base_url = None;
 }
 
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
@@ -7913,6 +7983,7 @@ fn start_ai_access_services(
   let mut supervisor = supervisor
     .lock()
     .map_err(|_| "failed to lock AI access supervisor".to_string())?;
+  supervisor.external_relay_base_url = None;
 
   let relay_managed_running = refresh_child(&mut supervisor.relay);
   let relay_is_reachable = relay_reachable();
@@ -7975,6 +8046,42 @@ fn start_ai_access_services(
 }
 
 #[tauri::command]
+fn start_ai_access_agent_for_relay(
+  app: AppHandle,
+  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
+  agent_websocket_url: String,
+) -> Result<AiAccessServiceStatus, String> {
+  let validated_url = validate_agent_websocket_url(&agent_websocket_url)?;
+  let relay_base_url = relay_base_url_from_agent_websocket_url(&validated_url)
+    .ok_or_else(|| "Agent WebSocket URL did not include a relay host.".to_string())?;
+  let mut supervisor = supervisor
+    .lock()
+    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
+
+  stop_child(&mut supervisor.agent);
+  stop_child(&mut supervisor.relay);
+  supervisor.pairing_code = None;
+  supervisor.external_relay_base_url = None;
+  let agent = spawn_agent(&app, &validated_url).map_err(|error| {
+    supervisor.last_error = Some(error.clone());
+    error
+  })?;
+  supervisor.agent = Some(agent);
+
+  thread::sleep(Duration::from_millis(150));
+  if !refresh_child(&mut supervisor.agent) {
+    let error = "hosted relay agent exited immediately; check the pairing URL and relay TLS configuration".to_string();
+    supervisor.external_relay_base_url = None;
+    supervisor.last_error = Some(error.clone());
+    return Err(error);
+  }
+
+  supervisor.external_relay_base_url = Some(relay_base_url);
+  supervisor.last_error = None;
+  Ok(supervisor_status(&mut supervisor))
+}
+
+#[tauri::command]
 fn stop_ai_access_services(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -7984,6 +8091,7 @@ fn stop_ai_access_services(
   stop_child(&mut supervisor.agent);
   stop_child(&mut supervisor.relay);
   supervisor.pairing_code = None;
+  supervisor.external_relay_base_url = None;
   supervisor.last_error = None;
   Ok(supervisor_status(&mut supervisor))
 }
@@ -8044,6 +8152,7 @@ pub fn run() {
       update_native_fact_metadata,
       ai_access_service_status,
       start_ai_access_services,
+      start_ai_access_agent_for_relay,
       stop_ai_access_services,
       install_claude_desktop_config,
       claude_desktop_config_template,
@@ -11376,6 +11485,25 @@ mod tests {
     assert!(!should_block_external_relay_start(true, true, false));
     assert!(!should_block_external_relay_start(true, false, true));
     assert!(!should_block_external_relay_start(false, false, false));
+  }
+
+  #[test]
+  fn hosted_agent_websocket_url_validation_accepts_wss_pairing_urls() {
+    let url = "wss://relay.example.com/agent/ws?pairing_code=secret";
+    assert_eq!(validate_agent_websocket_url(url).expect("valid wss url"), url);
+    assert_eq!(
+      relay_base_url_from_agent_websocket_url(url).as_deref(),
+      Some("https://relay.example.com")
+    );
+    assert!(validate_agent_websocket_url("ws://relay.example.com/agent/ws?pairing_code=secret").is_err());
+    assert!(validate_agent_websocket_url("https://relay.example.com/agent/ws?pairing_code=secret").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws").is_err());
+    assert!(validate_agent_websocket_url("wss://user@relay.example.com/agent/ws?pairing_code=secret").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/prefix/agent/ws?pairing_code=secret").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws-extra?pairing_code=secret").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=secret#fragment").is_err());
+    assert!(validate_agent_websocket_url("wss://relay.example.com/other?pairing_code=secret").is_err());
   }
 
   #[test]

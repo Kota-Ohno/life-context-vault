@@ -21,6 +21,8 @@ npm run agent:build
 
 For hosted container deployment, see [Hosted Relay Deployment](./hosted-relay-deployment.md).
 
+For hosted use from the desktop app, the Control Center can now start the local Agent from a hosted pairing URL. Generate a pairing session on the hosted relay, copy the returned `agentWebSocketUrl`, and paste it into **Connections -> Hosted Relay Agent**. Hosted URLs must use the exact WSS path `wss://.../agent/ws?pairing_code=...`; `lcv-agent` is built with TLS support for that path. The Control Center shows the Agent process as launched, but pairing readiness should be confirmed from the hosted relay status because the app does not treat process liveness as WebSocket ACK.
+
 ## App-Managed Service
 
 In the Tauri desktop app, open **Connections** and use **Start AI Access**. The app will:

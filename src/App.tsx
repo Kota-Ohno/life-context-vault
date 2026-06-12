@@ -59,6 +59,7 @@ import {
   loadNativeVaultSnapshot,
   saveNativeVault,
   searchNativeFacts,
+  startAiAccessAgentForRelay,
   startAiAccessServices,
   stopAiAccessServices,
   updateNativeAccessPolicy,
@@ -281,6 +282,7 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
+  const [hostedAgentWebsocketUrl, setHostedAgentWebsocketUrl] = useState("");
   const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
     useState<NativeDocumentExtractionCapabilities | null>(null);
   const [ocrProviderCandidates, setOcrProviderCandidates] = useState<NativeOcrProviderCandidate[]>([]);
@@ -1592,6 +1594,30 @@ export function App() {
     }
   }
 
+  async function startHostedRelayAgent() {
+    const trimmedUrl = hostedAgentWebsocketUrl.trim();
+    if (!trimmedUrl || !hostedRelayMcpUrlFromAgentWs(trimmedUrl)) {
+      setNotice("Hosted Relayで発行したwss://のAgent WebSocket URLを入力してください。");
+      return;
+    }
+    setAiServiceBusy(true);
+    try {
+      const status = await startAiAccessAgentForRelay(trimmedUrl);
+      setAiServiceStatus(status);
+      setHostedAgentWebsocketUrl("");
+      setNotice(
+        status?.agentManagedRunning
+          ? "Hosted RelayへLocal Agent processを起動しました。Relay側でpairing完了を確認してください。"
+          : "Hosted Relay Agentの接続を開始しました。"
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Hosted Relay Agentの接続に失敗しました。");
+      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+    } finally {
+      setAiServiceBusy(false);
+    }
+  }
+
   async function stopAiAccess() {
     setAiServiceBusy(true);
     try {
@@ -1851,8 +1877,11 @@ export function App() {
             claudeInstallResult={claudeInstallResult}
             claudeConfig={claudeConfig}
             startAiAccess={startAiAccess}
+            startHostedRelayAgent={startHostedRelayAgent}
             stopAiAccess={stopAiAccess}
             refreshAiAccess={refreshAiAccess}
+            hostedAgentWebsocketUrl={hostedAgentWebsocketUrl}
+            setHostedAgentWebsocketUrl={setHostedAgentWebsocketUrl}
             refreshLoginItem={refreshLoginItem}
             enableLoginItem={enableLoginItem}
             disableLoginItem={disableLoginItem}
@@ -2801,8 +2830,11 @@ function ConnectionsView({
   claudeInstallResult,
   claudeConfig,
   startAiAccess,
+  startHostedRelayAgent,
   stopAiAccess,
   refreshAiAccess,
+  hostedAgentWebsocketUrl,
+  setHostedAgentWebsocketUrl,
   refreshLoginItem,
   enableLoginItem,
   disableLoginItem,
@@ -2844,8 +2876,11 @@ function ConnectionsView({
   claudeInstallResult: ClaudeDesktopConfigInstallResult | null;
   claudeConfig: string;
   startAiAccess: () => void;
+  startHostedRelayAgent: () => void;
   stopAiAccess: () => void;
   refreshAiAccess: () => void;
+  hostedAgentWebsocketUrl: string;
+  setHostedAgentWebsocketUrl: (value: string) => void;
   refreshLoginItem: () => void;
   enableLoginItem: () => void;
   disableLoginItem: () => void;
@@ -2868,6 +2903,11 @@ function ConnectionsView({
   const aiAccessChecklist = aiAccessChecklistItems(aiServiceStatus, nativePath);
   const mcpEndpoint = aiServiceStatus?.mcpServerUrl ?? localRelayUrl;
   const relayUsesLocalhost = isLocalhostUrl(mcpEndpoint);
+  const hostedRelayMcpPreview = hostedRelayMcpUrlFromAgentWs(hostedAgentWebsocketUrl);
+  const hostedRelayActive = aiServiceStatus?.relayMode === "hosted_agent";
+  const webMcpEndpoint = hostedRelayMcpPreview ?? (relayUsesLocalhost ? null : mcpEndpoint);
+  const webConnectorInfo = webMcpEndpoint ? makeRemoteConnectorInfo(webMcpEndpoint) : null;
+  const currentConnectorInfo = makeRemoteConnectorInfo(mcpEndpoint);
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
   const recentCaptures = [...passiveCaptureEvents]
     .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
@@ -2968,27 +3008,40 @@ function ConnectionsView({
           <Plug size={18} />
         </div>
         <div className="connection-wizard-grid">
-          <article className={relayUsesLocalhost ? "connection-wizard-card attention" : "connection-wizard-card ready"}>
+          <article className={webConnectorInfo ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
             <div className="wizard-card-heading">
               <Radio size={18} />
               <div>
                 <strong>ChatGPT / Claude Web</strong>
-                <span>{relayUsesLocalhost ? "Hosted HTTPS Relayが必要です" : "Remote MCPで接続できます"}</span>
+                <span>
+                  {webMcpEndpoint
+                    ? hostedRelayActive
+                      ? "Hosted Relayを登録できます"
+                      : "Remote MCPで接続できます"
+                    : "Hosted HTTPS Relayを先に用意します"}
+                </span>
               </div>
             </div>
             <p>
-              Web上のAIはこのMacのlocalhostへ直接アクセスできません。公開HTTPSのRelayを用意し、このControl Centerで承認した短命Context Packだけを返します。
+              Web上のAIはこのMacのlocalhostへ直接アクセスできません。下のHosted Relay Agentでこの端末をpairingし、AIには公開HTTPSのMCP URLだけを登録します。
             </p>
             <div className="service-actions">
               <button
                 className="secondary-button"
-                onClick={() => copyText(JSON.stringify(makeRemoteConnectorInfo(), null, 2), "Remote MCP connector情報をコピーしました。")}
+                disabled={!webConnectorInfo}
+                onClick={() => {
+                  if (!webConnectorInfo) return;
+                  copyText(JSON.stringify(webConnectorInfo, null, 2), "Web AI用のRemote MCP connector情報をコピーしました。");
+                }}
                 type="button"
               >
                 <Clipboard size={16} />
-                接続情報をコピー
+                Web AI用接続情報をコピー
               </button>
             </div>
+            {!webConnectorInfo ? (
+              <p className="muted">Hosted RelayのAgent WebSocket URLを貼ると、ChatGPT/Claudeへ登録するMCP URLを確認できます。</p>
+            ) : null}
           </article>
           <article className={nativePath ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
             <div className="wizard-card-heading">
@@ -3054,6 +3107,111 @@ function ConnectionsView({
         </div>
       </div>
 
+      <div className="panel wide hosted-relay-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Hosted Relay Agent</p>
+            <h3>ChatGPT / Claude Web用の公開Relayへ接続</h3>
+          </div>
+          <Radio size={18} />
+        </div>
+        <div className="hosted-relay-grid">
+          <div className="hosted-relay-copy">
+            <div className="trust-note">
+              <ShieldCheck size={16} />
+              <span>
+                Hosted Relayが発行した短命Agent WebSocket URLだけを使います。URLは保存せず、Vault本体・Raw Source・未承認候補はRelayへ置きません。
+              </span>
+            </div>
+            <div className="hosted-relay-steps" aria-label="Hosted Relay setup steps">
+              <div>
+                <Badge>1</Badge>
+                <span>Relayで短命URLを発行</span>
+              </div>
+              <div>
+                <Badge>2</Badge>
+                <span>この端末のAgentを起動</span>
+              </div>
+              <div>
+                <Badge>3</Badge>
+                <span>AIへMCP URLを登録</span>
+              </div>
+            </div>
+            <Input
+              label="Agent WebSocket URL"
+              value={hostedAgentWebsocketUrl}
+              onChange={setHostedAgentWebsocketUrl}
+              placeholder="wss://relay.example.com/agent/ws?pairing_code=..."
+              type="password"
+              autoComplete="off"
+            />
+            {hostedRelayMcpPreview ? (
+              <div className="relay-preview">
+                <Metric label="AIへ登録するMCP URL" value={hostedRelayMcpPreview} />
+                <button
+                  className="secondary-button"
+                  onClick={() => copyText(hostedRelayMcpPreview, "Hosted Relay MCP URLをコピーしました。")}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  MCP URLをコピー
+                </button>
+              </div>
+            ) : (
+              <p className="muted">Hosted Relayで発行したAgent WebSocket URLを貼り付けます。</p>
+            )}
+            <div className="hosted-relay-boundary">
+              <div>
+                <span>この端末に保存</span>
+                <strong>Sources / Candidates / Approved Facts</strong>
+              </div>
+              <div>
+                <span>AIへ送信</span>
+                <strong>承認した短命Context Packのみ</strong>
+              </div>
+              <div>
+                <span>Relayに残る</span>
+                <strong>request metadataのみ</strong>
+              </div>
+            </div>
+            <div className="service-actions">
+              <button
+                className="primary-button"
+                disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}
+                onClick={startHostedRelayAgent}
+                type="button"
+              >
+                <Plug size={16} />
+                Hosted RelayへAgent接続
+              </button>
+            </div>
+            <details className="advanced-panel hosted-relay-advanced">
+              <summary>self-host用pairingコマンド</summary>
+              <pre className="code-box">{makeHostedPairingCurlTemplate()}</pre>
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  copyText(makeHostedPairingCurlTemplate(), "Hosted Relay pairingコマンドをコピーしました。")
+                }
+                type="button"
+              >
+                <Clipboard size={16} />
+                pairingコマンドをコピー
+              </button>
+            </details>
+          </div>
+          <div className="hosted-relay-status">
+            <Metric label="現在のRelay" value={aiServiceStatus?.relayUrl ?? "未接続"} />
+            <Metric label="Mode" value={serviceManagedCopy(aiServiceStatus)} />
+            <Metric
+              label="Agent process"
+              value={hostedRelayActive ? (aiServiceStatus?.agentManagedRunning ? "running" : "stopped") : "not hosted"}
+            />
+            <Metric label="Pairing" value={hostedRelayActive ? "Relay側で確認" : "未接続"} />
+          </div>
+        </div>
+      </div>
+
       <div className="panel wide ai-access-map">
         <div className="panel-heading">
           <div>
@@ -3077,7 +3235,7 @@ function ConnectionsView({
               </button>
               <button
                 className="secondary-button"
-                onClick={() => copyText(JSON.stringify(makeRemoteConnectorInfo(), null, 2), "Remote MCP connector情報をコピーしました。")}
+                onClick={() => copyText(JSON.stringify(currentConnectorInfo, null, 2), "Remote MCP connector情報をコピーしました。")}
                 type="button"
               >
                 <Clipboard size={16} />
@@ -3527,7 +3685,7 @@ function ConnectionsView({
             <div className="setup-step">
               <Badge>OAuth</Badge>
               <strong>ChatGPT / Claude connectorへ渡すURL</strong>
-              <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(), null, 2)}</pre>
+              <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(localRelayUrl), null, 2)}</pre>
             </div>
             <div className="setup-step">
               <Badge>Check</Badge>
@@ -4956,13 +5114,15 @@ function Input({
   value,
   onChange,
   placeholder,
-  type = "text"
+  type = "text",
+  autoComplete
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   type?: string;
+  autoComplete?: string;
 }) {
   const inputId = useId();
 
@@ -4975,6 +5135,7 @@ function Input({
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         type={type}
+        autoComplete={autoComplete}
       />
     </div>
   );
@@ -5613,6 +5774,7 @@ function connectionCopy(connector: ConnectorSession): string {
 
 function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
   if (!status) return "desktop only";
+  if (status.relayMode === "hosted_agent") return status.agentManagedRunning ? "hosted process" : "hosted stopped";
   if (status.relayManagedRunning && status.agentManagedRunning) return "relay + agent";
   if (status.relayManagedRunning) return "relay";
   if (status.agentManagedRunning) return "agent";
@@ -5638,6 +5800,26 @@ function aiAccessReadinessCopy(
       detail:
         "Vault本体とAgentはローカルで動く前提です。Desktop appを開くと、RelayとAgentをここから起動できます。",
       tone: "neutral"
+    };
+  }
+  if (status?.relayMode === "hosted_agent" && status.agentManagedRunning) {
+    return {
+      badge: "Pairing check",
+      title: "Hosted RelayへAgent processを起動しました",
+      body: "外部Relayのpairing完了はRelay側の状態で確認します。確認前はReady扱いにしません。",
+      detail:
+        "Relayは短命Context Packの受け渡しだけを扱います。Vault本文、Raw Source、未承認候補はHosted Relayへ保存しません。",
+      tone: "attention"
+    };
+  }
+  if (status?.relayMode === "hosted_agent") {
+    return {
+      badge: "Hosted stopped",
+      title: "Hosted RelayのAgent processが停止しています",
+      body: "短命Agent WebSocket URLを再発行して、この端末のAgentをもう一度起動してください。",
+      detail:
+        "pairing URLは保存しません。Hosted Relayで新しいURLを発行してから接続します。",
+      tone: "attention"
     };
   }
   if (status?.agentConnected) {
@@ -5694,17 +5876,21 @@ function aiAccessChecklistItems(
     },
     {
       label: "Relay endpoint",
-      detail: status?.relayReachable
+      detail: status?.relayMode === "hosted_agent"
+        ? "Hosted HTTPS RelayのMCP endpointをAIへ登録できます。pairing状態はRelay側で確認します。"
+        : status?.relayReachable
         ? "Remote MCPのHTTPS/HTTP入口が応答しています。"
         : "Start AI AccessでMCP endpointを起動します。",
-      state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
+      state: status?.relayMode === "hosted_agent" ? "pending" : status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
     },
     {
       label: "Local Agent",
-      detail: status?.agentConnected
+      detail: status?.relayMode === "hosted_agent"
+        ? "この端末のAgent processを起動しています。WebSocket pairing ACKはRelay側で確認します。"
+        : status?.agentConnected
         ? "Vault検索とContext Pack生成をローカルで実行できます。"
         : "Agent接続後にAIからの要求をVault Coreへ渡せます。",
-      state: status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
+      state: status?.relayMode === "hosted_agent" ? "pending" : status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
     },
     {
       label: "Streamable HTTP",
@@ -5760,6 +5946,15 @@ function makePairingCommand(): string {
   return `curl -s -X POST ${localRelayBaseUrl}/pairing/start`;
 }
 
+function makeHostedPairingCurlTemplate(): string {
+  return [
+    "curl -fsS",
+    "  -H 'Authorization: Bearer <LCV_RELAY_ADMIN_TOKEN>'",
+    "  -X POST",
+    "  https://relay.example.com/pairing/start"
+  ].join(" \\\n");
+}
+
 function makeRelayHealthCheckCommand(): string {
   return `curl -fsS ${localRelayBaseUrl}/health`;
 }
@@ -5791,6 +5986,25 @@ function makeRelayStatePath(nativePath: string | null): string {
   return "$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json";
 }
 
+function hostedRelayMcpUrlFromAgentWs(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "wss:") return null;
+    if (url.username || url.password || url.hash) return null;
+    if (url.pathname !== "/agent/ws") return null;
+    if (!url.searchParams.get("pairing_code")) return null;
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.pathname = "/mcp";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function makeAgentCommand(nativePath: string | null): string {
   const vaultPath =
     nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3";
@@ -5802,13 +6016,14 @@ function makeAgentCommand(nativePath: string | null): string {
   ].join(" ");
 }
 
-function makeRemoteConnectorInfo() {
+function makeRemoteConnectorInfo(mcpServerUrl: string) {
+  const baseUrl = relayBaseUrlFromMcpUrl(mcpServerUrl);
   return {
-    mcpServerUrl: localRelayUrl,
-    authorizationServerMetadata: `${localRelayBaseUrl}/.well-known/oauth-authorization-server`,
-    protectedResourceMetadata: `${localRelayBaseUrl}/.well-known/oauth-protected-resource`,
-    dynamicClientRegistration: `${localRelayBaseUrl}/oauth/register`,
-    relayStateStatus: `${localRelayBaseUrl}/relay/state`,
+    mcpServerUrl,
+    authorizationServerMetadata: `${baseUrl}/.well-known/oauth-authorization-server`,
+    protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
+    dynamicClientRegistration: `${baseUrl}/oauth/register`,
+    relayStateStatus: `${baseUrl}/relay/state`,
     scopes: [
       "context_pack.request",
       "memory.propose",
@@ -5816,6 +6031,18 @@ function makeRemoteConnectorInfo() {
       "request.status"
     ]
   };
+}
+
+function relayBaseUrlFromMcpUrl(mcpServerUrl: string): string {
+  try {
+    const url = new URL(mcpServerUrl);
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return localRelayBaseUrl;
+  }
 }
 
 function mergeVaultStates(externalState: VaultState, localState: VaultState): VaultState {

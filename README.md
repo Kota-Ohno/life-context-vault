@@ -63,6 +63,7 @@ npm run tauri:bundle
 - Local MCP stdio sidecar for same-device AI clients
 - App-managed AI Access Service that starts/stops the bundled HTTP MCP relay and local Vault Agent
 - OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge, with metadata-only relay state persistence for Remote-MCP-style testing
+- Hosted Relay Agent connection from the Control Center using short-lived `wss://.../agent/ws?pairing_code=...` URLs
 - Chrome browser capture extension and Native Messaging host
 - Restore preview and typed confirmation before encrypted backup restore or destructive Vault clear
 
@@ -99,6 +100,8 @@ In the Tauri desktop app, open **Connections** and use **Start AI Access** to la
 For day-to-day use, **Connections** also includes operations controls to launch the app at macOS login and to auto-start AI Access when the app opens. This keeps the Agent available after reboot while preserving the same Context Pack confirmation boundary.
 
 The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, persists OAuth client registrations plus request metadata only, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
+
+For a hosted HTTPS relay, deploy `deploy/relay/Dockerfile`, start pairing from the relay's trusted admin path, then paste the returned `agentWebSocketUrl` into **Connections -> Hosted Relay Agent**. The desktop app accepts only `wss://.../agent/ws?pairing_code=...`, starts the local Agent process, clears the short-lived URL from the UI, and keeps the Vault work on the user's device. Confirm pairing on the relay status endpoint before treating the hosted connector as ready.
 
 ## Run Browser Capture Extension
 

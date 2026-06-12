@@ -1164,6 +1164,69 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.hosted-relay-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.hosted-relay-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 14px;
+}
+
+.hosted-relay-copy,
+.hosted-relay-status,
+.relay-preview,
+.hosted-relay-steps,
+.hosted-relay-boundary {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hosted-relay-status {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.relay-preview {
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.hosted-relay-steps {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hosted-relay-steps > div,
+.hosted-relay-boundary > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hosted-relay-steps span,
+.hosted-relay-boundary span {
+  color: #596255;
+  font-size: 0.83rem;
+}
+
+.hosted-relay-boundary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.hosted-relay-boundary strong {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
 .automation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2044,6 +2107,10 @@ button:focus-visible {
   .policy-controls,
   .policy-domain-list,
   .connection-wizard-grid,
+  .hosted-relay-grid,
+  .hosted-relay-status,
+  .hosted-relay-steps,
+  .hosted-relay-boundary,
   .ai-access-quickstart,
   .ai-access-map-grid,
   .ai-access-checklist,

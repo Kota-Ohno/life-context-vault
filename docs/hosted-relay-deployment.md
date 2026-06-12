@@ -106,6 +106,17 @@ The local desktop Agent then connects to the returned `agentWebSocketUrl`. Once 
 External AI -> HTTPS /mcp -> Hosted Relay -> local Agent WebSocket -> local lcv-mcp -> encrypted local Vault
 ```
 
+In the desktop Control Center, open **Connections -> Hosted Relay Agent**, paste the returned `agentWebSocketUrl`, and click **Hosted RelayへAgent接続**. The app accepts only the exact hosted path `wss://<relay-host>/agent/ws?pairing_code=...`, starts the local `lcv-agent` with WSS support, clears the pairing URL from the UI after launch, and does not persist it. The Relay URL shown to AI clients is the same public origin with `/mcp`, for example `https://relay.example.com/mcp`. Confirm the Agent pairing on the hosted relay's `/agent/status` or operator dashboard before marking the connector ready.
+
+For manual operation, run the Agent with the returned URL:
+
+```bash
+LCV_AGENT_RELAY_WS="wss://relay.example.com/agent/ws?pairing_code=<pairingCode>" \
+LCV_MCP_COMMAND="$PWD/src-tauri/target/release/lcv-mcp" \
+LCV_VAULT_DB_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3" \
+src-tauri/target/release/lcv-agent
+```
+
 ## Rotation Runbook
 
 Rotate `LCV_RELAY_ADMIN_TOKEN` when an operator leaves, an admin workstation is lost, or an admin token may have been copied.
