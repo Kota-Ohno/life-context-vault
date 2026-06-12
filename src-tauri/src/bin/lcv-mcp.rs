@@ -608,6 +608,7 @@ fn relevant_facts(vault: &Value, task_text: &str, ceiling: &str) -> Vec<Value> {
 
 fn safe_pack_for_client(pack: &Value) -> Value {
   json!({
+    "trustBoundary": "ContextPack only",
     "id": get_str(pack, "id"),
     "requestId": optional_value(pack, "requestId"),
     "taskText": get_str(pack, "taskText"),
@@ -616,6 +617,7 @@ fn safe_pack_for_client(pack: &Value) -> Value {
     "expiresAt": optional_value(pack, "expiresAt"),
     "maxSensitivityIncluded": get_str(pack, "maxSensitivityIncluded"),
     "items": pack.get("items").cloned().unwrap_or_else(|| json!([])),
+    "sourceSnippets": pack.get("sourceSnippets").cloned().unwrap_or_else(|| json!([])),
     "warnings": pack.get("warnings").cloned().unwrap_or_else(|| json!([])),
     "excludedItems": pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
     "confirmationStatus": get_str(pack, "confirmationStatus")
@@ -901,5 +903,35 @@ mod tests {
     assert_eq!(result.get("status").and_then(Value::as_str), Some("candidate_created"));
     assert_eq!(array(&vault, "candidates").len(), 1);
     assert_eq!(array(&vault, "facts").len(), 0);
+  }
+
+  #[test]
+  fn safe_pack_for_client_declares_context_pack_boundary() {
+    let pack = json!({
+      "id": "pack_1",
+      "requestId": "req_1",
+      "taskText": "Help me plan",
+      "taskDomain": "life_events_and_plans",
+      "generatedAt": "2026-06-12T00:00:00.000Z",
+      "expiresAt": "2026-06-12T00:10:00.000Z",
+      "maxSensitivityIncluded": "personal",
+      "items": [],
+      "sourceSnippets": [],
+      "warnings": [],
+      "excludedItems": [],
+      "confirmationStatus": "confirmed",
+      "localAnswer": "internal-only answer",
+      "auditEventId": "audit_1"
+    });
+
+    let safe = safe_pack_for_client(&pack);
+
+    assert_eq!(
+      safe.get("trustBoundary").and_then(Value::as_str),
+      Some("ContextPack only")
+    );
+    assert!(safe.get("sourceSnippets").is_some());
+    assert!(safe.get("localAnswer").is_none());
+    assert!(safe.get("auditEventId").is_none());
   }
 }

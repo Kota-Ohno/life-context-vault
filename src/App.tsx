@@ -56,6 +56,7 @@ import {
   generateLocalAnswer,
   importEncryptedBackup,
   loadVault,
+  makeAiContextPackPayload,
   makeDemoVault,
   purgeExpiredPassiveCaptures,
   saveContextPack,
@@ -413,12 +414,46 @@ export function App() {
         ? { ...pack, confirmationStatus: "confirmed" as const, confirmedAt: new Date().toISOString() }
         : pack;
     const answer = generateLocalAnswer(confirmedPack);
-    let next = state;
-    if (pack.confirmationStatus === "pending_user_confirmation") {
-      next = confirmContextPack(next, pack.id);
+    const next = attachLocalAnswer(state, pack.id, answer);
+    apply(
+      next,
+      pack.confirmationStatus === "pending_user_confirmation"
+        ? "ローカル回答を生成しました。外部AIへ返すには別途承認してください。"
+        : "ローカル回答を生成しました。"
+    );
+  }
+
+  function approvePackForAi(pack: ContextPack) {
+    const request = pack.requestId
+      ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+      : null;
+    if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
+      setNotice("このContext PackはすでにAIへ返せる状態です。");
+      return;
     }
-    next = attachLocalAnswer(next, pack.id, answer);
-    apply(next, "ローカル回答を生成しました。");
+    apply(
+      confirmContextPack(state, pack.id),
+      "Context Packを承認しました。外部AIはget_request_statusで取得できます。"
+    );
+  }
+
+  async function copyPackForAi(pack: ContextPack) {
+    const request = pack.requestId
+      ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+      : null;
+    const shouldConfirm = pack.confirmationStatus !== "confirmed" || request?.status !== "fulfilled";
+    const payloadPack = shouldConfirm
+      ? { ...pack, confirmationStatus: "confirmed" as const, confirmedAt: new Date().toISOString() }
+      : pack;
+    if (shouldConfirm) {
+      setState(confirmContextPack(state, pack.id));
+    }
+    await copyText(
+      JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2),
+      shouldConfirm
+        ? "Context Packを承認し、AI向けペイロードをコピーしました。"
+        : "AI向けContext Packをコピーしました。"
+    );
   }
 
   function denyActiveRequest() {
@@ -703,6 +738,8 @@ export function App() {
             }}
             currentRequest={currentRequest}
             currentPack={currentPack}
+            approvePackForAi={approvePackForAi}
+            copyPackForAi={copyPackForAi}
             generateAnswer={generateAnswer}
             denyActiveRequest={denyActiveRequest}
           />
@@ -1592,6 +1629,8 @@ function ContextRequestsView({
   setActiveRequest,
   currentRequest,
   currentPack,
+  approvePackForAi,
+  copyPackForAi,
   generateAnswer,
   denyActiveRequest
 }: {
@@ -1605,9 +1644,19 @@ function ContextRequestsView({
   setActiveRequest: (request: ContextPackRequest) => void;
   currentRequest: ContextPackRequest | null;
   currentPack: ContextPack | null;
+  approvePackForAi: (pack: ContextPack) => void;
+  copyPackForAi: (pack: ContextPack) => void;
   generateAnswer: (pack: ContextPack) => void;
   denyActiveRequest: () => void;
 }) {
+  const aiReady =
+    currentPack?.confirmationStatus === "confirmed" ||
+    currentRequest?.status === "fulfilled";
+  const requestClosed =
+    currentRequest?.status === "denied" ||
+    currentRequest?.status === "expired" ||
+    currentPack?.confirmationStatus === "cancelled";
+
   return (
     <section className="ask-layout">
       <div className="panel">
@@ -1644,7 +1693,7 @@ function ContextRequestsView({
               type="button"
             >
               <span>{request.clientName}</span>
-              <strong>{request.status}</strong>
+              <strong>{requestStatusLabel(request.status)}</strong>
               <small>{request.taskText}</small>
             </button>
           ))}
@@ -1660,14 +1709,33 @@ function ContextRequestsView({
           </div>
           {currentRequest && <Badge>{currentRequest.clientName}</Badge>}
         </div>
+        {currentRequest && (
+          <div className="request-detail">
+            <Metric label="目的" value={currentRequest.purpose} />
+            <Metric label="期限" value={formatDateTime(currentRequest.expiresAt)} />
+            <Metric label="感度上限" value={<SensitivityBadge sensitivity={currentRequest.sensitivityCeiling} />} />
+            <Metric label="状態" value={requestStatusLabel(currentRequest.status)} />
+          </div>
+        )}
         {!currentPack ? (
           <p className="muted">質問からContext Packを作成すると、ここに使用予定の背景情報が表示されます。</p>
         ) : (
           <div className="context-pack">
+            <div className={aiReady ? "pack-delivery ready" : "pack-delivery attention"}>
+              {aiReady ? <CheckCircle2 size={18} /> : <Clock size={18} />}
+              <div>
+                <strong>{aiReady ? "AIへ返せる状態です" : "AIへ返す前に確認が必要です"}</strong>
+                <span>
+                  {aiReady
+                    ? "外部AIはget_request_statusで、このContext Packだけを取得できます。"
+                    : "承認するまで、外部AIにはPack本文を返しません。"}
+                </span>
+              </div>
+            </div>
             <div className="pack-summary">
               <Badge>{currentPack.riskLevel} risk</Badge>
               <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
-              <Badge>{currentPack.confirmationStatus}</Badge>
+              <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
             </div>
             {currentPack.warnings.map((warning) => (
               <div className="warning-line" key={warning.message}>
@@ -1688,14 +1756,44 @@ function ContextRequestsView({
               {currentPack.items.length === 0 && <p className="muted">使える承認済みFactがまだありません。</p>}
             </div>
             {currentPack.excludedItems.length > 0 && (
-              <p className="muted">{currentPack.excludedItems.length}件はポリシーにより除外されています。</p>
+              <div className="exclusion-list">
+                <strong>{currentPack.excludedItems.length}件は送信対象から除外</strong>
+                {currentPack.excludedItems.slice(0, 4).map((item) => (
+                  <span key={`${item.referencedId}-${item.reason}`}>
+                    {exclusionReasonLabel(item.reason)}
+                  </span>
+                ))}
+              </div>
             )}
             <div className="action-row">
-              <button className="primary-button" onClick={() => generateAnswer(currentPack)} type="button">
-                <Check size={16} />
-                承認して回答生成
+              <button
+                className="primary-button"
+                disabled={requestClosed || aiReady}
+                onClick={() => approvePackForAi(currentPack)}
+                type="button"
+              >
+                <CheckCircle2 size={16} />
+                AIへ返すために承認
               </button>
-              <button className="danger-button" onClick={denyActiveRequest} type="button">
+              <button
+                className="secondary-button"
+                disabled={requestClosed}
+                onClick={() => copyPackForAi(currentPack)}
+                type="button"
+              >
+                <Clipboard size={16} />
+                承認済みPackをコピー
+              </button>
+              <button
+                className="secondary-button"
+                disabled={requestClosed}
+                onClick={() => generateAnswer(currentPack)}
+                type="button"
+              >
+                <Check size={16} />
+                ローカル回答を生成
+              </button>
+              <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
                 <X size={16} />
                 拒否
               </button>
@@ -1941,6 +2039,53 @@ function Badge({ children }: { children: React.ReactNode }) {
 
 function SensitivityBadge({ sensitivity }: { sensitivity: SensitivityTier }) {
   return <span className={`badge sensitivity ${sensitivity}`}>{sensitivityLabel(sensitivity)}</span>;
+}
+
+function requestStatusLabel(status: ContextPackRequest["status"]): string {
+  const labels: Record<ContextPackRequest["status"], string> = {
+    draft: "下書き",
+    pending_user_confirmation: "確認待ち",
+    approved: "低リスク・未返却",
+    denied: "拒否済み",
+    fulfilled: "AI返却可",
+    expired: "期限切れ"
+  };
+  return labels[status];
+}
+
+function packConfirmationLabel(status: ContextPack["confirmationStatus"]): string {
+  const labels: Record<ContextPack["confirmationStatus"], string> = {
+    not_required: "確認不要",
+    pending_user_confirmation: "確認待ち",
+    confirmed: "確認済み",
+    edited_by_user: "編集済み",
+    cancelled: "キャンセル"
+  };
+  return labels[status];
+}
+
+function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reason"]): string {
+  const labels: Record<ContextPack["excludedItems"][number]["reason"], string> = {
+    sensitivity_policy: "感度ポリシーを超過",
+    provider_policy: "AI接続ポリシーで制限",
+    expired: "期限切れ",
+    deleted: "削除済み",
+    user_hidden: "ユーザ非表示",
+    not_relevant: "今回の目的と不一致",
+    secret_never_send: "送信禁止"
+  };
+  return labels[reason];
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function EmptyState({

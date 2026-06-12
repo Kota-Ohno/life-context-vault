@@ -3,10 +3,13 @@ import {
   addPassiveCaptureEvent,
   addSourceWithCandidates,
   approveCandidate,
+  attachLocalAnswer,
   buildContextPack,
   buildContextPackForRequest,
+  confirmContextPack,
   createContextPackRequest,
   createEmptyVault,
+  makeAiContextPackPayload,
   purgeExpiredPassiveCaptures,
   searchFacts
 } from "./vault";
@@ -96,6 +99,61 @@ describe("vault flow", () => {
     expect(built.state.contextPackRequests[0].status).toBe("pending_user_confirmation");
   });
 
+  it("confirms a context pack for external AI without generating a local answer", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Benefits",
+      body: "Disability benefit documents should be checked before changing jobs."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_claude_desktop",
+      clientName: "Claude Desktop",
+      taskText: "Help me prepare before changing jobs",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack).toBeTruthy();
+
+    const confirmed = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmed.contextPacks.find((pack) => pack.id === built.pack!.id);
+    const confirmedRequest = confirmed.contextPackRequests.find(
+      (request) => request.id === requested.request.id
+    );
+
+    expect(confirmedPack?.confirmationStatus).toBe("confirmed");
+    expect(confirmedPack?.confirmedAt).toBeTruthy();
+    expect(confirmedPack?.localAnswer).toBeUndefined();
+    expect(confirmedRequest?.status).toBe("fulfilled");
+    expect(confirmed.auditEvents[0]).toMatchObject({
+      eventType: "context_pack_confirmed",
+      sensitivity: built.pack!.maxSensitivityIncluded
+    });
+  });
+
+  it("creates an AI-bound context pack payload without internal response fields", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Tone",
+      body: "Tone preference: concise and calm"
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const pack = buildContextPack(state, "Draft a message in my preferred tone");
+    state = savePackForTest(state, pack);
+    state = attachLocalAnswer(state, pack.id, "Local-only answer body");
+
+    const savedPack = state.contextPacks.find((item) => item.id === pack.id)!;
+    const payload = makeAiContextPackPayload(savedPack);
+
+    expect(payload.trustBoundary).toBe("ContextPack only");
+    expect(payload.items).toHaveLength(1);
+    expect("localAnswer" in payload).toBe(false);
+    expect("auditEventId" in payload).toBe(false);
+  });
+
   it("does not include unapproved passive capture candidates in context packs", () => {
     let state = createEmptyVault();
     state = {
@@ -160,3 +218,10 @@ describe("vault flow", () => {
     expect(purged.candidates.length).toBeGreaterThan(0);
   });
 });
+
+function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: ReturnType<typeof buildContextPack>) {
+  return {
+    ...state,
+    contextPacks: [pack, ...state.contextPacks]
+  };
+}

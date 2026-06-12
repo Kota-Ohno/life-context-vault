@@ -274,6 +274,24 @@ export type ContextPack = {
   localAnswer?: string;
 };
 
+export type AiContextPackPayload = Pick<
+  ContextPack,
+  | "id"
+  | "requestId"
+  | "taskText"
+  | "taskDomain"
+  | "generatedAt"
+  | "expiresAt"
+  | "maxSensitivityIncluded"
+  | "items"
+  | "sourceSnippets"
+  | "warnings"
+  | "excludedItems"
+  | "confirmationStatus"
+> & {
+  trustBoundary: "ContextPack only";
+};
+
 export type AccessPolicy = {
   id: string;
   clientId: string;

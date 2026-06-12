@@ -95,6 +95,11 @@ Last updated: 2026-06-12
   - legacy `vault_state` tables without `updated_at` are backfilled on open by the app, MCP sidecar, and capture host
   - app writes now include an expected `updatedAt` revision and return a conflict instead of overwriting newer external AI writes
   - frontend conflict handling merges external records with local edits by stable record id before saving again
+- Added AI-bound Context Pack approval UX:
+  - Requests separates "approve so the external AI can retrieve this Pack" from local PoC answer generation
+  - confirmed Packs can be copied as an AI-bound payload for non-MCP clients
+  - copied and MCP-returned payloads are explicitly marked `ContextPack only` and omit local answer/audit internals
+  - request details show client, purpose, expiry, sensitivity ceiling, and fulfillment status
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -121,6 +126,7 @@ Last updated: 2026-06-12
 - `cargo build` in `src-tauri`
 - `npm run mcp:build`
 - Claude Desktop config merge unit test preserving existing MCP servers
+- Context Pack approval tests proving external-AI confirmation does not create a local answer and AI-bound payloads omit internal fields
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
 - `npm run agent:build`

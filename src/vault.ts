@@ -1,4 +1,5 @@
 import {
+  AiContextPackPayload,
   AccessPolicy,
   ApprovedFact,
   AuditEvent,
@@ -712,6 +713,7 @@ export function saveContextPack(state: VaultState, pack: ContextPack): VaultStat
 
 export function confirmContextPack(state: VaultState, packId: string): VaultState {
   const pack = state.contextPacks.find((item) => item.id === packId);
+  if (!pack) return state;
   return {
     ...state,
     contextPacks: state.contextPacks.map((pack) =>
@@ -725,9 +727,29 @@ export function confirmContextPack(state: VaultState, packId: string): VaultStat
         : request
     ),
     auditEvents: [
-      audit("context_pack_confirmed", "context_pack", packId, "personal", {}),
+      audit("context_pack_confirmed", "context_pack", packId, pack.maxSensitivityIncluded, {
+        requestId: pack.requestId
+      }),
       ...state.auditEvents
     ]
+  };
+}
+
+export function makeAiContextPackPayload(pack: ContextPack): AiContextPackPayload {
+  return {
+    trustBoundary: "ContextPack only",
+    id: pack.id,
+    requestId: pack.requestId,
+    taskText: pack.taskText,
+    taskDomain: pack.taskDomain,
+    generatedAt: pack.generatedAt,
+    expiresAt: pack.expiresAt,
+    maxSensitivityIncluded: pack.maxSensitivityIncluded,
+    items: pack.items,
+    sourceSnippets: pack.sourceSnippets,
+    warnings: pack.warnings,
+    excludedItems: pack.excludedItems,
+    confirmationStatus: pack.confirmationStatus
   };
 }
 

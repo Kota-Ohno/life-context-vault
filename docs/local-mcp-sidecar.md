@@ -65,6 +65,7 @@ The sidecar exposes:
 - `propose_memory` creates a `MemoryCandidate` only. It never creates an `ApprovedFact`.
 - `get_policy_summary` returns policy and connector metadata, not raw life context.
 - `get_request_status` returns a confirmed Context Pack only after the app marks it confirmed or fulfilled.
+- In **Requests**, the app separates "approve for AI retrieval" from local answer generation. Approval makes the Pack available to `get_request_status`; copying a Pack uses the same AI-bound payload shape for non-MCP clients.
 
 ## App Sync
 
