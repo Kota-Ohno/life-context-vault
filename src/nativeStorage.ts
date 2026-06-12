@@ -106,6 +106,9 @@ export async function extractNativeDocumentText(input: {
   fileName: string;
   mimeType: string;
   contentBase64: string;
+  ocrCommand?: string | null;
+  ocrArgs?: string | null;
+  ocrTimeoutSeconds?: number | null;
 }): Promise<NativeDocumentExtractionResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");

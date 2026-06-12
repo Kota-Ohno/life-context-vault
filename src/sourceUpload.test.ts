@@ -86,7 +86,7 @@ describe("source upload safety", () => {
     ).toEqual({ supported: false, reason: "native_required" });
   });
 
-  it("blocks OCR and legacy Office documents until a safe extractor exists", () => {
+  it("requires OCR configuration for image documents and blocks legacy Office documents", () => {
     expect(
       describeSourceFile(
         {

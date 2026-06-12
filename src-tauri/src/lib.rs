@@ -3962,6 +3962,7 @@ impl NativeDocumentKind {
 struct OcrCommandConfig {
   command: String,
   args: Vec<String>,
+  timeout: Duration,
 }
 
 impl OcrCommandConfig {
@@ -3974,10 +3975,11 @@ impl OcrCommandConfig {
   }
 }
 
-fn extract_native_document_text_from_base64(
+fn extract_native_document_text_from_base64_with_ocr_config(
   file_name: &str,
   mime_type: &str,
   content_base64: &str,
+  ocr_config: Option<OcrCommandConfig>,
 ) -> Result<NativeDocumentExtractionResult, String> {
   let payload = content_base64
     .split_once(',')
@@ -4020,9 +4022,13 @@ fn extract_native_document_text_from_base64(
       warnings.extend(document_warnings);
       text
     }
-    NativeDocumentKind::ImageOcr => {
-      extract_image_ocr_document(file_name, mime_type, &bytes, &mut warnings)?
-    }
+    NativeDocumentKind::ImageOcr => extract_image_ocr_document(
+      file_name,
+      mime_type,
+      &bytes,
+      &mut warnings,
+      ocr_config,
+    )?,
   };
   let text = normalize_extracted_document_text(text, &mut warnings)?;
   Ok(NativeDocumentExtractionResult {
@@ -4111,12 +4117,26 @@ fn detect_native_document_kind(
 
 fn ocr_command_config_from_env() -> Option<OcrCommandConfig> {
   let command = env::var("LCV_OCR_COMMAND").ok()?;
+  let timeout_seconds = env::var("LCV_OCR_TIMEOUT_SECONDS")
+    .ok()
+    .and_then(|value| value.parse::<u64>().ok());
+  ocr_command_config_from_parts(
+    &command,
+    env::var("LCV_OCR_ARGS").ok().as_deref(),
+    timeout_seconds,
+  )
+}
+
+fn ocr_command_config_from_parts(
+  command: &str,
+  args: Option<&str>,
+  timeout_seconds: Option<u64>,
+) -> Option<OcrCommandConfig> {
   let command = command.trim();
   if command.is_empty() {
     return None;
   }
-  let args = env::var("LCV_OCR_ARGS")
-    .ok()
+  let args = args
     .map(|value| {
       value
         .split_whitespace()
@@ -4129,16 +4149,27 @@ fn ocr_command_config_from_env() -> Option<OcrCommandConfig> {
   Some(OcrCommandConfig {
     command: command.to_string(),
     args,
+    timeout: ocr_timeout_from_value(timeout_seconds),
   })
 }
 
-fn ocr_timeout() -> Duration {
-  let seconds = env::var("LCV_OCR_TIMEOUT_SECONDS")
-    .ok()
-    .and_then(|value| value.parse::<u64>().ok())
+fn ocr_timeout_from_value(seconds: Option<u64>) -> Duration {
+  let seconds = seconds
     .unwrap_or(30)
     .clamp(1, 120);
   Duration::from_secs(seconds)
+}
+
+fn ocr_command_config_from_input(
+  command: Option<&str>,
+  args: Option<&str>,
+  timeout_seconds: Option<u64>,
+) -> Option<OcrCommandConfig> {
+  command.and_then(|command| ocr_command_config_from_parts(command, args, timeout_seconds))
+}
+
+fn ocr_config_or_env(config: Option<OcrCommandConfig>) -> Option<OcrCommandConfig> {
+  config.or_else(ocr_command_config_from_env)
 }
 
 fn extract_image_ocr_document(
@@ -4146,8 +4177,9 @@ fn extract_image_ocr_document(
   mime_type: &str,
   bytes: &[u8],
   warnings: &mut Vec<String>,
+  ocr_config: Option<OcrCommandConfig>,
 ) -> Result<String, String> {
-  let config = ocr_command_config_from_env();
+  let config = ocr_config_or_env(ocr_config);
   extract_image_ocr_document_with_optional_config(
     config.as_ref(),
     file_name,
@@ -4203,7 +4235,7 @@ fn extract_image_ocr_document_with_config(
   }
   command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-  let output = run_command_with_timeout(&mut command, ocr_timeout());
+  let output = run_command_with_timeout(&mut command, config.timeout);
   let _ = fs::remove_file(&input_path);
   let output = output?;
   if !output.status.success() {
@@ -6359,8 +6391,21 @@ fn extract_native_document_text(
   file_name: String,
   mime_type: String,
   content_base64: String,
+  ocr_command: Option<String>,
+  ocr_args: Option<String>,
+  ocr_timeout_seconds: Option<u64>,
 ) -> Result<NativeDocumentExtractionResult, String> {
-  extract_native_document_text_from_base64(&file_name, &mime_type, &content_base64)
+  let ocr_config = ocr_command_config_from_input(
+    ocr_command.as_deref(),
+    ocr_args.as_deref(),
+    ocr_timeout_seconds,
+  );
+  extract_native_document_text_from_base64_with_ocr_config(
+    &file_name,
+    &mime_type,
+    &content_base64,
+    ocr_config,
+  )
 }
 
 #[tauri::command]
@@ -6883,10 +6928,11 @@ mod tests {
         </w:document>
       "#,
     )]);
-    let result = extract_native_document_text_from_base64(
+    let result = extract_native_document_text_from_base64_with_ocr_config(
       "insurance.docx",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       &STANDARD.encode(bytes),
+      None,
     )
     .expect("extract docx text");
 
@@ -6927,6 +6973,7 @@ mod tests {
     let config = OcrCommandConfig {
       command: "/bin/cat".to_string(),
       args: vec!["{input}".to_string()],
+      timeout: Duration::from_secs(5),
     };
     let mut warnings = Vec::new();
     let text = extract_image_ocr_document_with_config(

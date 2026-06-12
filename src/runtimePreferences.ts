@@ -2,10 +2,16 @@ const RUNTIME_PREFERENCES_KEY = "life-context-vault-runtime-preferences";
 
 export interface RuntimePreferences {
   autoStartAiAccess: boolean;
+  ocrCommand: string;
+  ocrArgs: string;
+  ocrTimeoutSeconds: number;
 }
 
 const defaultRuntimePreferences: RuntimePreferences = {
-  autoStartAiAccess: false
+  autoStartAiAccess: false,
+  ocrCommand: "",
+  ocrArgs: "{input}",
+  ocrTimeoutSeconds: 30
 };
 
 export function loadRuntimePreferences(): RuntimePreferences {

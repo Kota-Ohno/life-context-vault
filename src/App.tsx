@@ -575,7 +575,14 @@ export function App() {
   const searchResults = nativePath && searchMode === "native_fts"
     ? nativeSearchResults
     : localSearchResults;
-  const ocrExtractionAvailable = Boolean(documentExtractionCapabilities?.ocrExtraction);
+  const configuredOcrCommand = runtimePreferences.ocrCommand.trim();
+  const configuredOcrArgs = runtimePreferences.ocrArgs.trim();
+  const configuredOcrTimeoutSeconds = normalizedOcrTimeout(runtimePreferences.ocrTimeoutSeconds);
+  const runtimeOcrAvailable = Boolean(configuredOcrCommand);
+  const ocrExtractionAvailable = Boolean(documentExtractionCapabilities?.ocrExtraction || runtimeOcrAvailable);
+  const ocrProviderLabel = runtimeOcrAvailable
+    ? ocrProviderLabelFromCommand(configuredOcrCommand)
+    : documentExtractionCapabilities?.ocrProviderLabel ?? null;
   const sourceAccept = ocrExtractionAvailable ? SUPPORTED_SOURCE_ACCEPT_WITH_OCR : SUPPORTED_SOURCE_ACCEPT;
   const sourceLabel = ocrExtractionAvailable ? SUPPORTED_SOURCE_LABEL_WITH_OCR : SUPPORTED_SOURCE_LABEL;
 
@@ -671,7 +678,10 @@ export function App() {
         const extracted = await extractNativeDocumentText({
           fileName: file.name,
           mimeType: file.type,
-          contentBase64: await fileToBase64(file)
+          contentBase64: await fileToBase64(file),
+          ocrCommand: runtimeOcrAvailable ? configuredOcrCommand : null,
+          ocrArgs: runtimeOcrAvailable ? configuredOcrArgs : null,
+          ocrTimeoutSeconds: runtimeOcrAvailable ? configuredOcrTimeoutSeconds : null
         });
         if (!extracted) {
           setUploadFeedback(unsupportedFileFeedback(file, "native_required"));
@@ -1569,7 +1579,7 @@ export function App() {
             addManualSource={addManualSource}
             handleFileUpload={handleFileUpload}
             ocrExtractionAvailable={ocrExtractionAvailable}
-            ocrProviderLabel={documentExtractionCapabilities?.ocrProviderLabel ?? null}
+            ocrProviderLabel={ocrProviderLabel}
             sourceAccept={sourceAccept}
             sourceLabel={sourceLabel}
             uploadFeedback={uploadFeedback}
@@ -1678,6 +1688,8 @@ export function App() {
             nativePath={nativePath}
             nativeRevision={nativeRevision}
             storageReady={storageReady}
+            runtimePreferences={runtimePreferences}
+            updateRuntimePreference={updateRuntimePreference}
           />
         )}
       </main>
@@ -3502,7 +3514,9 @@ function SettingsView({
   seedDemo,
   nativePath,
   nativeRevision,
-  storageReady
+  storageReady,
+  runtimePreferences,
+  updateRuntimePreference
 }: {
   passphrase: string;
   setPassphrase: (value: string) => void;
@@ -3515,7 +3529,10 @@ function SettingsView({
   nativePath: string | null;
   nativeRevision: string | null;
   storageReady: boolean;
+  runtimePreferences: RuntimePreferences;
+  updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
 }) {
+  const hasOcrCommand = Boolean(runtimePreferences.ocrCommand.trim());
   return (
     <section className="view-grid">
       <div className="panel">
@@ -3558,6 +3575,57 @@ function SettingsView({
               </span>
             </div>
             <Badge>{storageReady ? "ready" : "loading"}</Badge>
+          </div>
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Local OCR</p>
+            <h3>画像本文の抽出</h3>
+          </div>
+          <Badge>{hasOcrCommand ? "configured" : "off"}</Badge>
+        </div>
+        <div className="form-stack">
+          <div className="trust-note">
+            <ShieldCheck size={16} />
+            <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
+          </div>
+          <Input
+            label="Command"
+            value={runtimePreferences.ocrCommand}
+            onChange={(value) => updateRuntimePreference({ ocrCommand: value })}
+            placeholder="/opt/homebrew/bin/tesseract"
+          />
+          <Input
+            label="Arguments"
+            value={runtimePreferences.ocrArgs}
+            onChange={(value) => updateRuntimePreference({ ocrArgs: value })}
+            placeholder="{input} stdout -l eng+jpn"
+          />
+          <Input
+            label="Timeout seconds"
+            value={String(runtimePreferences.ocrTimeoutSeconds)}
+            onChange={(value) => updateRuntimePreference({ ocrTimeoutSeconds: normalizedOcrTimeout(Number(value)) })}
+            type="number"
+          />
+          <div className="action-row">
+            <button
+              className="secondary-button"
+              onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout" })}
+              type="button"
+            >
+              <Settings size={16} />
+              Tesseract args
+            </button>
+            <button
+              className="danger-button"
+              onClick={() => updateRuntimePreference({ ocrCommand: "", ocrArgs: "{input}", ocrTimeoutSeconds: 30 })}
+              type="button"
+            >
+              <X size={16} />
+              Clear
+            </button>
           </div>
         </div>
       </div>
@@ -3968,6 +4036,17 @@ function documentExtractionLabel(kind: string): string {
     default:
       return "文書";
   }
+}
+
+function normalizedOcrTimeout(value: number): number {
+  if (!Number.isFinite(value)) return 30;
+  return Math.min(120, Math.max(1, Math.round(value)));
+}
+
+function ocrProviderLabelFromCommand(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) return "OCR Provider";
+  return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
 }
 
 function linkedFactCount(state: VaultState, sourceId: string): number {

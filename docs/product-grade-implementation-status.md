@@ -224,9 +224,10 @@ Last updated: 2026-06-12
   - native extraction rejects images without OCR Provider, legacy Office binaries, unsupported archives, unreadable files, zip-entry overages, and oversized uploads before RawSource creation
   - Upload UX now explains local PDF/Office extraction separately from OCR/provider gaps
 - Added explicit local OCR provider support for Desktop image uploads:
-  - images remain blocked by default unless `LCV_OCR_COMMAND` is configured
+  - images remain blocked by default unless an OCR command is configured in Settings or `LCV_OCR_COMMAND`
   - OCR runs as a local command without shell expansion and receives an input temp file
   - `LCV_OCR_ARGS` supports placeholders such as `{input}`, `{mime}`, and `{file_name}`
+  - Settings exposes OCR command, arguments, and timeout for non-terminal setup
   - OCR output must be UTF-8 text on stdout and is normalized through the same Source -> MemoryCandidate path
   - OCR execution is timeout-bounded by `LCV_OCR_TIMEOUT_SECONDS`, defaulting to 30 seconds
   - Upload UI shows whether image OCR is currently available and still explains that extracted text creates only Inbox candidates
@@ -253,7 +254,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Provisioning the actual public HTTPS Relay domain, TLS termination, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
-- Packaged OCR onboarding and legacy Office conversion beyond the explicit local OCR command provider and local PDF/modern Office extractor.
+- Legacy Office conversion beyond the Settings/env local OCR command provider and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 
@@ -445,8 +446,8 @@ Last updated: 2026-06-12
 - Product fit: accepted; scanned life documents can now enter the same Memory Inbox workflow when the user explicitly configures a local OCR provider.
 - Security/privacy: accepted; OCR is off by default, uses an explicit local command without shell expansion, accepts only stdout text, keeps image body handling inside Desktop extraction, and still creates only unapproved MemoryCandidates.
 - Technical design: accepted; provider invocation uses a temp input file, placeholder-based args, UTF-8 output validation, normalized extracted text, and a bounded timeout.
-- UX: accepted; Upload shows whether image OCR is available and keeps the copy focused on local extraction plus Inbox confirmation.
-- Verification: `npm test -- --run src/sourceUpload.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_document_extraction`, `npm run build`, and in-app Browser desktop Sources Upload DOM/layout check at `1280x900` passed. Mobile rendering could not be re-verified in this Browser runtime because viewport control was unavailable; the new OCR copy uses the already-validated responsive `trust-note` and drop-zone patterns.
+- UX: accepted; Upload shows whether image OCR is available, Settings exposes command/args/timeout setup, and the copy stays focused on local extraction plus Inbox confirmation.
+- Verification: `npm test -- --run src/sourceUpload.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_document_extraction`, `npm run build`, and in-app Browser desktop Sources Upload plus Settings OCR DOM/layout checks at `1280x900` passed. Mobile rendering could not be re-verified in this Browser runtime because viewport control was unavailable; the new OCR copy uses the already-validated responsive `trust-note`, input, action-row, and drop-zone patterns.
 
 ### Large Retrieval Benchmark Slice
 
