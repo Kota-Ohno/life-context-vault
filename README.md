@@ -1,0 +1,71 @@
+# Life Context Vault
+
+Local-first proof of concept for a personal life-context vault that can safely feed everyday AI clients through reviewed Context Packs.
+
+## Run
+
+```bash
+npm install
+npm run dev
+```
+
+Open the printed local URL.
+
+## Run As Desktop App
+
+The native shell uses Tauri. If Rust is installed:
+
+```bash
+npm run tauri:dev
+```
+
+For a production binary without bundling:
+
+```bash
+npm run tauri:build
+```
+
+For a macOS `.app` bundle:
+
+```bash
+npm run tauri:bundle
+```
+
+## Verify
+
+```bash
+npm test
+npm run build
+npm run tauri:build
+npm run tauri:bundle
+```
+
+## PoC Scope
+
+- Life Context Home with Background Snapshot
+- Guided background setup
+- Memory Inbox with candidate review
+- Source ingestion from notes and text-like uploaded files
+- Approved facts as canonical memory
+- AI Connections control surface
+- Context Request review before AI-bound context leaves the Vault
+- Passive Capture simulator that creates unapproved Inbox candidates only
+- Audit trail for source, candidate, request, pack, and capture events
+- Search over approved facts
+- Encrypted JSON backup export and restore
+- Tauri desktop wrapper with SQLite-backed native persistence
+- Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
+
+The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to SQLite in the app data directory and projected into normalized tables.
+
+## Try The Product-Grade Slice
+
+1. Open **Connections** and start Passive Capture.
+2. Paste an AI chat fragment into the Capture simulator.
+3. Review the generated candidate in **Inbox**.
+4. Save the candidate as an ApprovedFact.
+5. Open **Requests** and create a simulated ChatGPT or Claude Context Request.
+6. Confirm the Context Pack before generating the local answer.
+7. Open **Audit** to see what was captured, saved, requested, generated, or denied.
+
+See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for the real MCP/Relay buildout.

@@ -4,7 +4,7 @@ Last updated: 2026-06-11
 
 ## Architecture Goal
 
-Life Context Vault should be a local-first desktop application where the user owns the canonical Vault and AI receives only reviewed, purpose-specific Context Packs.
+Life Context Vault should be a local-first context system where the user owns the canonical Vault and everyday AI clients receive only reviewed, purpose-specific Context Packs.
 
 The PoC architecture must support:
 
@@ -15,9 +15,10 @@ The PoC architecture must support:
 - Memory Inbox review before durable memory.
 - Life Context Home with a user-editable Background Snapshot.
 - Hybrid retrieval across text, vectors, entities, dates, sensitivity, and validity.
-- In-app AI with Context Pack preview before sensitive or consequential answers.
+- AI access from first-party UI, local MCP clients, remote MCP relay clients, and copy/export fallback.
+- Context Pack preview before sensitive or consequential context leaves the Vault boundary.
 
-The architecture intentionally does not start with MCP. MCP is a later adapter. The first trust surface is the first-party app.
+The product-grade direction starts with AI access as a first-class surface. The first-party app remains the trust and control surface, while MCP and relay adapters are constrained to Context Pack requests and memory proposals.
 
 ## Recommended Stack
 
@@ -49,18 +50,30 @@ flowchart LR
   UI --> Ask["In-app AI"]
   UI --> Sources["Sources"]
   UI --> Settings["Settings"]
+  UI --> Connections["AI Connections"]
+  UI --> Requests["Context Requests"]
+  UI --> Audit["Audit"]
 
   Home --> Core["Vault Core"]
   Inbox --> Core["Vault Core"]
   Ask --> Retrieval["Retrieval Engine"]
+  Connections --> Access["AI Access Layer"]
+  Requests --> Access
   Sources --> Ingest["Source Ingestion"]
   Settings --> Policy["Policy Engine"]
+  Audit --> Core
 
   Ingest --> Extract["Extraction Pipeline"]
   Extract --> Candidates["MemoryCandidate Store"]
   Candidates --> Inbox
 
   Core --> DB["Encrypted SQLite Vault"]
+  Access --> MCP["Local MCP Sidecar"]
+  Access --> Relay["Remote MCP Relay"]
+  Access --> Copy["Copy/Export Fallback"]
+  MCP --> Pack
+  Relay --> Pack
+  Copy --> Pack
   Retrieval --> DB
   Retrieval --> Pack["Context Pack Builder"]
   Policy --> Pack
@@ -175,6 +188,46 @@ It includes:
 - User confirmation state.
 
 The LLM provider receives the Context Pack, not the Vault.
+
+### AI Access Layer
+
+AI Access Layer is the only external-facing surface for everyday AI clients.
+
+It supports three routes:
+
+- Local MCP sidecar for same-device clients such as Claude Desktop and Codex-like tools.
+- Remote MCP relay for hosted clients such as ChatGPT or Claude web/API connectors.
+- Copy/export fallback for AI clients that cannot call tools.
+
+Required behavior:
+
+- External clients create `ContextPackRequest` records; they do not read the Vault directly.
+- External clients may create `MemoryCandidate` proposals; they do not create `ApprovedFact` records.
+- The relay never stores the full Vault or raw long-term Sources.
+- Relay-held Context Packs are short lived. The default TTL is 10 minutes.
+- Request, confirmation, denial, and fulfillment are recorded as audit events without storing unnecessary Pack body in relay logs.
+
+Initial tool surface:
+
+- `life_context.request_context_pack`
+- `life_context.propose_memory`
+- `life_context.get_policy_summary`
+- `life_context.get_request_status`
+
+No tool may expose `read_all_vault`, unrestricted raw source reads, or unapproved candidates as trusted memory.
+
+### Passive Capture
+
+Passive capture observes allowed AI chat surfaces and creates review candidates from local transcript fragments.
+
+Required behavior:
+
+- Capture is opt-in and visible while enabled.
+- Raw transcript fragments have a default 14-day TTL.
+- Captured fragments create `MemoryCandidate` records only.
+- Fact creation still requires user approval in Memory Inbox.
+- Pausing capture prevents writes.
+- Sensitive and secret detections keep the conservative policy defaults from the normal ingestion pipeline.
 
 ### LLM Provider Adapter
 
