@@ -173,6 +173,7 @@ export function App() {
         const [nativeSnapshot, path] = await Promise.all([loadNativeVaultSnapshot(), getNativeVaultPath()]);
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
+        nativeRevisionRef.current = nativeSnapshot?.updatedAt ?? null;
         setNativeRevision(nativeSnapshot?.updatedAt ?? null);
         setNativePath(path);
       } catch (error) {
@@ -191,9 +192,31 @@ export function App() {
     if (!storageReady) return;
     let cancelled = false;
     saveVault(state);
-    void saveNativeVault(state)
-      .then((updatedAt) => {
-        if (!cancelled && updatedAt) setNativeRevision(updatedAt);
+    const expectedUpdatedAt = nativeRevisionRef.current;
+    void saveNativeVault(state, expectedUpdatedAt)
+      .then((result) => {
+        if (cancelled || !result) return;
+        if (result.conflict && result.currentState) {
+          const mergedState = mergeVaultStates(result.currentState, state);
+          nativeRevisionRef.current = result.currentUpdatedAt;
+          setNativeRevision(result.currentUpdatedAt);
+          setState(mergedState);
+          const pendingRequest = mergedState.contextPackRequests.find(
+            (request) => request.status === "pending_user_confirmation"
+          );
+          if (pendingRequest) {
+            setActiveRequestId(pendingRequest.id);
+            setActivePackId(
+              mergedState.contextPacks.find((pack) => pack.requestId === pendingRequest.id)?.id ?? null
+            );
+          }
+          setNotice("外部AI接続からの更新とローカル変更をマージしました。");
+          return;
+        }
+        if (result.updatedAt) {
+          nativeRevisionRef.current = result.updatedAt;
+          setNativeRevision(result.updatedAt);
+        }
       })
       .catch((error) => console.warn("Native vault save failed", error));
     return () => {
@@ -456,6 +479,7 @@ export function App() {
         return;
       }
       setState(nativeSnapshot.state);
+      nativeRevisionRef.current = nativeSnapshot.updatedAt;
       setNativeRevision(nativeSnapshot.updatedAt);
       setNotice("Native Vaultから最新状態を読み込みました。");
     } catch (error) {
@@ -2023,6 +2047,40 @@ function makeRemoteConnectorInfo() {
       "request.status"
     ]
   };
+}
+
+function mergeVaultStates(externalState: VaultState, localState: VaultState): VaultState {
+  return {
+    ...externalState,
+    ...localState,
+    sources: mergeById(externalState.sources, localState.sources),
+    candidates: mergeById(externalState.candidates, localState.candidates),
+    facts: mergeById(externalState.facts, localState.facts),
+    accessPolicies: mergeById(externalState.accessPolicies, localState.accessPolicies),
+    passiveCaptureSettings: localState.passiveCaptureSettings,
+    passiveCaptureEvents: mergeById(
+      externalState.passiveCaptureEvents,
+      localState.passiveCaptureEvents
+    ),
+    connectorSessions: mergeById(externalState.connectorSessions, localState.connectorSessions),
+    contextPackRequests: mergeById(
+      externalState.contextPackRequests,
+      localState.contextPackRequests
+    ),
+    contextPacks: mergeById(externalState.contextPacks, localState.contextPacks),
+    auditEvents: mergeById(externalState.auditEvents, localState.auditEvents)
+  };
+}
+
+function mergeById<T extends { id: string }>(externalItems: T[], localItems: T[]): T[] {
+  const merged = new Map<string, T>();
+  for (const item of externalItems) {
+    merged.set(item.id, item);
+  }
+  for (const item of localItems) {
+    merged.set(item.id, item);
+  }
+  return Array.from(merged.values());
 }
 
 function groupByDomain(facts: ApprovedFact[]): Partial<Record<LifeContextDomain, ApprovedFact[]>> {

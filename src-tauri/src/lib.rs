@@ -64,6 +64,15 @@ struct VaultStateSnapshot {
   updated_at: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveVaultStateResult {
+  updated_at: Option<String>,
+  conflict: bool,
+  current_updated_at: Option<String>,
+  current_payload: Option<String>,
+}
+
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -748,6 +757,73 @@ fn load_vault_state(app: AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 fn load_vault_state_snapshot(app: AppHandle) -> Result<VaultStateSnapshot, String> {
   let connection = open_vault_db(&app)?;
+  load_vault_state_snapshot_from_connection(&connection)
+}
+
+#[tauri::command]
+fn save_vault_state(
+  app: AppHandle,
+  payload: String,
+  expected_updated_at: Option<String>,
+) -> Result<SaveVaultStateResult, String> {
+  let mut connection = open_vault_db(&app)?;
+  save_vault_state_payload(
+    &mut connection,
+    &payload,
+    expected_updated_at.as_deref(),
+  )
+}
+
+fn save_vault_state_payload(
+  connection: &mut Connection,
+  payload: &str,
+  expected_updated_at: Option<&str>,
+) -> Result<SaveVaultStateResult, String> {
+  let current = load_vault_state_snapshot_from_connection(&connection)?;
+  if let Some(expected) = expected_updated_at {
+    if current.updated_at.as_deref() != Some(expected) {
+      return Ok(SaveVaultStateResult {
+        updated_at: current.updated_at.clone(),
+        conflict: true,
+        current_updated_at: current.updated_at,
+        current_payload: current.payload,
+      });
+    }
+  }
+
+  connection
+    .execute(
+      "INSERT INTO vault_state (key, payload, updated_at)
+       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       ON CONFLICT(key) DO UPDATE SET
+         payload = excluded.payload,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+      params![VAULT_STATE_KEY, payload],
+    )
+    .map_err(|error| format!("failed to save vault state: {error}"))?;
+  sync_normalized_tables(connection, payload)?;
+  let updated_at = vault_state_updated_at(&connection)?;
+  Ok(SaveVaultStateResult {
+    updated_at: Some(updated_at),
+    conflict: false,
+    current_updated_at: None,
+    current_payload: None,
+  })
+}
+
+fn vault_state_updated_at(connection: &Connection) -> Result<String, String> {
+  connection
+    .query_row(
+      "SELECT updated_at FROM vault_state WHERE key = ?1",
+      params![VAULT_STATE_KEY],
+      |row| row.get::<_, String>(0),
+    )
+    .map_err(|error| format!("failed to read vault updated_at: {error}"))
+}
+
+fn load_vault_state_snapshot_from_connection(
+  connection: &Connection,
+) -> Result<VaultStateSnapshot, String> {
   connection
     .query_row(
       "SELECT payload, updated_at FROM vault_state WHERE key = ?1",
@@ -767,33 +843,6 @@ fn load_vault_state_snapshot(app: AppHandle) -> Result<VaultStateSnapshot, Strin
       })
     })
     .map_err(|error| format!("failed to load vault state: {error}"))
-}
-
-#[tauri::command]
-fn save_vault_state(app: AppHandle, payload: String) -> Result<String, String> {
-  let mut connection = open_vault_db(&app)?;
-  connection
-    .execute(
-      "INSERT INTO vault_state (key, payload, updated_at)
-       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       ON CONFLICT(key) DO UPDATE SET
-         payload = excluded.payload,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-      params![VAULT_STATE_KEY, payload],
-    )
-    .map_err(|error| format!("failed to save vault state: {error}"))?;
-  sync_normalized_tables(&mut connection, &payload)?;
-  vault_state_updated_at(&connection)
-}
-
-fn vault_state_updated_at(connection: &Connection) -> Result<String, String> {
-  connection
-    .query_row(
-      "SELECT updated_at FROM vault_state WHERE key = ?1",
-      params![VAULT_STATE_KEY],
-      |row| row.get::<_, String>(0),
-    )
-    .map_err(|error| format!("failed to read vault updated_at: {error}"))
 }
 
 #[tauri::command]
@@ -1091,5 +1140,41 @@ mod tests {
 
     let updated_at = vault_state_updated_at(&connection).expect("updated_at");
     assert!(updated_at.ends_with('Z'));
+  }
+
+  #[test]
+  fn stale_vault_save_returns_conflict_without_overwriting_payload() {
+    let mut connection = Connection::open_in_memory().expect("connection");
+    connection
+      .execute(
+        "CREATE TABLE vault_state (
+          key TEXT PRIMARY KEY NOT NULL,
+          payload TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )",
+        [],
+      )
+      .expect("table");
+    connection
+      .execute(
+        "INSERT INTO vault_state (key, payload, updated_at) VALUES (?1, ?2, ?3)",
+        params![VAULT_STATE_KEY, "{\"external\":true}", "external-revision"],
+      )
+      .expect("row");
+
+    let result = save_vault_state_payload(&mut connection, "{\"local\":true}", Some("old-revision"))
+      .expect("save result");
+    let stored_payload: String = connection
+      .query_row(
+        "SELECT payload FROM vault_state WHERE key = ?1",
+        params![VAULT_STATE_KEY],
+        |row| row.get(0),
+      )
+      .expect("stored payload");
+
+    assert!(result.conflict);
+    assert_eq!(result.current_updated_at.as_deref(), Some("external-revision"));
+    assert_eq!(result.current_payload.as_deref(), Some("{\"external\":true}"));
+    assert_eq!(stored_payload, "{\"external\":true}");
   }
 }

@@ -89,6 +89,8 @@ Last updated: 2026-06-12
   - the Control Center polls the encrypted native Vault and imports changes written by MCP sidecars, Remote Relay Agent calls, or browser capture
   - incoming pending Context Requests are selected automatically so the user can confirm or deny them from **Requests**
   - legacy `vault_state` tables without `updated_at` are backfilled on open by the app, MCP sidecar, and capture host
+  - app writes now include an expected `updatedAt` revision and return a conflict instead of overwriting newer external AI writes
+  - frontend conflict handling merges external records with local edits by stable record id before saving again
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -187,6 +189,14 @@ Last updated: 2026-06-12
 - UX: when a pending external Context Request appears, the app selects it and shows a notice pointing the user to **Requests** for confirmation.
 - Safety: the app still confirms Context Packs locally; the sync path only imports the updated encrypted Vault snapshot and does not add new external read tools.
 - Verification: Rust tests cover legacy `updated_at` backfill, and an MCP sidecar smoke test wrote a Context Request then read its status from the same encrypted Vault.
+
+### Conflict-Safe Native Save Slice
+
+- Product fit: the Control Center no longer blindly overwrites native Vault updates that arrived from MCP, Relay Agent, or browser capture while the app was open.
+- Technical design: native saves accept the last observed `updatedAt`; stale saves return the current encrypted Vault snapshot instead of writing.
+- UX: when a save conflict happens, the app merges external records and local edits, then tells the user that external AI updates were merged.
+- Safety: same-id records prefer the user's local edit, while new external Sources, Candidates, Context Requests, Context Packs, Audit Events, and connector records are preserved.
+- Verification: Rust tests confirm stale saves return conflict without changing the stored payload.
 
 ## Independent Review Passes
 

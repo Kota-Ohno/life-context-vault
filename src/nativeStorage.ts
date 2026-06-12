@@ -21,6 +21,20 @@ interface NativeVaultSnapshotPayload {
   updatedAt: string | null;
 }
 
+export interface SaveNativeVaultResult {
+  updatedAt: string | null;
+  conflict: boolean;
+  currentUpdatedAt: string | null;
+  currentState: VaultState | null;
+}
+
+interface SaveNativeVaultPayload {
+  updatedAt: string | null;
+  conflict: boolean;
+  currentUpdatedAt: string | null;
+  currentPayload: string | null;
+}
+
 export async function loadNativeVaultSnapshot(): Promise<NativeVaultSnapshot | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -36,10 +50,24 @@ export async function loadNativeVault(): Promise<VaultState | null> {
   return snapshot?.state ?? null;
 }
 
-export async function saveNativeVault(state: VaultState): Promise<string | null> {
+export async function saveNativeVault(
+  state: VaultState,
+  expectedUpdatedAt: string | null
+): Promise<SaveNativeVaultResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("save_vault_state", { payload: JSON.stringify(state) });
+  const result = await invoke<SaveNativeVaultPayload>("save_vault_state", {
+    payload: JSON.stringify(state),
+    expectedUpdatedAt
+  });
+  return {
+    updatedAt: result.updatedAt,
+    conflict: result.conflict,
+    currentUpdatedAt: result.currentUpdatedAt,
+    currentState: result.currentPayload
+      ? normalizeVaultState(JSON.parse(result.currentPayload))
+      : null
+  };
 }
 
 export async function getNativeVaultPath(): Promise<string | null> {
