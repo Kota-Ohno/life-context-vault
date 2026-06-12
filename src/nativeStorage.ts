@@ -1,4 +1,9 @@
-import { VaultState } from "./types";
+import {
+  ApprovedFact,
+  LifeContextDomain,
+  SensitivityTier,
+  VaultState
+} from "./types";
 import { normalizeVaultState } from "./vault";
 
 declare global {
@@ -115,6 +120,10 @@ export interface LoginItemStatus {
   lastError: string | null;
 }
 
+export type NativeFactSearchResult = ApprovedFact & {
+  rank: number;
+};
+
 export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -171,4 +180,20 @@ export async function uninstallLoginItem(): Promise<LoginItemStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<LoginItemStatus>("uninstall_login_item");
+}
+
+export async function searchNativeFacts(options: {
+  query: string;
+  domain: LifeContextDomain | "all";
+  sensitivity: SensitivityTier | "all";
+  limit?: number;
+}): Promise<NativeFactSearchResult[] | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<NativeFactSearchResult[]>("search_vault_facts", {
+    query: options.query,
+    domain: options.domain === "all" ? null : options.domain,
+    sensitivity: options.sensitivity === "all" ? null : options.sensitivity,
+    limit: options.limit ?? 80
+  });
 }

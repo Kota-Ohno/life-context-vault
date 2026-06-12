@@ -56,10 +56,10 @@ npm run tauri:bundle
 - Context Request review before AI-bound context leaves the Vault
 - Passive Capture simulator that creates unapproved Inbox candidates only
 - Audit trail for source, candidate, request, pack, and capture events
-- Search over approved facts
+- Search over approved facts, with Tauri using encrypted SQLite FTS
 - Encrypted JSON backup export and restore
 - Tauri desktop wrapper with SQLCipher-backed encrypted native persistence
-- Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
+- Normalized SQLite projection tables plus native FTS retrieval for product-grade search
 - Local MCP stdio sidecar for same-device AI clients
 - App-managed AI Access Service that starts/stops the bundled HTTP MCP relay and local Vault Agent
 - OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge, with metadata-only relay state persistence for Remote-MCP-style testing

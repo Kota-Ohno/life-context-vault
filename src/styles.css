@@ -1097,6 +1097,45 @@ button:focus-visible {
   align-items: end;
 }
 
+.search-mode-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.search-mode-row.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.search-mode-row.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.search-mode-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.search-mode-row strong,
+.search-mode-row span {
+  overflow-wrap: anywhere;
+}
+
+.search-mode-row span {
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1148,6 +1187,7 @@ button:focus-visible {
   .topbar-actions,
   .panel-heading,
   .automation-card-heading,
+  .search-mode-row,
   .fact-row,
   .table-row,
   .connection-row,

@@ -42,6 +42,7 @@ import {
   installLoginItem,
   loadNativeVaultSnapshot,
   saveNativeVault,
+  searchNativeFacts,
   startAiAccessServices,
   stopAiAccessServices,
   uninstallLoginItem
@@ -110,6 +111,8 @@ type OnboardingStep = {
   disabled?: boolean;
 };
 
+type SearchMode = "native_fts" | "browser_fallback" | "loading";
+
 const domainOptions: Array<LifeContextDomain | "all"> = [
   "all",
   "identity_and_profile",
@@ -173,6 +176,9 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
   const [sensitivityFilter, setSensitivityFilter] = useState<SensitivityTier | "all">("all");
+  const [nativeSearchResults, setNativeSearchResults] = useState<ApprovedFact[]>([]);
+  const [searchMode, setSearchMode] = useState<SearchMode>("browser_fallback");
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [backupPassphrase, setBackupPassphrase] = useState("");
   const [backupText, setBackupText] = useState("");
   const [notice, setNotice] = useState("");
@@ -408,6 +414,53 @@ export function App() {
     };
   }, [storageReady]);
 
+  useEffect(() => {
+    if (!storageReady || !nativePath) {
+      setSearchMode("browser_fallback");
+      setNativeSearchResults([]);
+      setSearchError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSearchMode("loading");
+    setSearchError(null);
+    async function runNativeSearch() {
+      try {
+        const results = await searchNativeFacts({
+          query: searchQuery,
+          domain: domainFilter,
+          sensitivity: sensitivityFilter,
+          limit: 80
+        });
+        if (cancelled) return;
+        if (!results) {
+          setSearchMode("browser_fallback");
+          setNativeSearchResults([]);
+          return;
+        }
+        setNativeSearchResults(results);
+        setSearchMode("native_fts");
+      } catch (error) {
+        if (cancelled) return;
+        setSearchError(error instanceof Error ? error.message : "Native search failed");
+        setSearchMode("browser_fallback");
+        setNativeSearchResults([]);
+      }
+    }
+    void runNativeSearch();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    domainFilter,
+    nativePath,
+    nativeRevision,
+    searchQuery,
+    sensitivityFilter,
+    storageReady
+  ]);
+
   const activeCandidates = useMemo(
     () =>
       state.candidates.filter((candidate) =>
@@ -427,7 +480,7 @@ export function App() {
     () => state.contextPackRequests.find((request) => request.id === activeRequestId) ?? null,
     [activeRequestId, state.contextPackRequests]
   );
-  const searchResults = useMemo(
+  const localSearchResults = useMemo(
     () =>
       searchFacts(state, searchQuery, {
         domain: domainFilter,
@@ -435,6 +488,9 @@ export function App() {
       }),
     [domainFilter, searchQuery, sensitivityFilter, state]
   );
+  const searchResults = nativePath && searchMode === "native_fts"
+    ? nativeSearchResults
+    : localSearchResults;
 
   function apply(next: VaultState, message?: string) {
     setState(next);
@@ -932,6 +988,9 @@ export function App() {
             sensitivityFilter={sensitivityFilter}
             setSensitivityFilter={setSensitivityFilter}
             results={searchResults}
+            searchMode={searchMode}
+            searchError={searchError}
+            nativePath={nativePath}
           />
         )}
         {view === "audit" && (
@@ -2138,7 +2197,10 @@ function SearchView({
   setDomainFilter,
   sensitivityFilter,
   setSensitivityFilter,
-  results
+  results,
+  searchMode,
+  searchError,
+  nativePath
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -2147,7 +2209,11 @@ function SearchView({
   sensitivityFilter: SensitivityTier | "all";
   setSensitivityFilter: (value: SensitivityTier | "all") => void;
   results: ApprovedFact[];
+  searchMode: SearchMode;
+  searchError: string | null;
+  nativePath: string | null;
 }) {
+  const modeCopy = searchModeCopy(searchMode, Boolean(nativePath));
   return (
     <section className="panel wide">
       <div className="search-controls">
@@ -2172,6 +2238,14 @@ function SearchView({
             ))}
           </select>
         </label>
+      </div>
+      <div className={`search-mode-row ${modeCopy.tone}`}>
+        <div>
+          <strong>{modeCopy.title}</strong>
+          <span>{modeCopy.body}</span>
+          {searchError && <span>{searchError}</span>}
+        </div>
+        <Badge>{results.length} results</Badge>
       </div>
       <div className="domain-list">
         {results.map((fact) => (
@@ -2400,6 +2474,33 @@ function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reas
     secret_never_send: "送信禁止"
   };
   return labels[reason];
+}
+
+function searchModeCopy(
+  mode: SearchMode,
+  hasNativeVault: boolean
+): { title: string; body: string; tone: "ready" | "attention" } {
+  if (mode === "native_fts") {
+    return {
+      title: "Vault Core FTSで検索中",
+      body: "暗号化SQLiteのApprovedFactだけを検索します。未承認候補とRaw Source本文は結果に含めません。",
+      tone: "ready"
+    };
+  }
+  if (mode === "loading") {
+    return {
+      title: "Vault Core FTSを更新中",
+      body: "最新のApprovedFact索引を読み込んでいます。",
+      tone: "attention"
+    };
+  }
+  return {
+    title: hasNativeVault ? "ブラウザ内検索へフォールバック中" : "ブラウザ内検索",
+    body: hasNativeVault
+      ? "ネイティブ検索に失敗したため、同期済みのローカル状態からApprovedFactだけを検索します。"
+      : "Tauri外ではブラウザ内の同期済み状態からApprovedFactだけを検索します。",
+    tone: "attention"
+  };
 }
 
 function formatDateTime(value: string): string {

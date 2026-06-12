@@ -108,6 +108,26 @@ struct LoginItemStatus {
   last_error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeFactSearchResult {
+  id: String,
+  fact_text: String,
+  domain: String,
+  fact_type: String,
+  source_ids: Vec<String>,
+  sensitivity: String,
+  confidence: String,
+  status: String,
+  valid_from: Option<String>,
+  valid_until: Option<String>,
+  due_date: Option<String>,
+  created_at: String,
+  approved_at: String,
+  updated_at: String,
+  rank: f64,
+}
+
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -232,6 +252,8 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         valid_from TEXT,
         valid_until TEXT,
         due_date TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL
       );
 
@@ -333,7 +355,42 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
       CREATE INDEX IF NOT EXISTS idx_audit_occurred ON audit_events(occurred_at);
       ",
     )
-    .map_err(|error| format!("failed to initialize vault schema: {error}"))
+    .map_err(|error| format!("failed to initialize vault schema: {error}"))?;
+  ensure_column(connection, "facts", "created_at", "TEXT")?;
+  ensure_column(connection, "facts", "approved_at", "TEXT")?;
+  connection
+    .execute(
+      "UPDATE facts
+       SET created_at = COALESCE(NULLIF(created_at, ''), updated_at),
+           approved_at = COALESCE(NULLIF(approved_at, ''), updated_at)
+       WHERE created_at IS NULL OR created_at = '' OR approved_at IS NULL OR approved_at = ''",
+      [],
+    )
+    .map_err(|error| format!("failed to backfill fact timestamps: {error}"))?;
+  Ok(())
+}
+
+fn ensure_column(
+  connection: &Connection,
+  table: &str,
+  column: &str,
+  definition: &str,
+) -> Result<(), String> {
+  let mut statement = connection
+    .prepare(&format!("PRAGMA table_info({table})"))
+    .map_err(|error| format!("failed to inspect {table} schema: {error}"))?;
+  let columns = statement
+    .query_map([], |row| row.get::<_, String>(1))
+    .map_err(|error| format!("failed to read {table} schema: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("failed to collect {table} schema: {error}"))?;
+
+  if !columns.iter().any(|existing| existing == column) {
+    connection
+      .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"), [])
+      .map_err(|error| format!("failed to add {table}.{column}: {error}"))?;
+  }
+  Ok(())
 }
 
 fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<(), String> {
@@ -429,12 +486,19 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
 
   for fact in value_array(&vault, "facts") {
     let fact_id = str_field(fact, "id");
+    let fact_updated_at = str_field(fact, "updatedAt");
+    let fact_created_at = optional_str_field(fact, "createdAt")
+      .filter(|value| !value.is_empty())
+      .unwrap_or_else(|| fact_updated_at.clone());
+    let fact_approved_at = optional_str_field(fact, "approvedAt")
+      .filter(|value| !value.is_empty())
+      .unwrap_or_else(|| fact_updated_at.clone());
     transaction
       .execute(
         "INSERT INTO facts (
           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
-          status, valid_from, valid_until, due_date, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+          status, valid_from, valid_until, due_date, created_at, approved_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
           fact_id,
           str_field(fact, "factText"),
@@ -447,7 +511,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
           optional_str_field(fact, "validFrom"),
           optional_str_field(fact, "validUntil"),
           optional_str_field(fact, "dueDate"),
-          str_field(fact, "updatedAt")
+          fact_created_at,
+          fact_approved_at,
+          fact_updated_at
         ],
       )
       .map_err(|error| format!("failed to sync fact {fact_id}: {error}"))?;
@@ -611,6 +677,129 @@ fn json_field(value: &Value, key: &str) -> String {
     .get(key)
     .map(Value::to_string)
     .unwrap_or_else(|| "null".to_string())
+}
+
+fn parse_json_string_array(value: String) -> Vec<String> {
+  serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()
+}
+
+fn fts_query_from_user_input(query: &str) -> Option<String> {
+  let terms = query
+    .split_whitespace()
+    .map(|term| term.trim_matches(|character: char| character.is_ascii_punctuation()))
+    .filter(|term| !term.is_empty())
+    .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+    .collect::<Vec<_>>();
+  if terms.is_empty() {
+    None
+  } else {
+    Some(terms.join(" AND "))
+  }
+}
+
+fn row_to_native_fact_search_result(
+  row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<NativeFactSearchResult> {
+  let source_ids_json: String = row.get("source_ids")?;
+  Ok(NativeFactSearchResult {
+    id: row.get("id")?,
+    fact_text: row.get("fact_text")?,
+    domain: row.get("domain")?,
+    fact_type: row.get("fact_type")?,
+    source_ids: parse_json_string_array(source_ids_json),
+    sensitivity: row.get("sensitivity")?,
+    confidence: row.get("confidence")?,
+    status: row.get("status")?,
+    valid_from: row.get("valid_from")?,
+    valid_until: row.get("valid_until")?,
+    due_date: row.get("due_date")?,
+    created_at: row.get("created_at")?,
+    approved_at: row.get("approved_at")?,
+    updated_at: row.get("updated_at")?,
+    rank: row.get("rank")?,
+  })
+}
+
+fn search_facts_in_connection(
+  connection: &Connection,
+  query: &str,
+  domain: Option<&str>,
+  sensitivity: Option<&str>,
+  limit: i64,
+) -> Result<Vec<NativeFactSearchResult>, String> {
+  let limit = limit.clamp(1, 200);
+  let domain = domain.filter(|value| !value.is_empty() && *value != "all");
+  let sensitivity = sensitivity.filter(|value| !value.is_empty() && *value != "all");
+
+  if let Some(fts_query) = fts_query_from_user_input(query) {
+    let mut statement = connection
+      .prepare(
+        "SELECT
+           f.id,
+           f.fact_text,
+           f.domain,
+           f.fact_type,
+           f.source_ids,
+           f.sensitivity,
+           f.confidence,
+           f.status,
+           f.valid_from,
+           f.valid_until,
+           f.due_date,
+           f.created_at,
+           f.approved_at,
+           f.updated_at,
+           bm25(facts_fts) AS rank
+         FROM facts_fts
+         JOIN facts f ON f.id = facts_fts.fact_id
+         WHERE facts_fts MATCH ?1
+           AND f.status = 'active'
+           AND (?2 IS NULL OR f.domain = ?2)
+           AND (?3 IS NULL OR f.sensitivity = ?3)
+         ORDER BY rank ASC, f.updated_at DESC
+         LIMIT ?4",
+      )
+      .map_err(|error| format!("failed to prepare FTS fact search: {error}"))?;
+    let results = statement
+      .query_map(params![fts_query, domain, sensitivity, limit], row_to_native_fact_search_result)
+      .map_err(|error| format!("failed to run FTS fact search: {error}"))?
+      .collect::<Result<Vec<_>, _>>()
+      .map_err(|error| format!("failed to collect FTS fact search results: {error}"));
+    return results;
+  }
+
+  let mut statement = connection
+    .prepare(
+      "SELECT
+         id,
+         fact_text,
+         domain,
+         fact_type,
+         source_ids,
+         sensitivity,
+         confidence,
+         status,
+         valid_from,
+         valid_until,
+         due_date,
+         created_at,
+         approved_at,
+         updated_at,
+         0.0 AS rank
+       FROM facts
+       WHERE status = 'active'
+         AND (?1 IS NULL OR domain = ?1)
+         AND (?2 IS NULL OR sensitivity = ?2)
+       ORDER BY updated_at DESC
+       LIMIT ?3",
+    )
+    .map_err(|error| format!("failed to prepare fact search: {error}"))?;
+  let results = statement
+    .query_map(params![domain, sensitivity, limit], row_to_native_fact_search_result)
+    .map_err(|error| format!("failed to run fact search: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("failed to collect fact search results: {error}"));
+  results
 }
 
 fn random_local_token() -> String {
@@ -1368,6 +1557,24 @@ fn vault_storage_path(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn search_vault_facts(
+  app: AppHandle,
+  query: String,
+  domain: Option<String>,
+  sensitivity: Option<String>,
+  limit: Option<i64>,
+) -> Result<Vec<NativeFactSearchResult>, String> {
+  let connection = open_vault_db(&app)?;
+  search_facts_in_connection(
+    &connection,
+    &query,
+    domain.as_deref(),
+    sensitivity.as_deref(),
+    limit.unwrap_or(80),
+  )
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -1481,6 +1688,7 @@ pub fn run() {
       load_vault_state_snapshot,
       save_vault_state,
       vault_storage_path,
+      search_vault_facts,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -1610,6 +1818,126 @@ mod tests {
     assert_eq!(candidate_count, 1);
     assert_eq!(fact_count, 1);
     assert_eq!(fts_count, 1);
+  }
+
+  #[test]
+  fn native_fact_search_returns_only_active_approved_facts() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_vault_schema(&connection).expect("schema");
+
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [
+        {
+          "id": "cand_secret",
+          "sourceIds": [],
+          "proposedFactText": "Secret passport token should not appear.",
+          "domain": "identity_and_profile",
+          "candidateType": "identity",
+          "detectedSensitivity": "secret_never_send",
+          "confidence": "medium",
+          "status": "new",
+          "createdAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact_active",
+          "factText": "Need to update address before moving.",
+          "domain": "home_and_places",
+          "factType": "obligation",
+          "sourceIds": ["src_address"],
+          "sensitivity": "personal",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-11T00:00:00.000Z",
+          "approvedAt": "2026-06-11T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        },
+        {
+          "id": "fact_deleted",
+          "factText": "Deleted address item.",
+          "domain": "home_and_places",
+          "factType": "note",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "source_backed",
+          "status": "deleted",
+          "createdAt": "2026-06-10T00:00:00.000Z",
+          "approvedAt": "2026-06-10T00:10:00.000Z",
+          "updatedAt": "2026-06-10T00:00:00.000Z"
+        }
+      ],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let results = search_facts_in_connection(
+      &connection,
+      "address",
+      Some("home_and_places"),
+      Some("personal"),
+      20,
+    )
+    .expect("search");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "fact_active");
+    assert_eq!(results[0].source_ids, vec!["src_address"]);
+  }
+
+  #[test]
+  fn native_fact_search_escapes_fts_syntax_from_user_input() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_vault_schema(&connection).expect("schema");
+
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_phrase",
+          "factText": "Insurance renewal is due in September.",
+          "domain": "contracts_and_policies",
+          "factType": "deadline",
+          "sourceIds": [],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let results =
+      search_facts_in_connection(&connection, "insurance OR passport", None, None, 20)
+        .expect("search");
+
+    assert_eq!(results.len(), 0);
+    assert_eq!(
+      fts_query_from_user_input("insurance OR passport").as_deref(),
+      Some("\"insurance\" AND \"OR\" AND \"passport\"")
+    );
   }
 
   #[test]

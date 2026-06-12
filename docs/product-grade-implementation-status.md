@@ -42,6 +42,11 @@ Last updated: 2026-06-12
   - `passive_capture_events`
   - `audit_events`
   - `facts_fts`
+- Added native Vault Core search path:
+  - Tauri Search uses encrypted SQLite `facts_fts` for ApprovedFact search
+  - domain and sensitivity filters are applied in SQL
+  - Search UI shows whether results came from Vault Core FTS or browser fallback
+  - native search returns only active ApprovedFacts, never MemoryCandidates or Raw Source body text
 - Added SQLCipher-backed local database encryption:
   - macOS Keychain-managed Vault key by default
   - `LCV_VAULT_DB_KEY` override for CI and smoke tests
@@ -124,7 +129,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
+- Rust-owned Vault Core CRUD and Context Pack generation beyond the current native search command.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -148,6 +153,7 @@ Last updated: 2026-06-12
 - Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
+- Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - `npm run tauri:build`
 - `npm run tauri:bundle`
@@ -163,6 +169,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
   - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
+  - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
+  - mobile `390x844`: Search mode row and filters stack without page-level horizontal overflow
   - desktop `1280x720`: Home first-run launchpad and Connections readiness panel have no page-level horizontal overflow
   - mobile `390x844`: Home first-run launchpad and Connections readiness panel stack to one column without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow
@@ -180,7 +188,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables and FTS are present, but the frontend still persists a JSON snapshot that is projected into tables.
+- Technical design: normalized SQLite tables and native FTS search are present, but write-side CRUD and Context Pack generation still use the JSON snapshot projected into tables.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
 - Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
 
@@ -238,5 +246,5 @@ SubAgents were not used because the user did not request parallel agent work. Re
 
 - Product fit: passed for the requested pivot from app-only PoC to everyday-AI access. Remaining risk is that real MCP/Relay setup may still be too developer-heavy until installer and pairing flows exist.
 - Security/privacy: one material issue was found and fixed. Raw Source body excerpts were initially included in `ContextPack.sourceSnippets`; snippets now use only the approved Fact text, with a regression test.
-- Technical design: passed for a product-grade vertical slice. Remaining risk is the temporary JSON snapshot plus normalized projection architecture, which should be replaced by Rust-owned Vault Core commands.
+- Technical design: passed for the current vertical slices. Remaining risk is the temporary JSON snapshot projection for write-side CRUD and Context Pack generation, which should continue moving into Rust-owned Vault Core commands.
 - UX/accessibility: desktop and mobile Browser checks found no horizontal overflow on Home, Connections, Requests, Inbox, and Audit. Keyboard/focus styles remain from the PoC stylesheet and were preserved.
