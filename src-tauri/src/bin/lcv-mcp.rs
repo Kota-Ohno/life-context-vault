@@ -6,7 +6,8 @@ use std::{
   path::{Path, PathBuf},
 };
 use life_context_vault_lib::{
-  create_context_pack_request_at_path, get_context_request_status_at_path, propose_memory_at_path,
+  create_context_pack_request_at_path, get_context_request_status_for_client_at_path,
+  propose_memory_at_path,
 };
 
 #[path = "../vault_crypto.rs"]
@@ -171,36 +172,41 @@ fn tools() -> Value {
 }
 
 fn call_tool(name: &str, arguments: &Value) -> Result<Value, (i64, String)> {
+  let client_id = effective_client_id();
   let result = match name {
-    "life_context.request_context_pack" => request_context_pack(arguments),
-    "life_context.propose_memory" => propose_memory(arguments),
+    "life_context.request_context_pack" => request_context_pack(arguments, &client_id),
+    "life_context.propose_memory" => propose_memory(arguments, &client_id),
     "life_context.get_policy_summary" => {
       let vault = load_vault().map_err(|error| (-32000, error))?;
-      get_policy_summary(&vault)
+      get_policy_summary(&vault, &client_id)
     }
-    "life_context.get_request_status" => get_request_status(arguments),
+    "life_context.get_request_status" => get_request_status(arguments, &client_id),
     _ => Err((-32602, format!("Unknown tool: {name}"))),
   }?;
 
   Ok(tool_result(result))
 }
 
-fn request_context_pack(arguments: &Value) -> Result<Value, (i64, String)> {
+fn request_context_pack(arguments: &Value, client_id: &str) -> Result<Value, (i64, String)> {
   let path = vault_db_path().map_err(|error| (-32000, error))?;
-  request_context_pack_at_path(&path, arguments)
+  request_context_pack_at_path(&path, arguments, client_id)
 }
 
-fn request_context_pack_at_path(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
+fn request_context_pack_at_path(
+  path: &Path,
+  arguments: &Value,
+  client_id: &str,
+) -> Result<Value, (i64, String)> {
   let task_text = required_str(arguments, "taskText")?;
   let client_name = optional_str(arguments, "clientName").unwrap_or("Local MCP Client");
-  let ceiling = optional_str(arguments, "sensitivityCeiling").unwrap_or("private_consequential");
+  let ceiling = optional_str(arguments, "sensitivityCeiling");
   let result = create_context_pack_request_at_path(
     path,
-    "conn_local_mcp",
+    client_id,
     client_name,
     task_text,
     Some("MCP client requested life context"),
-    Some(ceiling),
+    ceiling,
     Some("explicit_sensitive"),
   )
   .map_err(|error| (-32000, error))?;
@@ -226,15 +232,19 @@ fn request_context_pack_at_path(path: &Path, arguments: &Value) -> Result<Value,
   }
 }
 
-fn propose_memory(arguments: &Value) -> Result<Value, (i64, String)> {
+fn propose_memory(arguments: &Value, client_id: &str) -> Result<Value, (i64, String)> {
   let path = vault_db_path().map_err(|error| (-32000, error))?;
-  propose_memory_at_path_for_mcp(&path, arguments)
+  propose_memory_at_path_for_mcp(&path, arguments, client_id)
 }
 
-fn propose_memory_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
+fn propose_memory_at_path_for_mcp(
+  path: &Path,
+  arguments: &Value,
+  client_id: &str,
+) -> Result<Value, (i64, String)> {
   let text = required_str(arguments, "text")?;
   let client_name = optional_str(arguments, "clientName").unwrap_or("Local MCP Client");
-  let result = propose_memory_at_path(path, "conn_local_mcp", client_name, "local_mcp", text)
+  let result = propose_memory_at_path(path, client_id, client_name, "local_mcp", text)
     .map_err(|error| (-32000, error))?;
 
   Ok(json!({
@@ -247,28 +257,33 @@ fn propose_memory_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<Valu
   }))
 }
 
-fn get_policy_summary(vault: &Value) -> Result<Value, (i64, String)> {
+fn get_policy_summary(vault: &Value, client_id: &str) -> Result<Value, (i64, String)> {
+  let policy = effective_policy_summary(vault, client_id);
   Ok(json!({
     "mutated": false,
     "status": "ok",
     "summary": {
       "trustBoundary": "ContextPack only. Raw Vault and unapproved MemoryCandidate records are not exposed as trusted context.",
-      "confirmationRule": "private_consequential and sensitive Context Packs are queued for user confirmation.",
+      "confirmationRule": "Context Packs above the calling client's approval threshold are queued for user confirmation.",
       "tools": ["life_context.request_context_pack", "life_context.propose_memory", "life_context.get_policy_summary", "life_context.get_request_status"],
-      "connectorSessions": vault.get("connectorSessions").cloned().unwrap_or_else(|| json!([])),
-      "accessPolicies": vault.get("accessPolicies").cloned().unwrap_or_else(|| json!([]))
+      "clientId": client_id,
+      "effectivePolicy": policy
     }
   }))
 }
 
-fn get_request_status(arguments: &Value) -> Result<Value, (i64, String)> {
+fn get_request_status(arguments: &Value, client_id: &str) -> Result<Value, (i64, String)> {
   let path = vault_db_path().map_err(|error| (-32000, error))?;
-  get_request_status_at_path_for_mcp(&path, arguments)
+  get_request_status_at_path_for_mcp(&path, arguments, client_id)
 }
 
-fn get_request_status_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<Value, (i64, String)> {
+fn get_request_status_at_path_for_mcp(
+  path: &Path,
+  arguments: &Value,
+  client_id: &str,
+) -> Result<Value, (i64, String)> {
   let request_id = required_str(arguments, "requestId")?;
-  let result = get_context_request_status_at_path(path, request_id)
+  let result = get_context_request_status_for_client_at_path(path, request_id, client_id)
     .map_err(|error| (-32000, error))?;
   if result.status == "not_found" {
     return Ok(json!({
@@ -295,6 +310,44 @@ fn get_request_status_at_path_for_mcp(path: &Path, arguments: &Value) -> Result<
       "message": "The request is not yet fulfilled."
     }))
   }
+}
+
+fn effective_client_id() -> String {
+  env::var("LCV_EFFECTIVE_CLIENT_ID")
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "conn_local_mcp".to_string())
+}
+
+fn effective_policy_summary(vault: &Value, client_id: &str) -> Value {
+  let policy = vault
+    .get("accessPolicies")
+    .and_then(Value::as_array)
+    .and_then(|policies| {
+      policies
+        .iter()
+        .find(|policy| policy.get("clientId").and_then(Value::as_str) == Some(client_id))
+    });
+  json!({
+    "sensitivityCeiling": policy
+      .and_then(|policy| policy.get("sensitivityCeiling"))
+      .and_then(Value::as_str)
+      .unwrap_or("private_consequential"),
+    "requiresApprovalAbove": policy
+      .and_then(|policy| policy.get("requiresApprovalAbove"))
+      .and_then(Value::as_str)
+      .unwrap_or("personal"),
+    "passiveCaptureAllowed": policy
+      .and_then(|policy| policy.get("passiveCaptureAllowed"))
+      .and_then(Value::as_bool)
+      .unwrap_or(false),
+    "domainCount": policy
+      .and_then(|policy| policy.get("domainAllowlist"))
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or(0)
+  })
 }
 
 fn tool_result(result: Value) -> Value {
@@ -531,6 +584,7 @@ mod tests {
         "taskText": "What should I check before changing jobs?",
         "clientName": "Claude Desktop"
       }),
+      "conn_local_mcp",
     )
     .expect("request context pack");
 
@@ -588,6 +642,7 @@ mod tests {
         "clientName": "Claude Desktop",
         "sensitivityCeiling": "personal"
       }),
+      "conn_local_mcp",
     )
     .expect("request context pack");
 
@@ -627,6 +682,7 @@ mod tests {
         "text": "Tone preference: concise and calm",
         "clientName": "Codex"
       }),
+      "conn_local_mcp",
     )
     .expect("propose memory");
 
@@ -690,6 +746,7 @@ mod tests {
       &json!({
         "requestId": "req_confirmed"
       }),
+      "conn_local_mcp",
     )
     .expect("request status");
 
@@ -701,6 +758,62 @@ mod tests {
     );
     assert!(pack.get("localAnswer").is_none());
     assert!(pack.get("auditEventId").is_none());
+    let _ = std::fs::remove_file(path);
+  }
+
+  #[test]
+  fn request_status_hides_confirmed_pack_from_other_client() {
+    let path = test_vault_path("request-status-client-boundary");
+    let mut vault = empty_vault();
+    push_array(
+      &mut vault,
+      "contextPackRequests",
+      json!({
+        "id": "req_confirmed",
+        "clientId": "client_chatgpt_oauth",
+        "clientName": "ChatGPT",
+        "taskText": "Help me plan",
+        "purpose": "MCP client requested life context",
+        "requestedDomains": ["life_events_and_plans"],
+        "sensitivityCeiling": "personal",
+        "approvalMode": "explicit_sensitive",
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "expiresAt": "2099-06-12T00:10:00.000Z",
+        "status": "fulfilled"
+      }),
+    );
+    push_array(
+      &mut vault,
+      "contextPacks",
+      json!({
+        "id": "pack_confirmed",
+        "requestId": "req_confirmed",
+        "taskText": "Help me plan",
+        "taskDomain": "life_events_and_plans",
+        "riskLevel": "low",
+        "generatedAt": "2026-06-12T00:00:00.000Z",
+        "expiresAt": "2099-06-12T00:10:00.000Z",
+        "maxSensitivityIncluded": "personal",
+        "items": [],
+        "sourceSnippets": [],
+        "warnings": [],
+        "excludedItems": [],
+        "confirmationStatus": "confirmed"
+      }),
+    );
+    write_test_vault(&path, &vault);
+
+    let result = get_request_status_at_path_for_mcp(
+      &path,
+      &json!({
+        "requestId": "req_confirmed"
+      }),
+      "client_other_oauth",
+    )
+    .expect("request status");
+
+    assert_eq!(result.get("status").and_then(Value::as_str), Some("not_found"));
+    assert!(result.get("contextPack").is_none());
     let _ = std::fs::remove_file(path);
   }
 }

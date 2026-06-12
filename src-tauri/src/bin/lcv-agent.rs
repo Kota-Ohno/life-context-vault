@@ -109,6 +109,11 @@ fn handle_relay_message(text: &str, config: &AgentConfig) -> Value {
   }
   let id = parsed.get("id").and_then(Value::as_str).unwrap_or_default();
   let body = parsed.get("body").and_then(Value::as_str).unwrap_or_default();
+  let client_id = parsed
+    .get("clientId")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty());
   if id.is_empty() || body.is_empty() {
     return json!({
       "type": "mcp_response",
@@ -121,6 +126,7 @@ fn handle_relay_message(text: &str, config: &AgentConfig) -> Value {
     body,
     &config.mcp_command,
     config.vault_db_path.as_deref(),
+    client_id,
   ) {
     Ok(Some(body)) => json!({
       "type": "mcp_response",
@@ -155,5 +161,55 @@ mod tests {
     };
     let response = handle_relay_message("not-json", &config);
     assert_eq!(response.get("type").and_then(Value::as_str), Some("agent_error"));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn relay_message_forwards_effective_client_id_to_mcp_sidecar() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = std::env::temp_dir().join(format!(
+      "lcv-agent-env-test-{}.sh",
+      std::process::id()
+    ));
+    std::fs::write(
+      &script_path,
+      "#!/bin/sh\ncat >/dev/null\nprintf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"clientId\":\"%s\"}}\\n' \"$LCV_EFFECTIVE_CLIENT_ID\"\n",
+    )
+    .expect("write fake mcp sidecar");
+    let mut permissions = std::fs::metadata(&script_path)
+      .expect("metadata")
+      .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script_path, permissions).expect("chmod fake mcp sidecar");
+
+    let config = AgentConfig {
+      relay_ws_url: "ws://127.0.0.1:8765/agent/ws?pairing_code=test".to_string(),
+      mcp_command: script_path.clone(),
+      vault_db_path: None,
+      reconnect: false,
+      reconnect_delay_seconds: 0,
+    };
+    let response = handle_relay_message(
+      &json!({
+        "type": "mcp_request",
+        "id": "relay_req_1",
+        "clientId": "client_chatgpt_oauth",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"
+      })
+      .to_string(),
+      &config,
+    );
+
+    let body = response
+      .get("body")
+      .expect("body")
+      .get("result")
+      .expect("result");
+    assert_eq!(
+      body.get("clientId").and_then(Value::as_str),
+      Some("client_chatgpt_oauth")
+    );
+    let _ = std::fs::remove_file(script_path);
   }
 }

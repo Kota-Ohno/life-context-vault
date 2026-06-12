@@ -11,10 +11,14 @@ pub fn forward_to_stdio_mcp(
   body: &str,
   mcp_command: &PathBuf,
   vault_db_path: Option<&str>,
+  effective_client_id: Option<&str>,
 ) -> Result<Option<Value>, String> {
   let mut command = Command::new(mcp_command);
   if let Some(path) = vault_db_path {
     command.env("LCV_VAULT_DB_PATH", path);
+  }
+  if let Some(client_id) = effective_client_id.filter(|value| !value.trim().is_empty()) {
+    command.env("LCV_EFFECTIVE_CLIENT_ID", client_id);
   }
   if let Ok(key) = env::var("LCV_VAULT_DB_KEY") {
     command.env("LCV_VAULT_DB_KEY", key);

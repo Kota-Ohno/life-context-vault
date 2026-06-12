@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { VaultState } from "./types";
 import {
   addPassiveCaptureEvent,
   addSourceWithCandidates,
@@ -191,6 +192,193 @@ describe("vault flow", () => {
     expect(built.pack?.expiresAt).toBe(requested.request.expiresAt);
     expect(built.pack?.items.length).toBeGreaterThan(0);
     expect(built.state.contextPackRequests[0].status).toBe("pending_user_confirmation");
+  });
+
+  it("applies client domain allowlist and approval threshold to context packs", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_work_blocked",
+          factText: "Work shift starts at 9am.",
+          domain: "work_and_education",
+          factType: "routine",
+          sourceIds: [],
+          sensitivity: "public",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: "2026-06-12T00:21:00.000Z",
+          supersedesFactIds: []
+        },
+        {
+          id: "fact_health_allowed",
+          factText: "Doctor follow-up is scheduled for next month.",
+          domain: "health_and_care",
+          factType: "support_need",
+          sourceIds: [],
+          sensitivity: "personal",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: "2026-06-12T00:20:00.000Z",
+          supersedesFactIds: []
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((policy) =>
+        policy.clientId === "conn_chatgpt"
+          ? {
+              ...policy,
+              domainAllowlist: ["health_and_care"],
+              sensitivityCeiling: "sensitive",
+              requiresApprovalAbove: "public"
+            }
+          : policy
+      )
+    };
+
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me with the doctor follow-up and work shift",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    expect(built.pack?.items.some((item) => item.factId === "fact_health_allowed")).toBe(true);
+    expect(
+      built.pack?.excludedItems.some(
+        (item) => item.referencedId === "fact_work_blocked" && item.reason === "domain_policy"
+      )
+    ).toBe(true);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+    expect(built.state.contextPackRequests[0].status).toBe("pending_user_confirmation");
+
+    const restored = updateContextPackItemVisibility(
+      built.state,
+      built.pack!.id,
+      "fact_work_blocked",
+      true
+    );
+    const restoredPack = restored.contextPacks.find((pack) => pack.id === built.pack!.id)!;
+    expect(restoredPack.items.some((item) => item.factId === "fact_work_blocked")).toBe(false);
+    expect(
+      restoredPack.excludedItems.some(
+        (item) => item.referencedId === "fact_work_blocked" && item.reason === "domain_policy"
+      )
+    ).toBe(true);
+  });
+
+  it("fails closed for invalid policy sensitivity values and request widening", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const facts: VaultState["facts"] = [
+      {
+        id: "fact_public",
+        factText: "Preferred display name is Kota.",
+        domain: "identity_and_profile",
+        factType: "identity",
+        sourceIds: [],
+        sensitivity: "public",
+        confidence: "source_backed",
+        status: "active",
+        createdAt: now,
+        approvedAt: now,
+        updatedAt: "2026-06-12T00:20:00.000Z",
+        supersedesFactIds: []
+      },
+      {
+        id: "fact_personal",
+        factText: "Doctor follow-up is scheduled for next month.",
+        domain: "health_and_care",
+        factType: "support_need",
+        sourceIds: [],
+        sensitivity: "personal",
+        confidence: "source_backed",
+        status: "active",
+        createdAt: now,
+        approvedAt: now,
+        updatedAt: "2026-06-12T00:21:00.000Z",
+        supersedesFactIds: []
+      },
+      {
+        id: "fact_sensitive",
+        factText: "Sensitive care plan should stay tightly controlled.",
+        domain: "health_and_care",
+        factType: "support_need",
+        sourceIds: [],
+        sensitivity: "sensitive",
+        confidence: "source_backed",
+        status: "active",
+        createdAt: now,
+        approvedAt: now,
+        updatedAt: "2026-06-12T00:22:00.000Z",
+        supersedesFactIds: []
+      }
+    ];
+    const limitedState: VaultState = {
+      ...base,
+      facts,
+      accessPolicies: base.accessPolicies.map((policy) =>
+        policy.clientId === "conn_chatgpt"
+          ? {
+              ...policy,
+              sensitivityCeiling: "personal",
+              requiresApprovalAbove: "not_a_tier" as typeof policy.requiresApprovalAbove
+            }
+          : policy
+      )
+    };
+
+    const widenedRequest = createContextPackRequest(limitedState, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help with my doctor follow-up and care plan",
+      sensitivityCeiling: "sensitive"
+    });
+    const widenedPack = buildContextPackForRequest(
+      widenedRequest.state,
+      widenedRequest.request.id
+    ).pack!;
+
+    expect(widenedRequest.request.sensitivityCeiling).toBe("personal");
+    expect(widenedPack.items.some((item) => item.factId === "fact_personal")).toBe(true);
+    expect(widenedPack.excludedItems).toContainEqual({
+      referencedId: "fact_sensitive",
+      reason: "sensitivity_policy"
+    });
+    expect(widenedPack.confirmationStatus).toBe("pending_user_confirmation");
+
+    const invalidCeilingState: VaultState = {
+      ...base,
+      facts,
+      accessPolicies: base.accessPolicies.map((policy) =>
+        policy.clientId === "conn_chatgpt"
+          ? {
+              ...policy,
+              sensitivityCeiling: "not_a_tier" as typeof policy.sensitivityCeiling
+            }
+          : policy
+      )
+    };
+    const invalidRequest = createContextPackRequest(invalidCeilingState, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help with my doctor follow-up"
+    });
+    const invalidPack = buildContextPackForRequest(invalidRequest.state, invalidRequest.request.id).pack!;
+
+    expect(invalidRequest.request.sensitivityCeiling).toBe("public");
+    expect(invalidPack.items.some((item) => item.factId === "fact_public")).toBe(true);
+    expect(invalidPack.items.some((item) => item.factId === "fact_personal")).toBe(false);
+    expect(invalidPack.excludedItems).toContainEqual({
+      referencedId: "fact_personal",
+      reason: "sensitivity_policy"
+    });
   });
 
   it("confirms a context pack for external AI without generating a local answer", () => {

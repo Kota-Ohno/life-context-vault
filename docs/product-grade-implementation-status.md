@@ -178,6 +178,10 @@ Last updated: 2026-06-13
   - `update_native_access_policy` saves per-client sensitivity ceilings and confirmation thresholds through Vault Core
   - Connections now lets users edit AI-bound sensitivity policy instead of only reading policy values
   - Capture allowed sites can be edited from the Passive Capture card and are normalized to host names before persistence
+- Added client AccessPolicy enforcement in Context Pack generation:
+  - per-client `domainAllowlist` is enforced by both Rust Vault Core and the browser fallback Pack builder
+  - per-client `requiresApprovalAbove` controls whether a generated Pack must pause for user confirmation
+  - domain-limited Facts are recorded as `domain_policy` exclusions and contribute to policy-limited warnings without becoming AI-bound Pack items
 - Added Rust-owned Source lifecycle path for the Tauri Control Center:
   - `update_native_source_lifecycle` supports soft delete, restore, and Raw body purge through Vault Core
   - Source deletion archives unapproved candidates from that Source and marks linked active Facts as `needs_review`
@@ -257,6 +261,9 @@ Last updated: 2026-06-13
 - Legacy Office conversion beyond the Settings/env local OCR command provider and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
+- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and `GET /mcp` behavior expected by hosted clients.
+- Fully continuous browser Capture with persistent in-page status, recent-capture review/delete, and delta queueing. Current shipped browser extension is an explicit user-triggered capture path with local processing and TTL purge.
+- General-user domain policy editing in Connections. Vault Core enforces `domainAllowlist`, but the current UI exposes sensitivity ceiling and approval threshold first; domain allowlist editing should become a checklist/preset flow before broader beta use.
 
 ## Verification
 
@@ -303,8 +310,10 @@ Last updated: 2026-06-13
 - Native Candidate conflict tests proving new conflicting candidates record active Fact ids/reasons, remain unapproved, and do not change the old Fact, including current-value conflicts without dates
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
+- Native and browser fallback Context Pack tests proving client domain allowlists exclude disallowed Facts, `requiresApprovalAbove` changes confirmation status, request ceilings cannot widen client policy, malformed policy sensitivity values fail closed, and domain-limited Facts cannot be restored into edited Packs
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
-- MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
+- MCP shared Core tests proving `propose_memory` creates Candidates but not Facts, `get_request_status` strips internal Pack fields, and confirmed Packs are hidden from clients that do not own the original request
+- Agent tests proving Remote Relay client identity is forwarded to the MCP sidecar as trusted runtime metadata
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
 - Product release check wrapper covering standard app/Rust/release-binary checks and optional full Tauri + retrieval benchmark qualification
@@ -442,7 +451,7 @@ Last updated: 2026-06-13
 
 ### Local OCR Provider Slice
 
-- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Review fallback: At the time of this slice, SubAgents were not used; the main thread ran separate product, security/privacy, technical, and UX passes.
 - Product fit: accepted; scanned life documents can now enter the same Memory Inbox workflow when the user explicitly configures a local OCR provider.
 - Security/privacy: accepted; OCR is off by default, uses an explicit local command without shell expansion, accepts only stdout text, keeps image body handling inside Desktop extraction, and still creates only unapproved MemoryCandidates.
 - Technical design: accepted; provider invocation uses a temp input file, placeholder-based args, UTF-8 output validation, normalized extracted text, and a bounded timeout.
@@ -468,7 +477,7 @@ Last updated: 2026-06-13
 
 ### CI Product Check Slice
 
-- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate operations, security/privacy, performance-cost, and maintainability passes.
+- Review fallback: At the time of this slice, SubAgents were not used; the main thread ran separate operations, security/privacy, performance-cost, and maintainability passes.
 - Product fit: accepted; product-grade checks now run outside the developer machine, and retrieval performance has a scheduled lightweight profile rather than relying only on manual local runs.
 - Security/privacy: accepted; the workflow uses synthetic benchmark data and does not require Vault secrets, Relay tokens, OCR provider commands, or user data.
 - Performance-cost: accepted; PR/push checks run the standard bounded `product:check`, while scheduled/manual runs can add a smaller retrieval benchmark profile with configurable size.
@@ -538,7 +547,7 @@ Last updated: 2026-06-13
 
 ### Relay Handoff Slice
 
-- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate product, security/privacy, technical, and operations passes.
+- Review fallback: At the time of this slice, SubAgents were not used; the main thread ran separate product, security/privacy, technical, and operations passes.
 - Product fit: accepted; a hosted Remote MCP request can now be fulfilled after local approval without asking the Relay to read or persist the Vault.
 - Security/privacy: accepted; handoff bodies are admin-gated, memory-only, TTL-bound, validated as fulfilled `ContextPack only` responses, and excluded from relay state persistence plus backups.
 - Technical design: accepted; Agent/Vault remains canonical when online, while offline `get_request_status` can use the cached response for the matching request id.
@@ -547,7 +556,7 @@ Last updated: 2026-06-13
 
 ### Hosted Relay Deployment Slice
 
-- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate hosted-ops, security/privacy, product, and maintainability passes.
+- Review fallback: At the time of this slice, SubAgents were not used; the main thread ran separate hosted-ops, security/privacy, product, and maintainability passes.
 - Product fit: accepted; everyday AI clients now have a documented public HTTPS relay shape while the actual Vault remains on the user's device.
 - Security/privacy: accepted; the Docker defaults disable direct sidecar fallback, require external secrets for public binds, persist only metadata under `/data`, and keep Context Pack handoff bodies memory-only.
 - Hosted operations: accepted; deployment docs define required env vars, durable volume, smoke tests, admin token rotation, static fallback token rotation, and incident response.
@@ -668,11 +677,23 @@ Last updated: 2026-06-13
 - Data model: expired passive-capture Sources are marked `deletionState: purged`, body is replaced with `[PURGED_PASSIVE_CAPTURE]`, linked PassiveCaptureEvents move to `processingStatus: purged`, and a `passive_capture_purged` audit event is recorded.
 - Verification: Rust coverage seeds an expired passive-capture transcript, triggers a native settings save, and confirms both the JSON snapshot and normalized `sources` table contain only the purge marker.
 
-## Independent Review Passes
+### Access Policy Enforcement Slice
 
-SubAgents were not used because the user did not request parallel agent work. Review was performed in-thread.
+- Product fit: everyday AI clients now receive only the life domains the user allowed for that client, rather than relying on sensitivity ceilings alone.
+- Security/privacy: `domainAllowlist` and `requiresApprovalAbove` are enforced inside Pack generation, AI-requested sensitivity ceilings can only narrow the user's policy ceiling, malformed policy sensitivity values fail closed to `public`, and domain-limited Facts cannot be restored into an edited Pack.
+- AI access: Remote Relay now forwards the authenticated OAuth client id through the local Agent to the MCP sidecar as trusted runtime metadata, so Remote MCP requests no longer collapse into `conn_local_mcp`.
+- AI access: `life_context.get_request_status` now uses the effective client id and hides confirmed Packs from any client that did not own the original request.
+- Technical design: TypeScript fallback and Rust Vault Core share the same policy semantics, including `domain_policy` exclusions, policy-limited warnings, ceiling minimization, and approval-threshold fail-closed behavior.
+- Security/privacy: Vault Core external IDs, app-managed Relay tokens, and Relay OAuth/client/pairing tokens now require OS randomness through `getrandom` instead of falling back to predictable time-derived values.
+- Verification: `npm test` covers the browser fallback path, `cargo test --manifest-path src-tauri/Cargo.toml` covers Rust Vault Core, MCP, Relay, and Agent paths, and focused coverage confirms domain allowlists, invalid/widened ceilings, client-bound request status, and Agent-to-MCP client id propagation.
 
-- Product fit: passed for the requested pivot from app-only PoC to everyday-AI access. Remaining risk is that real MCP/Relay setup may still be too developer-heavy until installer and pairing flows exist.
-- Security/privacy: one material issue was found and fixed. Raw Source body excerpts were initially included in `ContextPack.sourceSnippets`; snippets now use only the approved Fact text, with a regression test.
-- Technical design: passed for the current vertical slices. Remaining risk is the temporary JSON snapshot projection for write-side CRUD and Context Pack generation, which should continue moving into Rust-owned Vault Core commands.
-- UX/accessibility: desktop and mobile Browser checks found no horizontal overflow on Home, Connections, Requests, Inbox, and Audit. Keyboard/focus styles remain from the PoC stylesheet and were preserved.
+## SubAgent Completion Review Disposition
+
+SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
+
+- Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
+- Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, and Control Center approval can push a confirmed short-lived handoff to Relay.
+- Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
+- Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish, public Origin allowlists, detailed OAuth challenge headers, and `GET /mcp` semantics remain before a hosted connector beta.
+- Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
+- Deferred general-user polish: full continuous browser Capture, richer Audit delivery receipts, bundled/non-developer OCR setup, and stronger upload drag/drop accessibility remain product-hardening work after the core AI access boundary.

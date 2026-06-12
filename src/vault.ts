@@ -35,6 +35,19 @@ const sensitivityRank: Record<SensitivityTier, number> = {
   secret_never_send: 4
 };
 
+function isSensitivityTier(value: unknown): value is SensitivityTier {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(sensitivityRank, value);
+}
+
+function policySensitivityValue(value: unknown, missingDefault: SensitivityTier): SensitivityTier {
+  if (value === undefined || value === null || value === "") return missingDefault;
+  return isSensitivityTier(value) ? value : "public";
+}
+
+function lowerSensitivityTier(left: SensitivityTier, right: SensitivityTier): SensitivityTier {
+  return sensitivityRank[left] <= sensitivityRank[right] ? left : right;
+}
+
 const domainLabels: Record<LifeContextDomain, string> = {
   identity_and_profile: "Identity",
   values_goals_and_preferences: "Values and goals",
@@ -82,10 +95,15 @@ export function nowIso(): string {
 }
 
 export function newId(prefix: string): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}_${crypto.randomUUID()}`;
+  const runtimeCrypto = globalThis.crypto;
+  if (runtimeCrypto?.randomUUID) {
+    return `${prefix}_${runtimeCrypto.randomUUID()}`;
   }
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  if (runtimeCrypto?.getRandomValues) {
+    const bytes = runtimeCrypto.getRandomValues(new Uint8Array(16));
+    return `${prefix}_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  throw new Error("Web Crypto is required to generate Life Context Vault identifiers.");
 }
 
 export function loadVault(): VaultState {
@@ -984,7 +1002,8 @@ export function searchFacts(
 
 export function buildContextPack(state: VaultState, taskText: string): ContextPack {
   return buildContextPackWithOptions(state, taskText, {
-    sensitivityCeiling: "sensitive"
+    sensitivityCeiling: "sensitive",
+    requiresApprovalAbove: "personal"
   });
 }
 
@@ -1002,6 +1021,11 @@ export function createContextPackRequest(
   }
 ): { state: VaultState; request: ContextPackRequest } {
   const now = nowIso();
+  const policyCeiling = policyCeilingForClient(state, input.clientId);
+  const requestedCeiling =
+    input.sensitivityCeiling === undefined
+      ? policyCeiling
+      : policySensitivityValue(input.sensitivityCeiling, "public");
   const request: ContextPackRequest = {
     id: newId("req"),
     clientId: input.clientId,
@@ -1009,7 +1033,7 @@ export function createContextPackRequest(
     taskText: input.taskText,
     purpose: input.purpose ?? "Answer with user-approved life context",
     requestedDomains: input.requestedDomains ?? [classifyDomain(input.taskText)],
-    sensitivityCeiling: input.sensitivityCeiling ?? policyCeilingForClient(state, input.clientId),
+    sensitivityCeiling: lowerSensitivityTier(policyCeiling, requestedCeiling),
     approvalMode: input.approvalMode ?? "explicit_sensitive",
     createdAt: now,
     expiresAt: minutesFromNow(input.ttlMinutes ?? 10),
@@ -1053,7 +1077,9 @@ export function buildContextPackForRequest(
     expiresAt: request.expiresAt,
     sensitivityCeiling: request.sensitivityCeiling,
     clientId: request.clientId,
-    approvalMode: request.approvalMode
+    approvalMode: request.approvalMode,
+    domainAllowlist: policyDomainAllowlistForClient(state, request.clientId),
+    requiresApprovalAbove: policyRequiresApprovalAboveForClient(state, request.clientId)
   });
   const auditEvent = audit(
     "context_pack_generated",
@@ -1096,10 +1122,17 @@ function buildContextPackWithOptions(
     requestId?: string;
     expiresAt?: string;
     sensitivityCeiling: SensitivityTier;
+    domainAllowlist?: LifeContextDomain[];
+    requiresApprovalAbove?: SensitivityTier;
     clientId?: string;
     approvalMode?: ContextPackRequest["approvalMode"];
   }
 ): ContextPack {
+  const sensitivityCeiling = policySensitivityValue(options.sensitivityCeiling, "public");
+  const requiresApprovalAbove = policySensitivityValue(
+    options.requiresApprovalAbove ?? "personal",
+    "personal"
+  );
   const taskDomain = classifyDomain(taskText);
   const riskLevel = classifyRisk(taskText);
   const relevant = rankFactsForTask(state, taskText).slice(0, 12);
@@ -1113,8 +1146,16 @@ function buildContextPackWithOptions(
       excludedItems.push({ referencedId: fact.id, reason: "secret_never_send" });
       continue;
     }
-    if (sensitivityRank[fact.sensitivity] > sensitivityRank[options.sensitivityCeiling]) {
+    if (sensitivityRank[fact.sensitivity] > sensitivityRank[sensitivityCeiling]) {
       excludedItems.push({ referencedId: fact.id, reason: "sensitivity_policy" });
+      continue;
+    }
+    if (
+      options.domainAllowlist &&
+      options.domainAllowlist.length > 0 &&
+      !options.domainAllowlist.includes(fact.domain)
+    ) {
+      excludedItems.push({ referencedId: fact.id, reason: "domain_policy" });
       continue;
     }
     if (fact.status !== "active") {
@@ -1137,12 +1178,12 @@ function buildContextPackWithOptions(
           ? "質問の領域と一致しています。"
           : "本人の背景情報として回答を調整できます。",
       sensitivity: fact.sensitivity,
-      sourceTitles: sourceTitlesForFact(state, fact, options.sensitivityCeiling),
+      sourceTitles: sourceTitlesForFact(state, fact, sensitivityCeiling),
       validFrom: fact.validFrom,
       validUntil: fact.validUntil,
       confidence: fact.confidence
     });
-    const snippet = sourceSnippetForFact(state, fact, options.sensitivityCeiling);
+    const snippet = sourceSnippetForFact(state, fact, sensitivityCeiling);
     if (snippet) sourceSnippets.push(snippet);
   }
 
@@ -1164,7 +1205,7 @@ function buildContextPackWithOptions(
     warnings,
     confirmationStatus:
       options.approvalMode === "always_review" ||
-      sensitivityRank[maxSensitivityIncluded] >= 2
+      sensitivityRank[maxSensitivityIncluded] > sensitivityRank[requiresApprovalAbove]
         ? "pending_user_confirmation"
         : "not_required"
   };
@@ -1190,11 +1231,15 @@ function restoreFactToPack(
   state: VaultState,
   pack: ContextPack,
   factId: string,
-  sensitivityCeiling: SensitivityTier
+  sensitivityCeiling: SensitivityTier,
+  domainAllowlist?: LifeContextDomain[]
 ): ContextPack {
   if (pack.items.some((item) => item.factId === factId)) return pack;
   const fact = state.facts.find((item) => item.id === factId);
   if (!fact || !factEligibleForContextPack(fact, sensitivityCeiling)) return pack;
+  if (domainAllowlist && domainAllowlist.length > 0 && !domainAllowlist.includes(fact.domain)) {
+    return pack;
+  }
   const restoredItem = contextPackItemForFact(state, fact, pack.taskDomain, sensitivityCeiling);
   const items = [...pack.items, restoredItem].sort((a, b) =>
     contextPackFactOrder(state, pack, a.factId) - contextPackFactOrder(state, pack, b.factId)
@@ -1321,7 +1366,7 @@ function warningsForContextItems(
     });
   }
   const policyLimitedIds = excludedItems
-    .filter((item) => item.reason === "sensitivity_policy")
+    .filter((item) => item.reason === "sensitivity_policy" || item.reason === "domain_policy")
     .map((item) => item.referencedId);
   if (policyLimitedIds.length > 0) {
     warnings.push({
@@ -1417,9 +1462,10 @@ export function updateContextPackItemVisibility(
     return state;
   }
 
-  const ceiling = request?.sensitivityCeiling ?? pack.maxSensitivityIncluded;
+  const ceiling = policySensitivityValue(request?.sensitivityCeiling ?? pack.maxSensitivityIncluded, "public");
+  const domainAllowlist = request ? policyDomainAllowlistForClient(state, request.clientId) : undefined;
   const nextPack = included
-    ? restoreFactToPack(state, pack, factId, ceiling)
+    ? restoreFactToPack(state, pack, factId, ceiling, domainAllowlist)
     : removeFactFromPack(state, pack, factId, ceiling);
   if (nextPack === pack) return state;
 
@@ -2146,9 +2192,20 @@ function defaultAccessPolicies(createdAt: string): AccessPolicy[] {
 }
 
 function policyCeilingForClient(state: VaultState, clientId: string): SensitivityTier {
-  return (
-    state.accessPolicies.find((policy) => policy.clientId === clientId)?.sensitivityCeiling ??
+  return policySensitivityValue(
+    state.accessPolicies.find((policy) => policy.clientId === clientId)?.sensitivityCeiling,
     "private_consequential"
+  );
+}
+
+function policyDomainAllowlistForClient(state: VaultState, clientId: string): LifeContextDomain[] | undefined {
+  return state.accessPolicies.find((policy) => policy.clientId === clientId)?.domainAllowlist;
+}
+
+function policyRequiresApprovalAboveForClient(state: VaultState, clientId: string): SensitivityTier {
+  return policySensitivityValue(
+    state.accessPolicies.find((policy) => policy.clientId === clientId)?.requiresApprovalAbove,
+    "personal"
   );
 }
 

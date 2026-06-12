@@ -272,6 +272,7 @@ export type ContextExclusion = {
   referencedId: string;
   reason:
     | "sensitivity_policy"
+    | "domain_policy"
     | "provider_policy"
     | "expired"
     | "deleted"

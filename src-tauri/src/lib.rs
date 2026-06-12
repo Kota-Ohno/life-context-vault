@@ -6,7 +6,6 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
   collections::HashSet,
   env,
@@ -1204,10 +1203,14 @@ fn create_native_context_pack_request_in_connection(
   let request_id = new_id("req");
   let pack_id = new_id("pack");
   let task_domain = classify_domain(task_text);
+  let policy_ceiling = policy_ceiling_for_client(vault, client_id);
   let ceiling = sensitivity_ceiling
     .filter(|value| !value.trim().is_empty())
-    .map(ToString::to_string)
-    .unwrap_or_else(|| policy_ceiling_for_client(vault, client_id));
+    .map(|value| policy_sensitivity_value(value, "public"))
+    .map(|requested_ceiling| lower_sensitivity_tier(&policy_ceiling, &requested_ceiling))
+    .unwrap_or(policy_ceiling);
+  let requires_approval_above = policy_requires_approval_above_for_client(vault, client_id);
+  let domain_allowlist = policy_domain_allowlist_for_client(vault, client_id);
   let approval_mode = approval_mode.unwrap_or("explicit_sensitive");
   let facts = rank_context_facts_in_connection(connection, task_text, &ceiling, 24)?;
   let mut items = Vec::new();
@@ -1226,6 +1229,14 @@ fn create_native_context_pack_request_in_connection(
       excluded_items.push(json!({
         "referencedId": fact.id,
         "reason": "sensitivity_policy"
+      }));
+      continue;
+    }
+    if !domain_allowlist.is_empty() && !domain_allowlist.iter().any(|domain| domain == &fact.domain)
+    {
+      excluded_items.push(json!({
+        "referencedId": fact.id,
+        "reason": "domain_policy"
       }));
       continue;
     }
@@ -1284,7 +1295,7 @@ fn create_native_context_pack_request_in_connection(
     .to_string();
   let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
   let requires_confirmation = approval_mode == "always_review"
-    || sensitivity_rank(&max_sensitivity_included) >= sensitivity_rank("private_consequential");
+    || sensitivity_rank(&max_sensitivity_included) > sensitivity_rank(&requires_approval_above);
   let confirmation_status = if requires_confirmation {
     "pending_user_confirmation"
   } else {
@@ -1439,16 +1450,22 @@ pub fn update_context_pack_item_visibility_at_path(
     .ok_or_else(|| format!("ContextPack was not found: {pack_id}"))?;
   ensure_pack_can_be_edited(&mut vault, &pack)?;
   let request_id = optional_str_field(&pack, "requestId");
-  let ceiling = request_id
+  let request = request_id
     .as_deref()
-    .and_then(|id| find_vault_item_by_id(&vault, "contextPackRequests", id))
-    .map(|request| str_field(&request, "sensitivityCeiling"))
+    .and_then(|id| find_vault_item_by_id(&vault, "contextPackRequests", id));
+  let ceiling = request
+    .as_ref()
+    .map(|request| str_field(request, "sensitivityCeiling"))
     .filter(|value| !value.is_empty())
     .unwrap_or_else(|| str_field(&pack, "maxSensitivityIncluded"));
   let ceiling = sensitivity_tier(&ceiling)?;
+  let domain_allowlist = request
+    .as_ref()
+    .map(|request| policy_domain_allowlist_for_client(&vault, &str_field(request, "clientId")))
+    .unwrap_or_default();
 
   let next_pack = if included {
-    restore_fact_to_context_pack(&connection, &pack, fact_id, ceiling)?
+    restore_fact_to_context_pack(&connection, &pack, fact_id, ceiling, &domain_allowlist)?
   } else {
     remove_fact_from_context_pack(&connection, &pack, fact_id, ceiling)?
   };
@@ -2840,6 +2857,26 @@ pub fn get_context_request_status_at_path(
   path: &Path,
   request_id: &str,
 ) -> Result<VaultCoreRequestStatusResult, String> {
+  get_context_request_status_at_path_with_client(path, request_id, None)
+}
+
+pub fn get_context_request_status_for_client_at_path(
+  path: &Path,
+  request_id: &str,
+  client_id: &str,
+) -> Result<VaultCoreRequestStatusResult, String> {
+  let client_id = client_id.trim();
+  if client_id.is_empty() {
+    return Err("clientId is required.".to_string());
+  }
+  get_context_request_status_at_path_with_client(path, request_id, Some(client_id))
+}
+
+fn get_context_request_status_at_path_with_client(
+  path: &Path,
+  request_id: &str,
+  expected_client_id: Option<&str>,
+) -> Result<VaultCoreRequestStatusResult, String> {
   let connection = open_vault_db_at_path(path)?;
   let vault = load_vault_json_from_connection(&connection)?;
   let Some(request) = find_vault_item_by_id(&vault, "contextPackRequests", request_id) else {
@@ -2850,6 +2887,16 @@ pub fn get_context_request_status_at_path(
       context_pack: None,
     });
   };
+  if let Some(expected_client_id) = expected_client_id {
+    if str_field(&request, "clientId") != expected_client_id {
+      return Ok(VaultCoreRequestStatusResult {
+        status: "not_found".to_string(),
+        request_id: request_id.to_string(),
+        expires_at: None,
+        context_pack: None,
+      });
+    }
+  }
   let pack = vault
     .get("contextPacks")
     .and_then(Value::as_array)
@@ -2992,6 +3039,7 @@ fn restore_fact_to_context_pack(
   pack: &Value,
   fact_id: &str,
   ceiling: &str,
+  domain_allowlist: &[String],
 ) -> Result<Value, String> {
   let mut items = pack
     .get("items")
@@ -3008,6 +3056,10 @@ fn restore_fact_to_context_pack(
     .ok_or_else(|| format!("ApprovedFact was not found: {fact_id}"))?;
   if !fact_eligible_for_context_pack(&fact, ceiling) {
     return Err("Fact is not eligible for this Context Pack.".to_string());
+  }
+  if !domain_allowlist.is_empty() && !domain_allowlist.iter().any(|domain| domain == &fact.domain)
+  {
+    return Err("Fact is outside this AI client's allowed life domains.".to_string());
   }
   let task_domain = str_field(pack, "taskDomain");
   items.push(context_pack_item_from_fact(connection, &fact, &task_domain, ceiling)?);
@@ -3487,7 +3539,12 @@ fn context_pack_warnings(
 
   let policy_limited_ids = excluded_items
     .iter()
-    .filter(|item| item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy"))
+    .filter(|item| {
+      matches!(
+        item.get("reason").and_then(Value::as_str),
+        Some("sensitivity_policy" | "domain_policy")
+      )
+    })
     .filter_map(|item| {
       item
         .get("referencedId")
@@ -5294,12 +5351,58 @@ fn is_expired(value: &str) -> bool {
 }
 
 fn policy_ceiling_for_client(vault: &Value, client_id: &str) -> String {
-  value_array(vault, "accessPolicies")
+  let value = value_array(vault, "accessPolicies")
     .into_iter()
     .find(|policy| str_field(policy, "clientId") == client_id)
     .map(|policy| str_field(policy, "sensitivityCeiling"))
-    .filter(|ceiling| !ceiling.is_empty())
-    .unwrap_or_else(|| "private_consequential".to_string())
+    .unwrap_or_default();
+  policy_sensitivity_value(&value, "private_consequential")
+}
+
+fn policy_requires_approval_above_for_client(vault: &Value, client_id: &str) -> String {
+  let value = value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .map(|policy| str_field(policy, "requiresApprovalAbove"))
+    .unwrap_or_default();
+  policy_sensitivity_value(&value, "personal")
+}
+
+fn policy_sensitivity_value(value: &str, missing_default: &str) -> String {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return missing_default.to_string();
+  }
+  sensitivity_tier(trimmed)
+    .unwrap_or("public")
+    .to_string()
+}
+
+fn lower_sensitivity_tier(left: &str, right: &str) -> String {
+  if sensitivity_rank(left) <= sensitivity_rank(right) {
+    left.to_string()
+  } else {
+    right.to_string()
+  }
+}
+
+fn policy_domain_allowlist_for_client(vault: &Value, client_id: &str) -> Vec<String> {
+  value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .and_then(|policy| {
+      policy
+        .get("domainAllowlist")
+        .and_then(Value::as_array)
+        .map(|domains| {
+          domains
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        })
+    })
+    .unwrap_or_default()
 }
 
 fn push_json_array(value: &mut Value, key: &str, item: Value) {
@@ -5367,11 +5470,10 @@ fn empty_vault_json() -> Value {
 }
 
 fn new_id(prefix: &str) -> String {
-  let nanos = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|duration| duration.as_nanos())
-    .unwrap_or_default();
-  format!("{prefix}_{nanos}")
+  let mut bytes = [0u8; 18];
+  getrandom::getrandom(&mut bytes)
+    .expect("OS randomness is required to generate Vault identifiers");
+  format!("{prefix}_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn now_iso() -> String {
@@ -5399,25 +5501,9 @@ fn stable_hash(text: &str) -> String {
 
 fn random_local_token() -> String {
   let mut bytes = [0u8; 32];
-  #[cfg(unix)]
-  {
-    if fs::File::open("/dev/urandom")
-      .and_then(|mut file| file.read_exact(&mut bytes))
-      .is_ok()
-    {
-      return format!("lcv_{}", URL_SAFE_NO_PAD.encode(bytes));
-    }
-  }
-
-  let mut hasher = Sha256::new();
-  hasher.update(
-    SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|duration| duration.as_nanos().to_le_bytes())
-      .unwrap_or_default(),
-  );
-  hasher.update(std::process::id().to_le_bytes());
-  format!("lcv_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+  getrandom::getrandom(&mut bytes)
+    .expect("OS randomness is required to generate local Relay tokens");
+  format!("lcv_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn system_time_seconds(time: SystemTime) -> u64 {
@@ -9386,6 +9472,288 @@ mod tests {
       pack.get("confirmationStatus").and_then(Value::as_str),
       Some("not_required")
     );
+  }
+
+  #[test]
+  fn native_context_pack_applies_domain_allowlist_and_approval_threshold() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_health_allowed",
+          "factText": "Doctor follow-up is scheduled for next month.",
+          "domain": "health_and_care",
+          "factType": "support_need",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        },
+        {
+          "id": "fact_work_blocked",
+          "factText": "Work shift starts at 9am.",
+          "domain": "work_and_education",
+          "factType": "routine",
+          "sourceIds": [],
+          "sensitivity": "public",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:21:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_health_only",
+          "clientId": "conn_chatgpt",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["health_and_care"],
+          "sensitivityCeiling": "sensitive",
+          "requiresApprovalAbove": "public",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me with the doctor follow-up and work shift.",
+      None,
+      None,
+      Some("explicit_sensitive"),
+    )
+    .expect("native context pack");
+
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let request = vault
+      .get("contextPackRequests")
+      .and_then(Value::as_array)
+      .and_then(|requests| requests.first())
+      .expect("request");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    let excluded = pack
+      .get("excludedItems")
+      .and_then(Value::as_array)
+      .expect("excluded");
+
+    assert!(items.iter().any(|item| {
+      item.get("factId").and_then(Value::as_str) == Some("fact_health_allowed")
+    }));
+    assert!(excluded.iter().any(|item| {
+      item.get("referencedId").and_then(Value::as_str) == Some("fact_work_blocked")
+        && item.get("reason").and_then(Value::as_str) == Some("domain_policy")
+    }));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("pending_user_confirmation")
+    );
+    assert_eq!(
+      request.get("status").and_then(Value::as_str),
+      Some("pending_user_confirmation")
+    );
+    let restore_error = restore_fact_to_context_pack(
+      &connection,
+      pack,
+      "fact_work_blocked",
+      "sensitive",
+      &["health_and_care".to_string()],
+    )
+    .expect_err("domain-limited fact cannot be restored");
+    assert!(restore_error.contains("allowed life domains"));
+  }
+
+  #[test]
+  fn native_context_pack_policy_fails_closed_for_invalid_or_widened_ceiling() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_public",
+          "factText": "Preferred display name is Kota.",
+          "domain": "identity_and_profile",
+          "factType": "identity",
+          "sourceIds": [],
+          "sensitivity": "public",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:20:00.000Z"
+        },
+        {
+          "id": "fact_personal",
+          "factText": "Doctor follow-up is scheduled for next month.",
+          "domain": "health_and_care",
+          "factType": "support_need",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:21:00.000Z"
+        },
+        {
+          "id": "fact_sensitive",
+          "factText": "Sensitive care plan should stay tightly controlled.",
+          "domain": "health_and_care",
+          "factType": "support_need",
+          "sourceIds": [],
+          "sensitivity": "sensitive",
+          "confidence": "source_backed",
+          "status": "active",
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "approvedAt": "2026-06-12T00:10:00.000Z",
+          "updatedAt": "2026-06-12T00:22:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_chatgpt",
+          "clientId": "conn_chatgpt",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["identity_and_profile", "health_and_care"],
+          "sensitivityCeiling": "personal",
+          "requiresApprovalAbove": "not_a_tier",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-12T00:00:00.000Z",
+          "updatedAt": "2026-06-12T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me with the doctor follow-up and care plan.",
+      None,
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("native context pack");
+
+    let request = vault
+      .get("contextPackRequests")
+      .and_then(Value::as_array)
+      .and_then(|requests| requests.first())
+      .expect("request");
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    let excluded = pack
+      .get("excludedItems")
+      .and_then(Value::as_array)
+      .expect("excluded");
+
+    assert_eq!(
+      request.get("sensitivityCeiling").and_then(Value::as_str),
+      Some("personal")
+    );
+    assert!(items.iter().any(|item| {
+      item.get("factId").and_then(Value::as_str) == Some("fact_personal")
+    }));
+    assert!(excluded.iter().any(|item| {
+      item.get("referencedId").and_then(Value::as_str) == Some("fact_sensitive")
+        && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
+    }));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("pending_user_confirmation")
+    );
+
+    let invalid_payload = payload.replace(
+      "\"sensitivityCeiling\": \"personal\"",
+      "\"sensitivityCeiling\": \"not_a_tier\"",
+    );
+    let mut invalid_connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&invalid_connection);
+    sync_normalized_tables(&mut invalid_connection, &invalid_payload).expect("sync invalid");
+    let mut invalid_vault: Value = serde_json::from_str(&invalid_payload).expect("invalid vault");
+    create_native_context_pack_request_in_connection(
+      &invalid_connection,
+      &mut invalid_vault,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me with the doctor follow-up.",
+      None,
+      None,
+      Some("explicit_sensitive"),
+    )
+    .expect("invalid policy context pack");
+    let invalid_request = invalid_vault
+      .get("contextPackRequests")
+      .and_then(Value::as_array)
+      .and_then(|requests| requests.first())
+      .expect("invalid request");
+    let invalid_pack = invalid_vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("invalid pack");
+    let invalid_items = invalid_pack
+      .get("items")
+      .and_then(Value::as_array)
+      .expect("invalid items");
+    let invalid_excluded = invalid_pack
+      .get("excludedItems")
+      .and_then(Value::as_array)
+      .expect("invalid excluded");
+
+    assert_eq!(
+      invalid_request.get("sensitivityCeiling").and_then(Value::as_str),
+      Some("public")
+    );
+    assert!(invalid_items.iter().any(|item| {
+      item.get("factId").and_then(Value::as_str) == Some("fact_public")
+    }));
+    assert!(invalid_excluded.iter().any(|item| {
+      item.get("referencedId").and_then(Value::as_str) == Some("fact_personal")
+        && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
+    }));
   }
 
   #[test]

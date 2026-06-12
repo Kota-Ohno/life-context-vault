@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
   collections::HashMap,
   env,
-  fs::{self, File},
+  fs,
   io::{BufRead, BufReader, Read, Write},
   net::{TcpListener, TcpStream},
   path::PathBuf,
@@ -850,7 +850,7 @@ impl RelayState {
     })
   }
 
-  fn forward_to_agent(&self, body: &str) -> Result<Option<Value>, String> {
+  fn forward_to_agent(&self, body: &str, client_id: &str) -> Result<Option<Value>, String> {
     let request_id = random_token("agent_req");
     let (response_tx, response_rx) = mpsc::channel();
     let sender = {
@@ -868,6 +868,7 @@ impl RelayState {
     let outbound = json!({
       "type": "mcp_request",
       "id": request_id,
+      "clientId": client_id,
       "body": body
     })
     .to_string();
@@ -1414,7 +1415,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     .with_header("WWW-Authenticate", "Bearer");
   };
 
-  match state.forward_to_agent(&request.body) {
+  match state.forward_to_agent(&request.body, &client_id) {
     Ok(Some(body)) => {
       record_relay_event(
         state,
@@ -1444,7 +1445,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body, &client_id) {
           record_relay_event(
             state,
-            Some(client_id),
+            Some(client_id.clone()),
             required_scope,
             &method,
             tool_name.as_deref(),
@@ -1455,7 +1456,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         }
         record_relay_event(
           state,
-          Some(client_id),
+          Some(client_id.clone()),
           required_scope,
           &method,
           tool_name.as_deref(),
@@ -1475,11 +1476,12 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     &request.body,
     &config.mcp_command,
     config.vault_db_path.as_deref(),
+    Some(&client_id),
   ) {
     Ok(Some(body)) => {
       record_relay_event(
         state,
-        Some(client_id),
+        Some(client_id.clone()),
         required_scope,
         &method,
         tool_name.as_deref(),
@@ -1491,7 +1493,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     Ok(None) => {
       record_relay_event(
         state,
-        Some(client_id),
+        Some(client_id.clone()),
         required_scope,
         &method,
         tool_name.as_deref(),
@@ -1504,7 +1506,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body, &client_id) {
         record_relay_event(
           state,
-          Some(client_id),
+          Some(client_id.clone()),
           required_scope,
           &method,
           tool_name.as_deref(),
@@ -1515,7 +1517,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       }
       record_relay_event(
         state,
-        Some(client_id),
+        Some(client_id.clone()),
         required_scope,
         &method,
         tool_name.as_deref(),
@@ -2013,19 +2015,8 @@ fn random_token(prefix: &str) -> String {
 
 fn random_bytes(count: usize) -> Vec<u8> {
   let mut bytes = vec![0u8; count];
-  if File::open("/dev/urandom")
-    .and_then(|mut file| file.read_exact(&mut bytes))
-    .is_ok()
-  {
-    return bytes;
-  }
-  let fallback = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|duration| duration.as_nanos())
-    .unwrap_or_default();
-  for (index, byte) in bytes.iter_mut().enumerate() {
-    *byte = ((fallback >> ((index % 8) * 8)) & 0xff) as u8;
-  }
+  getrandom::getrandom(&mut bytes)
+    .expect("OS randomness is required to generate Relay tokens");
   bytes
 }
 

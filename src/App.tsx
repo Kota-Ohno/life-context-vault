@@ -4021,6 +4021,7 @@ function packConfirmationLabel(status: ContextPack["confirmationStatus"]): strin
 function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reason"]): string {
   const labels: Record<ContextPack["excludedItems"][number]["reason"], string> = {
     sensitivity_policy: "感度ポリシーを超過",
+    domain_policy: "領域ポリシー対象外",
     provider_policy: "AI接続ポリシーで制限",
     expired: "期限切れ",
     deleted: "削除済み",
