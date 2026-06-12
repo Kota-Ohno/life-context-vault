@@ -576,6 +576,18 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.table-row code {
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #d8dfd5;
+  border-radius: 6px;
+  background: #f2f5f0;
+  color: #26352b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .fact-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1331,6 +1343,16 @@ button:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.compact-actions {
+  min-width: 116px;
+  justify-content: flex-end;
+}
+
+.compact-actions .secondary-button {
+  min-width: 108px;
+  white-space: nowrap;
 }
 
 .pack-action-row {

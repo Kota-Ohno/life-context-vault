@@ -270,7 +270,7 @@ Last updated: 2026-06-13
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including SSE/session transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
 - Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
-- OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
+- OCR setup now detects common local Tesseract providers, offers one-click Settings presets, and includes OS-specific guided install commands for users who do not already have an OCR provider. Remaining product-hardening: bundled OCR runtime for users who do not want to install Tesseract separately.
 
 ## Verification
 
@@ -730,6 +730,13 @@ Last updated: 2026-06-13
 - Technical design: Tauri exposes `detect_ocr_provider_candidates`, TypeScript keeps the native boundary typed, and the Settings view applies detected command, basic `{input} stdout` args, and timeout through existing runtime preferences.
 - Verification: Rust provider-detection test covers PATH detection and duplicate suppression without executing the fake provider. `npm run product:check` passed. Browser checks at desktop `1280x900` and mobile `390x844` confirmed the Settings Local OCR card renders without horizontal overflow and keeps the preset buttons within the panel.
 
+### OCR Guided Install Slice
+
+- Product fit: users who do not already have Tesseract now see concrete macOS/Homebrew, Windows/winget, and Ubuntu/apt install commands inside Settings instead of being told to figure out OCR externally.
+- Security/privacy: the app only copies commands or fills local path/argument fields; it does not run installers, inspect images, send image data, or execute OCR until the user later uploads an image with an explicit local provider configured.
+- Technical design: Settings orders the OS-relevant guide first when the browser platform is known, keeps all command text wrapped inside the existing panel pattern, and uses the existing clipboard notice flow.
+- Verification: `npm test -- --run`, `npm run build`, desktop `1280x920` CDP render, and mobile `390x844` CDP render passed with no horizontal overflow in the Settings OCR guide.
+
 ### Browser Capture Delete Slice
 
 - Product fit: the extension popup now lets a user immediately delete the latest captured Source body when Auto Capture or manual capture grabbed the wrong conversation, reducing the anxiety cost of trying passive capture.
@@ -788,4 +795,4 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, including SSE/session semantics and real hosted-client certification, remains before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: bundled OCR runtime or guided non-developer OCR installer remains product-hardening work after the core AI access boundary.
+- Deferred general-user polish: a bundled OCR runtime remains product-hardening work after the core AI access boundary.

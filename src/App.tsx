@@ -1787,6 +1787,7 @@ export function App() {
             runtimePreferences={runtimePreferences}
             ocrProviderCandidates={ocrProviderCandidates}
             updateRuntimePreference={updateRuntimePreference}
+            copyText={copyText}
           />
         )}
       </main>
@@ -3778,7 +3779,8 @@ function SettingsView({
   storageReady,
   runtimePreferences,
   ocrProviderCandidates,
-  updateRuntimePreference
+  updateRuntimePreference,
+  copyText
 }: {
   passphrase: string;
   setPassphrase: (value: string) => void;
@@ -3794,8 +3796,10 @@ function SettingsView({
   runtimePreferences: RuntimePreferences;
   ocrProviderCandidates: NativeOcrProviderCandidate[];
   updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
+  copyText: (value: string, message: string) => Promise<boolean>;
 }) {
   const hasOcrCommand = Boolean(runtimePreferences.ocrCommand.trim());
+  const ocrInstallGuides = ocrInstallerGuidesForPlatform();
   return (
     <section className="view-grid">
       <div className="panel">
@@ -3886,6 +3890,41 @@ function SettingsView({
               <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のCommandへローカルOCRコマンドを直接入力してください。</span>
             </div>
           )}
+          <div className="table-list">
+            {ocrInstallGuides.map((guide) => (
+              <div className="table-row" key={guide.id}>
+                <div>
+                  <strong>{guide.label}</strong>
+                  <span>{guide.description}</span>
+                  <code>{guide.installCommand}</code>
+                </div>
+                <div className="action-row compact-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() => copyText(guide.installCommand, `${guide.label}のOCRインストールコマンドをコピーしました。`)}
+                    type="button"
+                  >
+                    <Clipboard size={16} />
+                    Copy
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateRuntimePreference({
+                        ocrCommand: guide.command,
+                        ocrArgs: guide.args,
+                        ocrTimeoutSeconds: 30
+                      })
+                    }
+                    type="button"
+                  >
+                    <Settings size={16} />
+                    パスを反映
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
           <Input
             label="Command"
             value={runtimePreferences.ocrCommand}
@@ -4496,6 +4535,57 @@ function ocrProviderLabelFromCommand(command: string): string {
   const trimmed = command.trim();
   if (!trimmed) return "OCR Provider";
   return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
+}
+
+type OcrInstallGuide = {
+  id: string;
+  label: string;
+  description: string;
+  installCommand: string;
+  command: string;
+  args: string;
+};
+
+function ocrInstallerGuidesForPlatform(): OcrInstallGuide[] {
+  const guides: OcrInstallGuide[] = [
+    {
+      id: "mac_homebrew",
+      label: "macOS / Homebrew",
+      description: "HomebrewでTesseract本体と言語データを入れます。インストール後は検出候補を使うのが安全です。",
+      installCommand: "brew install tesseract tesseract-lang",
+      command: "/opt/homebrew/bin/tesseract",
+      args: "{input} stdout -l jpn+eng"
+    },
+    {
+      id: "windows_winget",
+      label: "Windows / winget",
+      description: "Windowsの標準パッケージ管理でTesseractを入れます。インストール先が違う場合はCommandを修正してください。",
+      installCommand: "winget install --id UB-Mannheim.TesseractOCR",
+      command: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+      args: "{input} stdout -l jpn+eng"
+    },
+    {
+      id: "linux_apt",
+      label: "Ubuntu / apt",
+      description: "Ubuntu系Linux向けです。日本語と英語の言語データも一緒に入れます。",
+      installCommand: "sudo apt install tesseract-ocr tesseract-ocr-jpn tesseract-ocr-eng",
+      command: "/usr/bin/tesseract",
+      args: "{input} stdout -l jpn+eng"
+    }
+  ];
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform.toLowerCase();
+  const preferredId = platform.includes("win")
+    ? "windows_winget"
+    : platform.includes("linux")
+      ? "linux_apt"
+      : platform.includes("mac")
+        ? "mac_homebrew"
+        : "";
+  if (!preferredId) return guides;
+  return [
+    ...guides.filter((guide) => guide.id === preferredId),
+    ...guides.filter((guide) => guide.id !== preferredId)
+  ];
 }
 
 function linkedFactCount(state: VaultState, sourceId: string): number {
