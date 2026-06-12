@@ -37,6 +37,7 @@ npm run tauri:bundle
 npm test
 npm run build
 npm run mcp:build
+npm run relay:build
 npm run tauri:build
 npm run tauri:bundle
 ```
@@ -57,6 +58,7 @@ npm run tauri:bundle
 - Tauri desktop wrapper with SQLite-backed native persistence
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
 - Local MCP stdio sidecar for same-device AI clients
+- HTTP MCP relay for local Remote-MCP-style testing
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to SQLite in the app data directory and projected into normalized tables.
 
@@ -76,6 +78,16 @@ The MCP sidecar exposes controlled tools only:
 - `life_context.get_request_status`
 
 See `docs/local-mcp-sidecar.md` for setup, safety boundaries, and a stdio smoke test.
+
+## Run HTTP MCP Relay
+
+```bash
+npm run relay:build
+```
+
+Then open **Connections** and copy the relay command.
+
+The relay defaults to `http://127.0.0.1:8765/mcp`, requires a bearer token, and forwards requests to the local MCP sidecar. See `docs/http-mcp-relay.md`.
 
 ## Try The Product-Grade Slice
 

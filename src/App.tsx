@@ -110,6 +110,8 @@ const blankSetup: BackgroundSetupInput = {
 };
 
 const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
+const localRelayUrl = "http://127.0.0.1:8765/mcp";
+const localRelayToken = "dev-local-token";
 
 export function App() {
   const [state, setState] = useState<VaultState>(() => loadVault());
@@ -961,6 +963,42 @@ function ConnectionsView({
         <p className="muted">Local MCPはVault全体を読ませません。重要な私的Context Packはアプリ側の確認待ちになり、未承認候補はFactとして使われません。</p>
       </div>
 
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">HTTP Relay setup</p>
+            <h3>Remote MCP形式に近いHTTP接続をローカルで試す</h3>
+          </div>
+          <Radio size={18} />
+        </div>
+        <div className="setup-grid relay-setup">
+          <div className="setup-step">
+            <Badge>1</Badge>
+            <strong>Relayをビルド</strong>
+            <pre className="code-box">npm run relay:build</pre>
+          </div>
+          <div className="setup-step">
+            <Badge>2</Badge>
+            <strong>Relayを起動</strong>
+            <pre className="code-box">{makeRelayCommand(nativePath)}</pre>
+            <button
+              className="secondary-button"
+              onClick={() => copyText(makeRelayCommand(nativePath), "Relay起動コマンドをコピーしました。")}
+              type="button"
+            >
+              <Clipboard size={16} />
+              Copy command
+            </button>
+          </div>
+          <div className="setup-step">
+            <Badge>3</Badge>
+            <strong>HTTP MCP endpoint</strong>
+            <pre className="code-box">{JSON.stringify({ url: localRelayUrl, authorization: `Bearer ${localRelayToken}` }, null, 2)}</pre>
+          </div>
+        </div>
+        <p className="muted">RelayはHTTPで受けたMCP JSON-RPCをローカルMCP sidecarへ中継します。デフォルトは127.0.0.1だけにbindし、外部公開時は明示的なBearer tokenを要求します。</p>
+      </div>
+
       <div className="panel">
         <div className="panel-heading">
           <div>
@@ -1438,6 +1476,18 @@ function makeClaudeDesktopConfig(nativePath: string | null): string {
     null,
     2
   );
+}
+
+function makeRelayCommand(nativePath: string | null): string {
+  const vaultPath =
+    nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3";
+  return [
+    `LCV_RELAY_TOKEN=${localRelayToken}`,
+    `LCV_RELAY_BIND=127.0.0.1:8765`,
+    `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
+    `LCV_VAULT_DB_PATH="${vaultPath}"`,
+    `src-tauri/target/release/lcv-relay`
+  ].join(" ");
 }
 
 function groupByDomain(facts: ApprovedFact[]): Partial<Record<LifeContextDomain, ApprovedFact[]>> {
