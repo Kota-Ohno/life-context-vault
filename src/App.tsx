@@ -1029,11 +1029,23 @@ function ConnectionsView({
             <div className="scope-row">
               <Badge>Raw Vault</Badge>
               <Badge>Raw Source</Badge>
+              <Badge>MCP body</Badge>
+              <Badge>Pack body</Badge>
               <Badge>long-lived Pack</Badge>
             </div>
           </div>
+          <div className="setup-step">
+            <Badge>State</Badge>
+            <strong>Relayが監査用に保持するもの</strong>
+            <div className="scope-row">
+              <Badge>OAuth clients</Badge>
+              <Badge>request metadata</Badge>
+              <Badge>scope decision</Badge>
+            </div>
+            <pre className="code-box">{`${localRelayBaseUrl}/relay/state`}</pre>
+          </div>
         </div>
-        <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。AgentがオフラインならContext Packは返さず、Vault本体やRaw SourceはRelayに置きません。</p>
+        <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。RelayはOAuth client登録とリクエストの監査メタデータだけを永続化し、Vault本文・MCP本文・Context Pack本文は置きません。</p>
       </div>
 
       <div className="panel">
@@ -1553,6 +1565,7 @@ function makeRelayCommand(nativePath: string | null): string {
     `LCV_RELAY_TOKEN=${localRelayToken}`,
     `LCV_RELAY_BIND=127.0.0.1:8765`,
     `LCV_RELAY_BASE_URL=${localRelayBaseUrl}`,
+    `LCV_RELAY_STATE_PATH="${makeRelayStatePath(nativePath)}"`,
     `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`,
     `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
     `LCV_VAULT_DB_PATH="${vaultPath}"`,
@@ -1562,6 +1575,13 @@ function makeRelayCommand(nativePath: string | null): string {
 
 function makePairingCommand(): string {
   return `curl -s -X POST ${localRelayBaseUrl}/pairing/start`;
+}
+
+function makeRelayStatePath(nativePath: string | null): string {
+  if (nativePath) {
+    return nativePath.replace(/vault\.sqlite3$/, "relay-state.json");
+  }
+  return "$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json";
 }
 
 function makeAgentCommand(nativePath: string | null): string {
@@ -1581,6 +1601,7 @@ function makeRemoteConnectorInfo() {
     authorizationServerMetadata: `${localRelayBaseUrl}/.well-known/oauth-authorization-server`,
     protectedResourceMetadata: `${localRelayBaseUrl}/.well-known/oauth-protected-resource`,
     dynamicClientRegistration: `${localRelayBaseUrl}/oauth/register`,
+    relayStateStatus: `${localRelayBaseUrl}/relay/state`,
     scopes: [
       "context_pack.request",
       "memory.propose",

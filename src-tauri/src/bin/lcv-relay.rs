@@ -1,10 +1,11 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
   collections::HashMap,
   env,
-  fs::File,
+  fs::{self, File},
   io::{BufRead, BufReader, Read, Write},
   net::{TcpListener, TcpStream},
   path::PathBuf,
@@ -26,6 +27,7 @@ const REQUEST_TIMEOUT_SECONDS: u64 = 30;
 const OAUTH_TOKEN_TTL_SECONDS: u64 = 3600;
 const AUTH_CODE_TTL_SECONDS: u64 = 300;
 const PAIRING_TTL_SECONDS: u64 = 600;
+const MAX_RELAY_REQUEST_EVENTS: usize = 500;
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
   "memory.propose",
@@ -42,7 +44,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
   let config = Arc::new(RelayConfig::from_env()?);
-  let state = RelayState::new();
+  let state = RelayState::load(config.relay_state_path.clone())?;
   eprintln!("Life Context Vault relay listening on {}", config.base_url);
   let listener = TcpListener::bind(&config.bind)
     .map_err(|error| format!("failed to bind {}: {error}", config.bind))?;
@@ -73,6 +75,7 @@ struct RelayConfig {
   admin_token: Option<String>,
   mcp_command: PathBuf,
   vault_db_path: Option<String>,
+  relay_state_path: Option<PathBuf>,
   allow_direct_sidecar: bool,
 }
 
@@ -93,6 +96,10 @@ impl RelayConfig {
         .map(PathBuf::from)
         .unwrap_or_else(|_| mcp_stdio::resolve_sibling_binary("lcv-mcp")),
       vault_db_path: env::var("LCV_VAULT_DB_PATH").ok(),
+      relay_state_path: env::var("LCV_RELAY_STATE_PATH")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(default_relay_state_path),
       allow_direct_sidecar: env::var("LCV_RELAY_ALLOW_DIRECT_SIDECAR")
         .map(|value| value != "0")
         .unwrap_or(true),
@@ -110,13 +117,46 @@ impl RelayConfig {
   }
 }
 
+#[cfg(target_os = "macos")]
+fn default_relay_state_path() -> Option<PathBuf> {
+  env::var("HOME").ok().map(|home| {
+    PathBuf::from(home)
+      .join("Library")
+      .join("Application Support")
+      .join("dev.life-context-vault.poc")
+      .join("relay-state.json")
+  })
+}
+
+#[cfg(target_os = "windows")]
+fn default_relay_state_path() -> Option<PathBuf> {
+  env::var("APPDATA")
+    .ok()
+    .map(|appdata| {
+      PathBuf::from(appdata)
+        .join("dev.life-context-vault.poc")
+        .join("relay-state.json")
+    })
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn default_relay_state_path() -> Option<PathBuf> {
+  env::var("XDG_DATA_HOME")
+    .map(PathBuf::from)
+    .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".local").join("share")))
+    .ok()
+    .map(|base| base.join("dev.life-context-vault.poc").join("relay-state.json"))
+}
+
 #[derive(Clone)]
 struct RelayState {
   inner: Arc<Mutex<RelayStateInner>>,
+  store_path: Option<PathBuf>,
 }
 
 struct RelayStateInner {
   registered_clients: HashMap<String, RegisteredClient>,
+  request_events: Vec<RelayRequestEvent>,
   auth_codes: HashMap<String, AuthCode>,
   access_tokens: HashMap<String, AccessToken>,
   pairing_sessions: HashMap<String, PairingSession>,
@@ -126,16 +166,17 @@ struct RelayStateInner {
   agent_connected_at: Option<SystemTime>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct RegisteredClient {
   client_id: String,
   client_name: String,
   redirect_uris: Vec<String>,
-  created_at: SystemTime,
+  created_at: u64,
 }
 
 #[derive(Clone, Debug)]
 struct AuthCode {
+  client_id: String,
   redirect_uri: String,
   code_challenge: String,
   code_challenge_method: String,
@@ -145,8 +186,29 @@ struct AuthCode {
 
 #[derive(Clone, Debug)]
 struct AccessToken {
+  client_id: String,
   scopes: Vec<String>,
   expires_at: SystemTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RelayRequestEvent {
+  id: String,
+  client_id: Option<String>,
+  required_scope: String,
+  method: String,
+  tool_name: Option<String>,
+  status: String,
+  transport: String,
+  occurred_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PersistedRelayState {
+  version: u32,
+  registered_clients: Vec<RegisteredClient>,
+  #[serde(default)]
+  request_events: Vec<RelayRequestEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -167,10 +229,35 @@ enum PairingStatus {
 }
 
 impl RelayState {
+  #[cfg(test)]
   fn new() -> Self {
+    Self::from_persisted(None, PersistedRelayState::empty())
+  }
+
+  fn load(store_path: Option<PathBuf>) -> Result<Self, String> {
+    let persisted = match &store_path {
+      Some(path) if path.exists() => {
+        let raw = fs::read_to_string(path)
+          .map_err(|error| format!("failed to read relay state store: {error}"))?;
+        serde_json::from_str::<PersistedRelayState>(&raw)
+          .map_err(|error| format!("failed to parse relay state store: {error}"))?
+      }
+      _ => PersistedRelayState::empty(),
+    };
+    Ok(Self::from_persisted(store_path, persisted))
+  }
+
+  fn from_persisted(store_path: Option<PathBuf>, mut persisted: PersistedRelayState) -> Self {
+    persisted.request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
+    let registered_clients = persisted
+      .registered_clients
+      .into_iter()
+      .map(|client| (client.client_id.clone(), client))
+      .collect();
     Self {
       inner: Arc::new(Mutex::new(RelayStateInner {
-        registered_clients: HashMap::new(),
+        registered_clients,
+        request_events: persisted.request_events,
         auth_codes: HashMap::new(),
         access_tokens: HashMap::new(),
         pairing_sessions: HashMap::new(),
@@ -179,21 +266,33 @@ impl RelayState {
         agent_pairing_id: None,
         agent_connected_at: None,
       })),
+      store_path,
     }
   }
 
-  fn register_client(&self, client_name: String, redirect_uris: Vec<String>) -> RegisteredClient {
+  fn register_client(
+    &self,
+    client_name: String,
+    redirect_uris: Vec<String>,
+  ) -> Result<RegisteredClient, String> {
     let client = RegisteredClient {
       client_id: random_token("client"),
       client_name,
       redirect_uris,
-      created_at: SystemTime::now(),
+      created_at: system_time_seconds(SystemTime::now()),
     };
-    let mut inner = self.inner.lock().expect("relay state");
-    inner
-      .registered_clients
-      .insert(client.client_id.clone(), client.clone());
-    client
+    {
+      let mut inner = self.inner.lock().expect("relay state");
+      inner
+        .registered_clients
+        .insert(client.client_id.clone(), client.clone());
+    }
+    if let Err(error) = self.persist() {
+      let mut inner = self.inner.lock().expect("relay state");
+      inner.registered_clients.remove(&client.client_id);
+      return Err(error);
+    }
+    Ok(client)
   }
 
   fn client(&self, client_id: &str) -> Option<RegisteredClient> {
@@ -219,6 +318,44 @@ impl RelayState {
   fn access_token(&self, token: &str) -> Option<AccessToken> {
     let inner = self.inner.lock().expect("relay state");
     inner.access_tokens.get(token).cloned()
+  }
+
+  fn record_request_event(&self, event: RelayRequestEvent) -> Result<(), String> {
+    {
+      let mut inner = self.inner.lock().expect("relay state");
+      inner.request_events.insert(0, event);
+      if inner.request_events.len() > MAX_RELAY_REQUEST_EVENTS {
+        inner.request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
+      }
+    }
+    self.persist()
+  }
+
+  fn store_status(&self) -> Value {
+    let inner = self.inner.lock().expect("relay state");
+    let recent_events: Vec<Value> = inner
+      .request_events
+      .iter()
+      .take(20)
+      .map(|event| {
+        json!({
+          "id": event.id,
+          "clientId": event.client_id,
+          "requiredScope": event.required_scope,
+          "method": event.method,
+          "toolName": event.tool_name,
+          "status": event.status,
+          "transport": event.transport,
+          "occurredAt": event.occurred_at
+        })
+      })
+      .collect();
+    json!({
+      "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
+      "registeredClientCount": inner.registered_clients.len(),
+      "requestEventCount": inner.request_events.len(),
+      "recentRequestEvents": recent_events
+    })
   }
 
   fn start_pairing(&self) -> PairingSession {
@@ -330,6 +467,65 @@ impl RelayState {
       let _ = sender.send(result);
     }
   }
+
+  fn persist(&self) -> Result<(), String> {
+    let Some(path) = &self.store_path else {
+      return Ok(());
+    };
+    let snapshot = {
+      let inner = self.inner.lock().expect("relay state");
+      PersistedRelayState {
+        version: 1,
+        registered_clients: inner.registered_clients.values().cloned().collect(),
+        request_events: inner.request_events.clone(),
+      }
+    };
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create relay state directory: {error}"))?;
+    }
+    let payload = serde_json::to_string_pretty(&snapshot)
+      .map_err(|error| format!("failed to serialize relay state: {error}"))?;
+    let temp_path = path.with_extension(
+      path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!("{extension}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string()),
+    );
+    fs::write(&temp_path, payload)
+      .map_err(|error| format!("failed to write relay state temp store: {error}"))?;
+    #[cfg(target_os = "windows")]
+    {
+      match fs::rename(&temp_path, path) {
+        Ok(()) => return Ok(()),
+        Err(rename_error) if path.exists() => {
+          fs::remove_file(path)
+            .map_err(|error| format!("failed to replace relay state store: {error}"))?;
+          fs::rename(&temp_path, path).map_err(|error| {
+            format!("failed to replace relay state store after removing existing file: {error}; original error: {rename_error}")
+          })?;
+          return Ok(());
+        }
+        Err(error) => return Err(format!("failed to replace relay state store: {error}")),
+      }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+      fs::rename(&temp_path, path)
+        .map_err(|error| format!("failed to replace relay state store: {error}"))
+    }
+  }
+}
+
+impl PersistedRelayState {
+  fn empty() -> Self {
+    Self {
+      version: 1,
+      registered_clients: Vec::new(),
+      request_events: Vec::new(),
+    }
+  }
 }
 
 fn handle_stream(stream: TcpStream, config: &RelayConfig, state: &RelayState) -> Result<(), String> {
@@ -362,6 +558,7 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("POST", "/pairing/start") => start_pairing(request, config, state),
     ("GET", "/pairing/status") => pairing_status(request, state),
     ("GET", "/agent/status") => json_response(200, state.agent_status()),
+    ("GET", "/relay/state") => relay_state_status(request, config, state),
     ("OPTIONS", "/mcp") => HttpResponse::empty(204).with_cors(),
     ("POST", "/mcp") => handle_mcp_request(request, config, state),
     _ => json_response(404, json!({
@@ -414,17 +611,36 @@ fn register_oauth_client(request: &HttpRequest, state: &RelayState) -> HttpRespo
     })
     .filter(|items| !items.is_empty())
     .unwrap_or_else(|| vec!["http://127.0.0.1/oauth/callback".to_string()]);
-  let client = state.register_client(client_name, redirect_uris.clone());
+  let client = match state.register_client(client_name, redirect_uris.clone()) {
+    Ok(client) => client,
+    Err(error) => {
+      return json_response(500, json!({
+        "error": "relay_state_persist_failed",
+        "message": error
+      }));
+    }
+  };
   json_response(201, json!({
     "client_id": client.client_id,
     "client_name": client.client_name,
-    "client_id_issued_at": system_time_seconds(client.created_at),
+    "client_id_issued_at": client.created_at,
     "redirect_uris": redirect_uris,
     "grant_types": ["authorization_code"],
     "response_types": ["code"],
     "token_endpoint_auth_method": "none",
     "scope": SUPPORTED_SCOPES.join(" ")
   }))
+}
+
+fn relay_state_status(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  if !admin_authorized(request, config) {
+    return json_response(401, json!({
+      "error": "unauthorized",
+      "message": "Relay state status requires loopback access or LCV_RELAY_ADMIN_TOKEN."
+    }))
+    .with_header("WWW-Authenticate", "Bearer");
+  }
+  json_response(200, state.store_status())
 }
 
 fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
@@ -519,6 +735,7 @@ fn issue_auth_code_redirect(query: &HashMap<String, String>, state: &RelayState)
   state.insert_auth_code(
     code.clone(),
     AuthCode {
+      client_id,
       redirect_uri: redirect_uri.clone(),
       code_challenge,
       code_challenge_method: query
@@ -580,6 +797,7 @@ fn oauth_token(request: &HttpRequest, state: &RelayState) -> HttpResponse {
   state.insert_access_token(
     token.clone(),
     AccessToken {
+      client_id: auth_code.client_id.clone(),
       scopes: auth_code.scopes.clone(),
       expires_at,
     },
@@ -633,19 +851,60 @@ fn pairing_status(request: &HttpRequest, state: &RelayState) -> HttpResponse {
 
 fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
   let required_scope = required_scope_for_mcp_body(&request.body);
-  if !mcp_authorized(request, config, state, required_scope) {
+  let (method, tool_name) = mcp_request_summary(&request.body);
+  let Some(client_id) = mcp_authorized_client(request, config, state, required_scope) else {
+    record_relay_event(
+      state,
+      None,
+      required_scope,
+      &method,
+      tool_name.as_deref(),
+      "rejected_unauthorized",
+      "none",
+    );
     return json_response(401, json!({
       "error": "unauthorized",
       "message": "Missing or invalid Authorization bearer token."
     }))
     .with_header("WWW-Authenticate", "Bearer");
-  }
+  };
 
   match state.forward_to_agent(&request.body) {
-    Ok(Some(body)) => return HttpResponse::json(200, body).with_cors(),
-    Ok(None) => return HttpResponse::empty(202).with_cors(),
+    Ok(Some(body)) => {
+      record_relay_event(
+        state,
+        Some(client_id.clone()),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "fulfilled",
+        "agent_websocket",
+      );
+      return HttpResponse::json(200, body).with_cors();
+    }
+    Ok(None) => {
+      record_relay_event(
+        state,
+        Some(client_id.clone()),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "accepted_no_body",
+        "agent_websocket",
+      );
+      return HttpResponse::empty(202).with_cors();
+    }
     Err(agent_error) => {
       if !config.allow_direct_sidecar {
+        record_relay_event(
+          state,
+          Some(client_id),
+          required_scope,
+          &method,
+          tool_name.as_deref(),
+          "pending_agent_offline",
+          "none",
+        );
         return json_response(202, json!({
           "status": "pending_agent_offline",
           "message": "Local Vault Agent is offline; request is waiting for the user's desktop.",
@@ -660,12 +919,45 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
     &config.mcp_command,
     config.vault_db_path.as_deref(),
   ) {
-    Ok(Some(body)) => HttpResponse::json(200, body).with_cors(),
-    Ok(None) => HttpResponse::empty(202).with_cors(),
-    Err(error) => json_response(500, json!({
-      "error": "relay_forward_failed",
-      "message": error
-    })),
+    Ok(Some(body)) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "fulfilled",
+        "direct_sidecar_fallback",
+      );
+      HttpResponse::json(200, body).with_cors()
+    }
+    Ok(None) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "accepted_no_body",
+        "direct_sidecar_fallback",
+      );
+      HttpResponse::empty(202).with_cors()
+    }
+    Err(error) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "forward_failed",
+        "direct_sidecar_fallback",
+      );
+      json_response(500, json!({
+        "error": "relay_forward_failed",
+        "message": error
+      }))
+    }
   }
 }
 
@@ -686,6 +978,47 @@ fn required_scope_for_mcp_body(body: &str) -> &'static str {
     Some("life_context.get_request_status") => "request.status",
     Some("life_context.request_context_pack") => "context_pack.request",
     _ => "context_pack.request",
+  }
+}
+
+fn mcp_request_summary(body: &str) -> (String, Option<String>) {
+  let Ok(value) = serde_json::from_str::<Value>(body) else {
+    return ("invalid_json".to_string(), None);
+  };
+  let method = value
+    .get("method")
+    .and_then(Value::as_str)
+    .unwrap_or("unknown")
+    .to_string();
+  let tool_name = value
+    .get("params")
+    .and_then(|params| params.get("name"))
+    .and_then(Value::as_str)
+    .map(str::to_string);
+  (method, tool_name)
+}
+
+fn record_relay_event(
+  state: &RelayState,
+  client_id: Option<String>,
+  required_scope: &str,
+  method: &str,
+  tool_name: Option<&str>,
+  status: &str,
+  transport: &str,
+) {
+  let event = RelayRequestEvent {
+    id: random_token("relay_evt"),
+    client_id,
+    required_scope: required_scope.to_string(),
+    method: method.to_string(),
+    tool_name: tool_name.map(str::to_string),
+    status: status.to_string(),
+    transport: transport.to_string(),
+    occurred_at: system_time_seconds(SystemTime::now()),
+  };
+  if let Err(error) = state.record_request_event(event) {
+    eprintln!("failed to persist relay request event: {error}");
   }
 }
 
@@ -928,25 +1261,29 @@ fn json_response(status: u16, body: Value) -> HttpResponse {
   HttpResponse::json(status, body).with_cors()
 }
 
-fn mcp_authorized(
+fn mcp_authorized_client(
   request: &HttpRequest,
   config: &RelayConfig,
   state: &RelayState,
   required_scope: &str,
-) -> bool {
+) -> Option<String> {
   let Some(token) = bearer_token(request) else {
-    return false;
+    return None;
   };
   if token == config.token {
-    return true;
+    return Some("static-dev-token".to_string());
   }
   let Some(access_token) = state.access_token(token) else {
-    return false;
+    return None;
   };
   if SystemTime::now() > access_token.expires_at {
-    return false;
+    return None;
   }
-  access_token.scopes.iter().any(|scope| scope == required_scope)
+  if access_token.scopes.iter().any(|scope| scope == required_scope) {
+    Some(access_token.client_id)
+  } else {
+    None
+  }
 }
 
 fn admin_authorized(request: &HttpRequest, config: &RelayConfig) -> bool {
@@ -1118,6 +1455,7 @@ mod tests {
       admin_token: None,
       mcp_command: PathBuf::from("lcv-mcp"),
       vault_db_path: None,
+      relay_state_path: None,
       allow_direct_sidecar: true,
     }
   }
@@ -1132,21 +1470,27 @@ mod tests {
       body: "{}".to_string(),
     };
 
-    assert!(mcp_authorized(
-      &request,
-      &test_config(),
-      &RelayState::new(),
-      "context_pack.request"
-    ));
-    assert!(!mcp_authorized(
-      &request,
-      &RelayConfig {
-        token: "wrong-token".to_string(),
-        ..test_config()
-      },
-      &RelayState::new(),
-      "context_pack.request"
-    ));
+    assert_eq!(
+      mcp_authorized_client(
+        &request,
+        &test_config(),
+        &RelayState::new(),
+        "context_pack.request"
+      ),
+      Some("static-dev-token".to_string())
+    );
+    assert_eq!(
+      mcp_authorized_client(
+        &request,
+        &RelayConfig {
+          token: "wrong-token".to_string(),
+          ..test_config()
+        },
+        &RelayState::new(),
+        "context_pack.request"
+      ),
+      None
+    );
   }
 
   #[test]
@@ -1191,6 +1535,88 @@ mod tests {
       .and_then(Value::as_str)
       .unwrap_or_default()
       .starts_with("ws://127.0.0.1:8765/agent/ws?pairing_code="));
+  }
+
+  #[test]
+  fn relay_state_persists_clients_and_metadata_only_events() {
+    let dir = env::temp_dir().join(format!(
+      "lcv-relay-state-test-{}",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("test dir");
+    let path = dir.join("relay-state.json");
+
+    let state = RelayState::load(Some(path.clone())).expect("relay state");
+    let client = state
+      .register_client(
+        "Smoke Client".to_string(),
+        vec!["http://127.0.0.1/callback".to_string()],
+      )
+      .expect("register client");
+    state
+      .record_request_event(RelayRequestEvent {
+        id: "evt_1".to_string(),
+        client_id: Some(client.client_id.clone()),
+        required_scope: "memory.propose".to_string(),
+        method: "tools/call".to_string(),
+        tool_name: Some("life_context.propose_memory".to_string()),
+        status: "fulfilled".to_string(),
+        transport: "agent_websocket".to_string(),
+        occurred_at: 123,
+      })
+      .expect("record relay event");
+
+    let reloaded = RelayState::load(Some(path.clone())).expect("reloaded relay state");
+    assert!(reloaded.client(&client.client_id).is_some());
+    let status = reloaded.store_status();
+    assert_eq!(
+      status.get("registeredClientCount").and_then(Value::as_u64),
+      Some(1)
+    );
+    assert_eq!(
+      status.get("requestEventCount").and_then(Value::as_u64),
+      Some(1)
+    );
+
+    let raw = fs::read_to_string(&path).expect("state json");
+    assert!(raw.contains("Smoke Client"));
+    assert!(raw.contains("life_context.propose_memory"));
+    assert!(!raw.contains("Tone preference"));
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn failed_relay_state_persist_rolls_back_client_registration() {
+    let dir = env::temp_dir().join(format!(
+      "lcv-relay-state-failure-test-{}",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("test dir");
+    let blocked_parent = dir.join("blocked-parent");
+    fs::write(&blocked_parent, "not a directory").expect("blocked parent");
+    let path = blocked_parent.join("relay-state.json");
+
+    let state = RelayState::load(Some(path)).expect("relay state");
+    let result = state.register_client(
+      "Broken Persist Client".to_string(),
+      vec!["http://127.0.0.1/callback".to_string()],
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+      state
+        .store_status()
+        .get("registeredClientCount")
+        .and_then(Value::as_u64),
+      Some(0)
+    );
+    let _ = fs::remove_dir_all(dir);
   }
 
   #[test]

@@ -22,6 +22,7 @@ npm run agent:build
 LCV_RELAY_TOKEN=dev-local-token \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
+LCV_RELAY_STATE_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json" \
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=1 \
 LCV_MCP_COMMAND="/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp" \
 LCV_VAULT_DB_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3" \
@@ -71,24 +72,49 @@ Remote clients should use OAuth discovery instead of the static token.
 - `POST /pairing/start`
 - `GET /pairing/status`
 - `GET /agent/status`
+- `GET /relay/state`
 - `GET /agent/ws?...` for the local Agent WebSocket
 - `POST /mcp`
 - `OPTIONS /mcp`
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
+`GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires loopback access or `LCV_RELAY_ADMIN_TOKEN`.
+
+## Relay State Store
+
+`lcv-relay` persists only relay control metadata:
+
+- OAuth dynamic client registrations.
+- Recent MCP request metadata: request id, client id, required scope, JSON-RPC method, MCP tool name, status, transport, and timestamp.
+
+It does not persist:
+
+- MCP request bodies.
+- Raw Vault content.
+- Raw Source text.
+- Context Pack bodies.
+- OAuth access tokens or authorization codes.
+
+If `LCV_RELAY_STATE_PATH` is not set, the relay stores this metadata at the platform app-data location:
+
+- macOS: `$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json`
+- Windows: `%APPDATA%/dev.life-context-vault.poc/relay-state.json`
+- Linux: `$XDG_DATA_HOME/dev.life-context-vault.poc/relay-state.json` or `$HOME/.local/share/dev.life-context-vault.poc/relay-state.json`
+
 ## Safety Boundary
 
 - Default bind is `127.0.0.1:8765`.
 - Binding outside loopback requires explicit `LCV_RELAY_TOKEN`.
 - OAuth access tokens are opaque, in-memory, and short-lived.
+- OAuth client registrations are durable, but access tokens and authorization codes are not persisted.
 - OAuth tool access uses minimum scopes:
   - `life_context.request_context_pack` -> `context_pack.request`
   - `life_context.propose_memory` -> `memory.propose`
   - `life_context.get_policy_summary` -> `policy.read`
   - `life_context.get_request_status` -> `request.status`
 - The relay does not implement its own Vault reads. It forwards through `lcv-agent` to `lcv-mcp`, or through direct sidecar fallback only when explicitly allowed for local development.
-- The relay does not store Context Packs.
+- The relay does not store Context Pack bodies or MCP request bodies.
 - Sensitive Context Packs remain queued for first-party app confirmation.
 - Memory proposals remain unapproved `MemoryCandidate` records.
 
@@ -102,6 +128,7 @@ npm run agent:build
 LCV_RELAY_TOKEN=dev-local-token \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
+LCV_RELAY_STATE_PATH="$(mktemp -t lcv-relay-state.XXXXXX.json)" \
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=1 \
 LCV_MCP_COMMAND="$PWD/src-tauri/target/release/lcv-mcp" \
 LCV_VAULT_DB_PATH="$tmpdb" \
@@ -141,6 +168,6 @@ Remaining production work:
 
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
-- Persistent OAuth client registration store.
 - Installer-managed Agent launch and reconnect.
-- Hosted relay storage limited to request metadata and short-lived Context Pack handoff state.
+- Hosted relay storage operations, rotation, and tenant isolation for the same metadata-only state model.
+- Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.

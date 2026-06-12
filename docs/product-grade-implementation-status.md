@@ -68,6 +68,9 @@ Last updated: 2026-06-12
   - minimum OAuth scopes are mapped per exposed MCP tool
   - static bearer token fallback remains for local development
   - loopback bind by default
+  - OAuth dynamic client registrations are persisted in a relay state store
+  - recent relay request audit metadata is persisted without MCP bodies or Context Pack bodies
+  - `GET /relay/state` exposes metadata-only relay status for local Control Center and smoke checks
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
@@ -81,8 +84,8 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Persistent OAuth client registration store.
 - Installer-managed local Agent launch, reconnect, and background status.
+- Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
 - Full Rust-owned Vault Core commands instead of JSON snapshot plus normalized table projection.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
@@ -97,7 +100,7 @@ Last updated: 2026-06-12
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
 - `npm run agent:build`
-- HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, and paired Agent WebSocket writes
+- HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - `npm run capture:build`
 - Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
@@ -129,6 +132,14 @@ Last updated: 2026-06-12
 - Technical design: normalized SQLite tables and FTS are present, but the frontend still persists a JSON snapshot that is projected into tables.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
 - Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
+
+### Relay State Store Slice
+
+- Product fit: durable OAuth client registrations reduce repeated setup friction for ChatGPT/Claude-style connectors while keeping the first-party app as the control surface.
+- Security/privacy: relay persistence is limited to OAuth client registrations and request metadata. MCP request bodies, Raw Sources, Vault content, and Context Pack bodies are not written to the relay state file.
+- Technical design: relay state writes use a temp file plus replace step, and failed registration persistence rolls back the in-memory client so a 500 response does not leave a process-only client behind.
+- UX: Connections now distinguishes what the Relay keeps from what it refuses to keep, including a visible `/relay/state` status URL for local inspection.
+- Verification: desktop `1440x980` and mobile `390x844` Browser checks found no page-level horizontal overflow in the updated Remote Relay setup section.
 
 ## Independent Review Passes
 
