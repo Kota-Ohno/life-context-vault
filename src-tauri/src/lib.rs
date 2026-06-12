@@ -202,6 +202,16 @@ struct NativeSourceLifecycleResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NativeSourceMetadataResult {
+  payload: String,
+  updated_at: Option<String>,
+  source_id: String,
+  invalidated_pack_count: usize,
+  generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NativeFactLifecycleResult {
   payload: String,
   updated_at: Option<String>,
@@ -284,6 +294,13 @@ pub struct VaultCoreSourceLifecycleResult {
   pub action: String,
   pub affected_candidate_count: usize,
   pub affected_fact_count: usize,
+  pub invalidated_pack_count: usize,
+}
+
+pub struct VaultCoreSourceMetadataResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub source_id: String,
   pub invalidated_pack_count: usize,
 }
 
@@ -1111,7 +1128,7 @@ fn create_native_context_pack_request_in_connection(
       continue;
     }
 
-    let source_titles = source_titles_in_connection(connection, &fact.source_ids)?;
+    let source_titles = source_titles_in_connection(connection, &fact.source_ids, &ceiling)?;
     let snippet = source_snippet_for_fact(connection, &fact, &ceiling)?;
     items.push(json!({
       "id": new_id("ctxitem"),
@@ -1894,6 +1911,89 @@ pub fn update_source_lifecycle_at_path(
   })
 }
 
+pub fn update_source_metadata_at_path(
+  path: &Path,
+  source_id: &str,
+  title: &str,
+  default_sensitivity: &str,
+  promoted_to_long_term: Option<bool>,
+) -> Result<VaultCoreSourceMetadataResult, String> {
+  let source_id = source_id.trim();
+  if source_id.is_empty() {
+    return Err("sourceId is required.".to_string());
+  }
+  let title = normalized_text(title);
+  if title.is_empty() {
+    return Err("title is required.".to_string());
+  }
+  let default_sensitivity = sensitivity_tier(default_sensitivity)?;
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let applied_promoted_to_long_term = {
+    let Some(sources) = vault.get_mut("sources").and_then(Value::as_array_mut) else {
+      return Err("Vault has no sources array.".to_string());
+    };
+    let Some(source) = sources
+      .iter_mut()
+      .find(|source| str_field(source, "id") == source_id)
+    else {
+      return Err(format!("Source was not found: {source_id}"));
+    };
+    source["title"] = Value::String(title.clone());
+    source["defaultSensitivity"] = Value::String(default_sensitivity.to_string());
+    let has_retention = source
+      .get("retentionUntil")
+      .and_then(Value::as_str)
+      .map(|value| !value.trim().is_empty())
+      .unwrap_or(false);
+    if has_retention {
+      let promoted = promoted_to_long_term.unwrap_or_else(|| {
+        source
+          .get("promotedToLongTerm")
+          .and_then(Value::as_bool)
+          .unwrap_or(false)
+      });
+      source["promotedToLongTerm"] = Value::Bool(promoted);
+      Some(promoted)
+    } else {
+      None
+    }
+  };
+  let affected_fact_ids = fact_ids_for_source(&vault, source_id);
+  let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
+    &mut vault,
+    &affected_fact_ids,
+    "stale_fact",
+    "根拠Sourceのメタデータが更新されたため、このContext Packは無効化されました。",
+  );
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "source_updated",
+      "source",
+      source_id,
+      default_sensitivity,
+      json!({
+        "title": title,
+        "defaultSensitivity": default_sensitivity,
+        "promotedToLongTerm": applied_promoted_to_long_term,
+        "affectedFactCount": affected_fact_ids.len(),
+        "invalidatedPackCount": invalidated_pack_count,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceMetadataResult {
+    payload,
+    updated_at,
+    source_id: source_id.to_string(),
+    invalidated_pack_count,
+  })
+}
+
 pub fn update_fact_lifecycle_at_path(
   path: &Path,
   fact_id: &str,
@@ -1932,7 +2032,12 @@ pub fn update_fact_lifecycle_at_path(
     sensitivity
   };
   let invalidated_pack_count = if matches!(action, "mark_needs_review" | "hide" | "delete") {
-    invalidate_context_packs_for_facts(&mut vault, &[fact_id.to_string()])
+    invalidate_context_packs_for_facts_with_warning(
+      &mut vault,
+      &[fact_id.to_string()],
+      "stale_fact",
+      "Factの表示状態が変更されたため、このContext Packは無効化されました。",
+    )
   } else {
     0
   };
@@ -2008,8 +2113,12 @@ pub fn update_fact_metadata_at_path(
     set_optional_fact_string(fact, "validUntil", valid_until);
     set_optional_fact_string(fact, "dueDate", due_date);
   }
-  let invalidated_pack_count =
-    invalidate_context_packs_for_facts(&mut vault, &[fact_id.to_string()]);
+  let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
+    &mut vault,
+    &[fact_id.to_string()],
+    "stale_fact",
+    "Factが更新されたため、このContext Packは無効化されました。",
+  );
   push_json_array(
     &mut vault,
     "auditEvents",
@@ -2408,21 +2517,35 @@ fn push_unique_fact(facts: &mut Vec<NativeFactSearchResult>, fact: NativeFactSea
 fn source_titles_in_connection(
   connection: &Connection,
   source_ids: &[String],
+  ceiling: &str,
 ) -> Result<Vec<String>, String> {
-  source_ids
-    .iter()
-    .map(|source_id| {
-      connection
-        .query_row(
-          "SELECT title FROM sources WHERE id = ?1",
-          params![source_id],
-          |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map(|title| title.unwrap_or_else(|| "Unknown source".to_string()))
-        .map_err(|error| format!("failed to read source title {source_id}: {error}"))
-    })
-    .collect()
+  let mut titles = Vec::new();
+  for source_id in source_ids {
+    let source = connection
+      .query_row(
+        "SELECT title, default_sensitivity, deletion_state FROM sources WHERE id = ?1",
+        params![source_id],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+          ))
+        },
+      )
+      .optional()
+      .map_err(|error| format!("failed to read source title {source_id}: {error}"))?;
+    let Some((title, sensitivity, deletion_state)) = source else {
+      continue;
+    };
+    if deletion_state == "active"
+      && sensitivity != "secret_never_send"
+      && sensitivity_rank(&sensitivity) <= sensitivity_rank(ceiling)
+    {
+      titles.push(title);
+    }
+  }
+  Ok(titles)
 }
 
 fn source_snippet_for_fact(
@@ -3436,7 +3559,30 @@ fn restore_source_deleted_facts(vault: &mut Value, source_id: &str, now: &str) -
   affected
 }
 
+fn fact_ids_for_source(vault: &Value, source_id: &str) -> Vec<String> {
+  value_array(vault, "facts")
+    .into_iter()
+    .filter(|fact| json_array_contains_string(fact.get("sourceIds").unwrap_or(&Value::Null), source_id))
+    .map(|fact| str_field(fact, "id"))
+    .filter(|fact_id| !fact_id.is_empty())
+    .collect()
+}
+
 fn invalidate_context_packs_for_facts(vault: &mut Value, fact_ids: &[String]) -> usize {
+  invalidate_context_packs_for_facts_with_warning(
+    vault,
+    fact_ids,
+    "source_deleted",
+    "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。",
+  )
+}
+
+fn invalidate_context_packs_for_facts_with_warning(
+  vault: &mut Value,
+  fact_ids: &[String],
+  warning_kind: &str,
+  warning_message: &str,
+) -> usize {
   if fact_ids.is_empty() {
     return 0;
   }
@@ -3470,8 +3616,8 @@ fn invalidate_context_packs_for_facts(vault: &mut Value, fact_ids: &[String]) ->
       warnings.insert(
         0,
         json!({
-          "kind": "source_deleted",
-          "message": "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。",
+          "kind": warning_kind,
+          "message": warning_message,
           "relatedIds": fact_ids
         }),
       );
@@ -4598,6 +4744,31 @@ fn update_native_source_lifecycle(
 }
 
 #[tauri::command]
+fn update_native_source_metadata(
+  app: AppHandle,
+  source_id: String,
+  title: String,
+  default_sensitivity: String,
+  promoted_to_long_term: Option<bool>,
+) -> Result<NativeSourceMetadataResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_source_metadata_at_path(
+    &path,
+    &source_id,
+    &title,
+    &default_sensitivity,
+    promoted_to_long_term,
+  )?;
+  Ok(NativeSourceMetadataResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    invalidated_pack_count: result.invalidated_pack_count,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn update_native_fact_lifecycle(
   app: AppHandle,
   fact_id: String,
@@ -4770,6 +4941,7 @@ pub fn run() {
       update_native_passive_capture_settings,
       update_native_access_policy,
       update_native_source_lifecycle,
+      update_native_source_metadata,
       update_native_fact_lifecycle,
       update_native_fact_metadata,
       ai_access_service_status,
@@ -5360,6 +5532,112 @@ mod tests {
       )
       .expect("normalized source body");
     assert!(normalized_body.is_empty());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_metadata_update_invalidates_pack_and_filters_secret_titles() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-metadata");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Lease note",
+      "Need to renew lease by 2027-01-15.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let first_pack = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about lease renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+
+    let updated = update_source_metadata_at_path(
+      &path,
+      &source_result.source_id,
+      "Apartment lease evidence",
+      "private_consequential",
+      Some(true),
+    )
+    .expect("source metadata update");
+    let saved: Value = serde_json::from_str(&updated.payload).expect("saved vault json");
+    let source = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .expect("source");
+    let cancelled_pack = find_vault_item_by_id(&saved, "contextPacks", &first_pack.pack_id)
+      .expect("cancelled pack");
+
+    assert_eq!(updated.invalidated_pack_count, 1);
+    assert_eq!(source.get("title").and_then(Value::as_str), Some("Apartment lease evidence"));
+    assert_eq!(
+      source.get("defaultSensitivity").and_then(Value::as_str),
+      Some("private_consequential")
+    );
+    assert_eq!(
+      cancelled_pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
+    assert_eq!(
+      cancelled_pack
+        .get("warnings")
+        .and_then(Value::as_array)
+        .and_then(|warnings| warnings.first())
+        .and_then(|warning| warning.get("kind"))
+        .and_then(Value::as_str),
+      Some("stale_fact")
+    );
+
+    update_source_metadata_at_path(
+      &path,
+      &source_result.source_id,
+      "Private password file",
+      "secret_never_send",
+      Some(false),
+    )
+    .expect("secret source metadata update");
+    let second_pack = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about lease renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("second context pack");
+    let second_saved: Value = serde_json::from_str(&second_pack.payload).expect("second vault json");
+    let pack = find_vault_item_by_id(&second_saved, "contextPacks", &second_pack.pack_id)
+      .expect("second pack");
+    let item = pack
+      .get("items")
+      .and_then(Value::as_array)
+      .and_then(|items| items.first())
+      .expect("pack item");
+
+    assert!(item
+      .get("sourceTitles")
+      .and_then(Value::as_array)
+      .map(Vec::is_empty)
+      .unwrap_or(false));
+    assert!(pack
+      .get("sourceSnippets")
+      .and_then(Value::as_array)
+      .map(Vec::is_empty)
+      .unwrap_or(false));
     remove_temp_vault(&path);
   }
 

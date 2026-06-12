@@ -56,6 +56,7 @@ import {
   updateNativeFactLifecycle,
   updateNativeFactMetadata,
   updateNativePassiveCaptureSettings,
+  updateNativeSourceMetadata,
   updateNativeSourceLifecycle,
   uninstallLoginItem
 } from "./nativeStorage";
@@ -93,6 +94,7 @@ import {
   updateFactMetadata,
   updatePassiveCaptureSettings,
   updateCandidateStatus,
+  updateSourceMetadata,
   updateSourceLifecycle
 } from "./vault";
 import {
@@ -111,6 +113,7 @@ import {
   PassiveCaptureSettings,
   SensitivityTier,
   SourceLifecycleAction,
+  SourceMetadataUpdate,
   SourceKind,
   SourceOrigin,
   VaultState
@@ -660,6 +663,38 @@ export function App() {
       updateSourceLifecycle(state, sourceId, action),
       sourceLifecycleNotice(action, linkedFactCount(state, sourceId), 0)
     );
+  }
+
+  async function editSourceMetadata(sourceId: string, input: SourceMetadataUpdate): Promise<boolean> {
+    const source = state.sources.find((item) => item.id === sourceId);
+    if (!source) {
+      setNotice("Sourceが見つかりませんでした。");
+      return false;
+    }
+    if (!input.title.trim()) {
+      setNotice("Sourceタイトルを入力してください。");
+      return false;
+    }
+    if (nativePath) {
+      try {
+        const updated = await updateNativeSourceMetadata(sourceId, input);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(sourceMetadataNotice(updated.invalidatedPackCount));
+          return true;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
+        return false;
+      }
+    }
+    apply(
+      updateSourceMetadata(state, sourceId, input),
+      sourceMetadataNotice(activeSourcePackCount(state, sourceId))
+    );
+    return true;
   }
 
   async function changeFactLifecycle(factId: string, action: FactLifecycleAction) {
@@ -1290,6 +1325,7 @@ export function App() {
             addManualSource={addManualSource}
             handleFileUpload={handleFileUpload}
             changeSourceLifecycle={changeSourceLifecycle}
+            editSourceMetadata={editSourceMetadata}
           />
         )}
         {view === "connections" && (
@@ -1750,7 +1786,8 @@ function SourcesView({
   setManualBody,
   addManualSource,
   handleFileUpload,
-  changeSourceLifecycle
+  changeSourceLifecycle,
+  editSourceMetadata
 }: {
   sources: VaultState["sources"];
   candidates: VaultState["candidates"];
@@ -1762,6 +1799,7 @@ function SourcesView({
   addManualSource: () => void;
   handleFileUpload: (file: File) => void;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
+  editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
 }) {
   return (
     <section className="view-grid">
@@ -1824,57 +1862,166 @@ function SourcesView({
             const linkedCandidateCount = candidates.filter((candidate) => candidate.sourceIds.includes(source.id)).length;
             const linkedFactCountValue = facts.filter((fact) => fact.sourceIds.includes(source.id)).length;
             return (
-              <div className="table-row source-row" key={source.id}>
-                <div className="source-main">
-                  <strong>{source.title}</strong>
-                  <span>{source.kind} / {new Date(source.createdAt).toLocaleString()}</span>
-                  <div className="source-meta">
-                    <Badge>{sourceLifecycleLabel(source.deletionState)}</Badge>
-                    <Badge>{source.body ? "本文あり" : "本文なし"}</Badge>
-                    <Badge>候補 {linkedCandidateCount}</Badge>
-                    <Badge>Fact {linkedFactCountValue}</Badge>
-                  </div>
-                </div>
-                <div className="source-actions">
-                  <SensitivityBadge sensitivity={source.defaultSensitivity} />
-                  {source.deletionState === "active" && (
-                    <button
-                      className="secondary-button"
-                      onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
-                      type="button"
-                    >
-                      <Archive size={16} />
-                      使用停止
-                    </button>
-                  )}
-                  {source.deletionState === "soft_deleted" && (
-                    <button
-                      className="secondary-button"
-                      onClick={() => changeSourceLifecycle(source.id, "restore")}
-                      type="button"
-                    >
-                      <RefreshCw size={16} />
-                      復元
-                    </button>
-                  )}
-                  {source.deletionState !== "purged" && (
-                    <button
-                      className="danger-button"
-                      onClick={() => changeSourceLifecycle(source.id, "purge_body")}
-                      type="button"
-                    >
-                      <X size={16} />
-                      本文消去
-                    </button>
-                  )}
-                </div>
-              </div>
+              <SourceRow
+                changeSourceLifecycle={changeSourceLifecycle}
+                editSourceMetadata={editSourceMetadata}
+                key={source.id}
+                linkedCandidateCount={linkedCandidateCount}
+                linkedFactCount={linkedFactCountValue}
+                source={source}
+              />
             );
           })}
           {sources.length === 0 && <p className="muted">まだSourceがありません。</p>}
         </div>
       </div>
     </section>
+  );
+}
+
+function SourceRow({
+  source,
+  linkedCandidateCount,
+  linkedFactCount,
+  changeSourceLifecycle,
+  editSourceMetadata
+}: {
+  source: VaultState["sources"][number];
+  linkedCandidateCount: number;
+  linkedFactCount: number;
+  changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
+  editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState<SourceMetadataUpdate | null>(null);
+  const retentionLabel = sourceRetentionLabel(source);
+  const canPromote = Boolean(source.retentionUntil);
+
+  return (
+    <div className="table-row source-row">
+      <div className="source-main">
+        {draft ? (
+          <div className="source-edit-form">
+            <Input
+              label="Sourceタイトル"
+              value={draft.title}
+              onChange={(value) => setDraft({ ...draft, title: value })}
+              placeholder="根拠として見分けやすい名前"
+            />
+            <div className="source-edit-grid">
+              <label className="field">
+                <span>Source感度</span>
+                <select
+                  value={draft.defaultSensitivity}
+                  onChange={(event) =>
+                    setDraft({ ...draft, defaultSensitivity: event.target.value as SensitivityTier })
+                  }
+                >
+                  {sensitivityOptions.filter((sensitivity) => sensitivity !== "all").map((sensitivity) => (
+                    <option key={sensitivity} value={sensitivity}>
+                      {sensitivityLabel(sensitivity as SensitivityTier)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {canPromote && (
+                <label className="toggle-row compact-toggle">
+                  <input
+                    checked={Boolean(draft.promotedToLongTerm)}
+                    onChange={(event) =>
+                      setDraft({ ...draft, promotedToLongTerm: event.target.checked })
+                    }
+                    type="checkbox"
+                  />
+                  <div>
+                    <strong>長期保持</strong>
+                    <span>{source.retentionUntil ? new Date(source.retentionUntil).toLocaleDateString() : ""}</span>
+                  </div>
+                </label>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <strong>{source.title}</strong>
+            <span>{source.kind} / {new Date(source.createdAt).toLocaleString()}</span>
+            <div className="source-meta">
+              <Badge>{sourceLifecycleLabel(source.deletionState)}</Badge>
+              <Badge>{source.body ? "本文あり" : "本文なし"}</Badge>
+              {retentionLabel && <Badge>{retentionLabel}</Badge>}
+              <Badge>候補 {linkedCandidateCount}</Badge>
+              <Badge>Fact {linkedFactCount}</Badge>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="source-actions">
+        <SensitivityBadge sensitivity={source.defaultSensitivity} />
+        {draft ? (
+          <>
+            <button
+              className="primary-button"
+              onClick={async () => {
+                const saved = await editSourceMetadata(source.id, draft);
+                if (saved) setDraft(null);
+              }}
+              type="button"
+            >
+              <Check size={16} />
+              保存
+            </button>
+            <button className="secondary-button" onClick={() => setDraft(null)} type="button">
+              <X size={16} />
+              取消
+            </button>
+          </>
+        ) : (
+          <button
+            className="secondary-button"
+            onClick={() =>
+              setDraft({
+                title: source.title,
+                defaultSensitivity: source.defaultSensitivity,
+                promotedToLongTerm: source.promotedToLongTerm ?? false
+              })
+            }
+            type="button"
+          >
+            <Settings size={16} />
+            編集
+          </button>
+        )}
+        {source.deletionState === "active" && (
+          <button
+            className="secondary-button"
+            onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
+            type="button"
+          >
+            <Archive size={16} />
+            使用停止
+          </button>
+        )}
+        {source.deletionState === "soft_deleted" && (
+          <button
+            className="secondary-button"
+            onClick={() => changeSourceLifecycle(source.id, "restore")}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            復元
+          </button>
+        )}
+        {source.deletionState !== "purged" && (
+          <button
+            className="danger-button"
+            onClick={() => changeSourceLifecycle(source.id, "purge_body")}
+            type="button"
+          >
+            <X size={16} />
+            本文消去
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -3185,8 +3332,29 @@ function sourceLifecycleNotice(
   return `Sourceを使用停止しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
 }
 
+function sourceMetadataNotice(invalidatedPackCount: number): string {
+  return `Sourceを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
 function linkedFactCount(state: VaultState, sourceId: string): number {
   return state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).length;
+}
+
+function activeSourcePackCount(state: VaultState, sourceId: string): number {
+  const linkedFactIds = new Set(
+    state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).map((fact) => fact.id)
+  );
+  return state.contextPacks.filter(
+    (pack) =>
+      pack.confirmationStatus !== "cancelled" &&
+      pack.items.some((item) => linkedFactIds.has(item.factId))
+  ).length;
+}
+
+function sourceRetentionLabel(source: VaultState["sources"][number]): string | null {
+  if (source.promotedToLongTerm) return "長期保持";
+  if (source.retentionUntil) return `TTL ${new Date(source.retentionUntil).toLocaleDateString()}`;
+  return null;
 }
 
 function factStatusLabel(status: ApprovedFact["status"]): string {

@@ -96,19 +96,26 @@ type RawSource = {
     | "document"
     | "conversation"
     | "manual_note"
-    | "background_onboarding";
+    | "background_onboarding"
+    | "passive_capture"
+    | "mcp_proposal";
   title: string;
   origin:
     | "user_upload"
     | "in_app_chat"
     | "manual_entry"
-    | "guided_onboarding";
+    | "guided_onboarding"
+    | "passive_browser"
+    | "local_mcp"
+    | "remote_relay";
   file_ref?: string;
   content_hash?: string;
   mime_type?: string;
   language?: string;
   created_at: string;
   captured_at: string;
+  retention_until?: string;
+  promoted_to_long_term?: boolean;
   source_date?: string;
   user_description?: string;
   default_sensitivity: SensitivityTier;
@@ -122,6 +129,8 @@ Required behavior:
 - Uploaded files create RawSource records before extraction.
 - Deleting a RawSource must remove or disable linked source chunks.
 - Facts derived from deleted sources must be marked as needing review unless the user explicitly keeps them.
+- Material updates to Source title, default sensitivity, or retention metadata require a user action, a `source_updated` audit event, search/projection refresh, and invalidation of existing Context Packs that include facts linked to the Source.
+- Source titles may be included in Context Packs only when the Source is active, allowed by sensitivity policy, and not `secret_never_send`.
 
 ### SourceChunk
 
@@ -661,6 +670,7 @@ PoC deletion semantics:
 - Provide purge later for permanent deletion.
 - Deleting a RawSource does not automatically delete approved facts, but linked facts become `needs_review` unless user chooses to keep them.
 - Deleting or purging a RawSource must invalidate existing ContextPacks that include facts linked to that Source.
+- Updating RawSource title, default sensitivity, or retention metadata must invalidate existing ContextPacks that include facts linked to that Source.
 - Deleting an ApprovedFact does not delete the source.
 
 Tier 4 values detected during extraction should be redacted before ordinary persistence where possible.

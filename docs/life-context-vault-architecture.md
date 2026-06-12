@@ -160,6 +160,8 @@ Initial command behavior:
 
 Source lifecycle is also a typed Vault Core command in the desktop path. Soft delete keeps recoverable metadata, archives unapproved candidates from that Source, and marks linked active Facts as `needs_review`. Raw body purge removes the Source body and uses the same candidate/Fact safeguards. Both actions cancel existing Context Packs that included affected Facts so external AI clients cannot retrieve stale Packs after the user removes the evidence.
 
+Source metadata edits are typed Vault Core commands too. Editing Source title, default sensitivity, or passive-capture long-term retention refreshes normalized Source projection, writes a `source_updated` audit event, and cancels existing Context Packs that included linked Facts because their provenance labels or Source exposure policy may now be stale.
+
 ### Passive Capture
 
 Passive Capture handles opt-in capture from everyday AI conversations and local AI connection logs.
@@ -363,6 +365,8 @@ Source snippets may be included only when:
 - Policy permits their use.
 - The snippet is minimal.
 - Sensitive fields are redacted or confirmed by the user.
+
+Source titles are also treated as provenance metadata with sensitivity. Context Pack items may include Source titles only when the Source is active, below the request sensitivity ceiling, and not `secret_never_send`.
 
 The system should prefer approved facts over long source excerpts.
 

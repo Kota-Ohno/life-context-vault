@@ -42,6 +42,12 @@ export type SourceLifecycleAction =
   | "restore"
   | "purge_body";
 
+export type SourceMetadataUpdate = {
+  title: string;
+  defaultSensitivity: SensitivityTier;
+  promotedToLongTerm?: boolean;
+};
+
 export type ConnectorKind =
   | "claude_desktop"
   | "chatgpt"
@@ -366,6 +372,7 @@ export type AuditEvent = {
   id: string;
   eventType:
     | "source_added"
+    | "source_updated"
     | "source_deleted"
     | "source_restored"
     | "source_purged"

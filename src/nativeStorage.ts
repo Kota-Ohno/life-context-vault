@@ -6,6 +6,7 @@ import {
   LifeContextDomain,
   SensitivityTier,
   SourceLifecycleAction,
+  SourceMetadataUpdate,
   SourceKind,
   SourceOrigin,
   VaultState
@@ -187,6 +188,14 @@ interface NativeSourceLifecyclePayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeSourceMetadataPayload {
+  payload: string;
+  updatedAt: string | null;
+  sourceId: string;
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
 interface NativeFactLifecyclePayload {
   payload: string;
   updatedAt: string | null;
@@ -258,6 +267,14 @@ export interface NativeSourceLifecycleResult {
   action: SourceLifecycleAction;
   affectedCandidateCount: number;
   affectedFactCount: number;
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeSourceMetadataResult {
+  state: VaultState;
+  updatedAt: string | null;
+  sourceId: string;
   invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
@@ -541,6 +558,27 @@ export async function updateNativeSourceLifecycle(input: {
     action: result.action,
     affectedCandidateCount: result.affectedCandidateCount,
     affectedFactCount: result.affectedFactCount,
+    invalidatedPackCount: result.invalidatedPackCount,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeSourceMetadata(
+  sourceId: string,
+  input: SourceMetadataUpdate
+): Promise<NativeSourceMetadataResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceMetadataPayload>("update_native_source_metadata", {
+    sourceId,
+    title: input.title,
+    defaultSensitivity: input.defaultSensitivity,
+    promotedToLongTerm: input.promotedToLongTerm ?? null
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
     invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };

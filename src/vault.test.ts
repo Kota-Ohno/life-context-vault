@@ -11,7 +11,8 @@ import {
   createEmptyVault,
   makeAiContextPackPayload,
   purgeExpiredPassiveCaptures,
-  searchFacts
+  searchFacts,
+  updateSourceMetadata
 } from "./vault";
 
 describe("vault flow", () => {
@@ -210,6 +211,30 @@ describe("vault flow", () => {
 
     expect(pack.sourceSnippets?.[0]?.text).toBe(state.facts[0].factText);
     expect(pack.sourceSnippets?.[0]?.text).not.toContain("morning errands");
+  });
+
+  it("updates source metadata without leaking secret source titles to context packs", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Lease note",
+      body: "Need to renew lease by 2027-01-15."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const pack = buildContextPack(state, "What should I remember about lease renewal?");
+    state = savePackForTest(state, pack);
+
+    state = updateSourceMetadata(state, state.sources[0].id, {
+      title: "Private password file",
+      defaultSensitivity: "secret_never_send"
+    });
+    const rebuilt = buildContextPack(state, "What should I remember about lease renewal?");
+
+    expect(state.sources[0].title).toBe("Private password file");
+    expect(state.contextPacks[0].confirmationStatus).toBe("cancelled");
+    expect(state.contextPacks[0].warnings[0].kind).toBe("stale_fact");
+    expect(rebuilt.items[0].sourceTitles).toEqual([]);
+    expect(rebuilt.sourceSnippets).toEqual([]);
   });
 
   it("purges expired passive capture source text without deleting review history", () => {

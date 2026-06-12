@@ -18,6 +18,7 @@ import {
   RawSource,
   SensitivityTier,
   SourceLifecycleAction,
+  SourceMetadataUpdate,
   SourceKind,
   VaultState
 } from "./types";
@@ -511,7 +512,12 @@ export function updateSourceLifecycle(
     }
     return fact;
   });
-  const nextPacks = isDeleting ? invalidatePacksForFacts(state.contextPacks, affectedFactIds) : state.contextPacks;
+  const nextPacks = isDeleting
+    ? invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+        kind: "source_deleted",
+        message: "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。"
+      })
+    : state.contextPacks;
   const invalidatedRequestIds = new Set(
     nextPacks
       .filter((pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus)
@@ -538,6 +544,59 @@ export function updateSourceLifecycle(
         title: source.title,
         affectedFactCount: affectedFactIds.size,
         invalidatedPackCount: invalidatedRequestIds.size
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+export function updateSourceMetadata(
+  state: VaultState,
+  sourceId: string,
+  input: SourceMetadataUpdate
+): VaultState {
+  const source = state.sources.find((item) => item.id === sourceId);
+  const title = input.title.trim();
+  if (!source || !title) return state;
+
+  const affectedFactIds = new Set(
+    state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).map((fact) => fact.id)
+  );
+  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+    kind: "stale_fact",
+    message: "根拠Sourceのメタデータが更新されたため、このContext Packは無効化されました。"
+  });
+  const invalidatedPacks = nextPacks.filter(
+    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
+  );
+  const invalidatedRequestIds = new Set(
+    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  );
+  const promotedToLongTerm = source.retentionUntil
+    ? input.promotedToLongTerm ?? source.promotedToLongTerm ?? false
+    : source.promotedToLongTerm;
+
+  return {
+    ...state,
+    sources: state.sources.map((item) =>
+      item.id === sourceId
+        ? {
+            ...item,
+            title,
+            defaultSensitivity: input.defaultSensitivity,
+            promotedToLongTerm
+          }
+        : item
+    ),
+    contextPacks: nextPacks,
+    contextPackRequests: state.contextPackRequests.map((request) =>
+      invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+    ),
+    auditEvents: [
+      audit("source_updated", "source", sourceId, input.defaultSensitivity, {
+        title,
+        promotedToLongTerm,
+        invalidatedPackCount: invalidatedPacks.length
       }),
       ...state.auditEvents
     ]
@@ -576,7 +635,10 @@ export function updateFactLifecycle(
     return updated;
   });
   const nextPacks = isRemovingFromActiveContext
-    ? invalidatePacksForFacts(state.contextPacks, affectedFactIds)
+    ? invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+        kind: "stale_fact",
+        message: "Factの表示状態が変更されたため、このContext Packは無効化されました。"
+      })
     : state.contextPacks;
   const invalidatedRequestIds = new Set(
     nextPacks
@@ -617,7 +679,10 @@ export function updateFactMetadata(
 
   const now = nowIso();
   const affectedFactIds = new Set([factId]);
-  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds);
+  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+    kind: "stale_fact",
+    message: "Factが更新されたため、このContext Packは無効化されました。"
+  });
   const invalidatedPacks = nextPacks.filter(
     (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
   );
@@ -668,7 +733,8 @@ function factStatusForAction(action: FactLifecycleAction): ApprovedFact["status"
 
 function invalidatePacksForFacts(
   packs: VaultState["contextPacks"],
-  affectedFactIds: Set<string>
+  affectedFactIds: Set<string>,
+  warning: { kind: "source_deleted" | "stale_fact"; message: string }
 ): VaultState["contextPacks"] {
   if (affectedFactIds.size === 0) return packs;
   return packs.map((pack) => {
@@ -679,8 +745,8 @@ function invalidatePacksForFacts(
       confirmationStatus: "cancelled",
       warnings: [
         {
-          kind: "source_deleted",
-          message: "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。",
+          kind: warning.kind,
+          message: warning.message,
           relatedIds: Array.from(affectedFactIds)
         },
         ...pack.warnings
@@ -873,7 +939,7 @@ function buildContextPackWithOptions(
           ? "質問の領域と一致しています。"
           : "本人の背景情報として回答を調整できます。",
       sensitivity: fact.sensitivity,
-      sourceTitles: fact.sourceIds.map((id) => sourceTitle(state, id)),
+      sourceTitles: sourceTitlesForFact(state, fact, options.sensitivityCeiling),
       validFrom: fact.validFrom,
       validUntil: fact.validUntil,
       confidence: fact.confidence
@@ -1564,8 +1630,18 @@ function candidateTypeToFactType(candidateType: MemoryCandidate["candidateType"]
   }
 }
 
-function sourceTitle(state: VaultState, sourceId: string): string {
-  return state.sources.find((source) => source.id === sourceId)?.title ?? "Unknown source";
+function sourceTitlesForFact(
+  state: VaultState,
+  fact: ApprovedFact,
+  sensitivityCeiling: SensitivityTier
+): string[] {
+  return fact.sourceIds
+    .map((id) => state.sources.find((source) => source.id === id))
+    .filter((source): source is RawSource => Boolean(source))
+    .filter((source) => source.deletionState === "active")
+    .filter((source) => source.defaultSensitivity !== "secret_never_send")
+    .filter((source) => sensitivityRank[source.defaultSensitivity] <= sensitivityRank[sensitivityCeiling])
+    .map((source) => source.title);
 }
 
 function sourceSnippetForFact(
