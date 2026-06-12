@@ -79,9 +79,18 @@ Development requests may include the static fallback token only when `LCV_RELAY_
 ```text
 Authorization: Bearer dev-local-token
 Content-Type: application/json
+MCP-Protocol-Version: 2025-11-25
 ```
 
 Remote clients should use OAuth discovery instead of the static token. Public or shared deployments should leave `LCV_RELAY_ENABLE_STATIC_TOKEN` unset.
+
+OAuth clients should request the Relay MCP endpoint as the resource:
+
+```text
+resource=https://relay.example.com/mcp
+```
+
+For public, non-loopback Relay binds, `resource` is required on `/oauth/authorize` and `/oauth/token`. Access tokens are accepted by `/mcp` only when they are bound to the configured MCP resource. A missing or invalid MCP bearer token receives a `WWW-Authenticate` challenge with the Relay protected-resource metadata URL and the minimum required scope for the requested tool.
 
 For public or shared deployments, set an explicit browser Origin allowlist for the AI-bound data endpoints:
 
@@ -113,7 +122,9 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
-`OPTIONS /mcp`, `POST /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing.
+`POST /mcp` validates `MCP-Protocol-Version` when the header is present. Missing versions are treated as the 2025-03-26 default for older local clients. Supported versions are 2025-03-26, 2025-06-18, and 2025-11-25; unsupported versions receive `400 unsupported_protocol_version` before authorization or forwarding.
+
+`OPTIONS /mcp`, `POST /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
 
 `GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 

@@ -28,6 +28,8 @@ The public endpoint must terminate HTTPS before traffic reaches the container. `
 
 Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STATIC_TOKEN=1` in public or shared deployments; real clients should use OAuth Authorization Code + PKCE.
 
+OAuth clients must request `resource=https://relay.example.com/mcp` during both authorization and token exchange. The Relay binds issued access tokens to that MCP resource and rejects tokens for a different resource. Unauthorized `/mcp` calls return a `WWW-Authenticate` challenge pointing clients to the protected-resource metadata and the minimum required scope.
+
 `LCV_RELAY_ALLOWED_ORIGINS` gates browser CORS for `/mcp` and `/relay/handoff`. Keep it to the exact AI client origins you intend to support. OAuth discovery metadata remains public, but the AI-bound data endpoints reject browser requests from other Origins before authorization or request-body payload processing.
 
 ## Recommended Runtime Settings
@@ -70,13 +72,20 @@ curl -fsS https://relay.example.com/.well-known/oauth-authorization-server
 curl -fsS https://relay.example.com/.well-known/oauth-protected-resource
 curl -i -X OPTIONS \
   -H "Origin: https://chatgpt.com" \
+  -H "Access-Control-Request-Headers: authorization,content-type,mcp-protocol-version" \
   https://relay.example.com/mcp
 curl -i -X OPTIONS \
   -H "Origin: https://untrusted.example" \
   https://relay.example.com/mcp
+curl -i -X POST \
+  -H "Origin: https://chatgpt.com" \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  https://relay.example.com/mcp
 ```
 
-The trusted-Origin preflight should return `204` with `Access-Control-Allow-Origin: https://chatgpt.com`. The untrusted-Origin preflight should return `403`.
+The trusted-Origin preflight should return `204` with `Access-Control-Allow-Origin: https://chatgpt.com` and an allow-header list that includes `MCP-Protocol-Version`. The untrusted-Origin preflight should return `403`. The unauthenticated `/mcp` POST should return `401` with a `WWW-Authenticate` challenge, not a Relay or Vault error.
 
 Pairing must be started from a trusted admin path:
 
