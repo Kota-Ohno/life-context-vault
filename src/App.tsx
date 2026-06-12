@@ -431,9 +431,7 @@ export function App() {
           nativeRevisionRef.current = result.currentUpdatedAt;
           setNativeRevision(result.currentUpdatedAt);
           setState(mergedState);
-          const pendingRequest = mergedState.contextPackRequests.find(
-            (request) => request.status === "pending_user_confirmation"
-          );
+          const pendingRequest = mergedState.contextPackRequests.find((request) => requestNeedsUserAction(request));
           if (pendingRequest) {
             setActiveRequestId(pendingRequest.id);
             setActivePackId(
@@ -484,9 +482,7 @@ export function App() {
         setNativeRevision(snapshot.updatedAt);
         setState(snapshot.state);
 
-        const pendingRequest = snapshot.state.contextPackRequests.find(
-          (request) => request.status === "pending_user_confirmation"
-        );
+        const pendingRequest = snapshot.state.contextPackRequests.find((request) => requestNeedsUserAction(request));
         if (pendingRequest) {
           setActiveRequestId(pendingRequest.id);
           setActivePackId(
@@ -1758,7 +1754,13 @@ export function App() {
           <NavButton icon={<Inbox size={18} />} label="Inbox" active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
           <NavButton icon={<FileText size={18} />} label="Sources" active={view === "sources"} onClick={() => setView("sources")} />
           <NavButton icon={<Plug size={18} />} label="Connections" active={view === "connections"} onClick={() => setView("connections")} />
-          <NavButton icon={<MessageSquare size={18} />} label="Requests" active={view === "requests"} onClick={() => setView("requests")} badge={state.contextPackRequests.filter((request) => request.status === "pending_user_confirmation").length} />
+          <NavButton
+            icon={<MessageSquare size={18} />}
+            label="Requests"
+            active={view === "requests"}
+            onClick={() => setView("requests")}
+            badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
+          />
           <NavButton icon={<Search size={18} />} label="Search" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
           <NavButton icon={<Activity size={18} />} label="Audit" active={view === "audit"} onClick={() => setView("audit")} />
           <NavButton icon={<Settings size={18} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
@@ -2072,7 +2074,7 @@ function HomeView({
   const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
   const requestTried = requests.length > 0;
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
-  const pendingRequestCount = requests.filter((request) => request.status === "pending_user_confirmation").length;
+  const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request)).length;
   const focusSetup = () => {
     document.getElementById("home-guided-setup")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -4046,6 +4048,23 @@ function ContextRequestsView({
           fact: facts.find((fact) => fact.id === item.referencedId)
         }))
     : [];
+  const pendingReviewRequests = requests.filter((request) => request.status === "pending_user_confirmation");
+  const unreturnedLowRiskRequests = requests.filter((request) => request.status === "approved");
+  const actionableRequests = requests.filter((request) => requestNeedsUserAction(request));
+  const readyRequests = requests.filter((request) => request.status === "fulfilled");
+  const closedRequests = requests.filter((request) => request.status === "denied" || request.status === "expired");
+  const requestQueueTitle =
+    pendingReviewRequests.length > 0
+      ? `${pendingReviewRequests.length}件の確認待ち`
+      : unreturnedLowRiskRequests.length > 0
+        ? `${unreturnedLowRiskRequests.length}件の返却待ち`
+        : "今は対応待ちはありません";
+  const requestQueueBody =
+    pendingReviewRequests.length > 0
+      ? "外部AIへ返す前に、使うFact・根拠・除外理由を確認できます。"
+      : unreturnedLowRiskRequests.length > 0
+        ? "低リスクでも、AIへ返す前に送信内容をここで確認できます。"
+        : "新しいAI要求が届くとここに並びます。手動テストは下の折りたたみから試せます。";
   const packPanelRef = useRef<HTMLDivElement | null>(null);
   const packActionRef = useRef<HTMLDivElement | null>(null);
 
@@ -4061,33 +4080,27 @@ function ContextRequestsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Incoming request</p>
-            <h3>AIから届いたContext要求</h3>
+            <p className="eyebrow">AI confirmation inbox</p>
+            <h3>AIへ返す前の確認待ち</h3>
           </div>
           <Send size={18} />
         </div>
-        <label className="field">
-          <span>AIクライアント</span>
-          <select value={requestClientId} onChange={(event) => setRequestClientId(event.target.value)}>
-            {connectors
-              .filter((connector) => connector.scopes.includes("context_pack.request"))
-              .map((connector) => (
-                <option key={connector.id} value={connector.id}>
-                  {connector.clientName}
-                </option>
-              ))}
-          </select>
-        </label>
-        <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
-        <button className="primary-button" onClick={buildPack} type="button">
-          <Sparkles size={16} />
-          Context Packを準備
-        </button>
-        <p className="muted">MCP接続から届いた要求も、手動で試す要求も、AIへ返す前にここでContext Packを確認します。</p>
+        <div className={actionableRequests.length > 0 ? "request-inbox-summary attention" : "request-inbox-summary"}>
+          {actionableRequests.length > 0 ? <ShieldAlert size={18} /> : <ShieldCheck size={18} />}
+          <div>
+            <strong>{requestQueueTitle}</strong>
+            <span>{requestQueueBody}</span>
+          </div>
+        </div>
+        <div className="request-inbox-metrics">
+          <Metric label="対応待ち" value={actionableRequests.length} />
+          <Metric label="AI取得可" value={readyRequests.length} />
+          <Metric label="終了" value={closedRequests.length} />
+        </div>
         <div className="request-list">
           {requests.slice(0, 8).map((request) => (
             <button
-              className={currentRequest?.id === request.id ? "request-row active" : "request-row"}
+              className={`request-row ${requestStatusTone(request.status)}${currentRequest?.id === request.id ? " active" : ""}`}
               key={request.id}
               onClick={() => setActiveRequest(request)}
               type="button"
@@ -4095,17 +4108,46 @@ function ContextRequestsView({
               <span>{request.clientName}</span>
               <strong>{requestStatusLabel(request.status)}</strong>
               <small>{request.taskText}</small>
+              <small>{formatDateTime(request.createdAt)} / {formatDateTime(request.expiresAt)}まで</small>
             </button>
           ))}
-          {requests.length === 0 && <p className="muted">まだContext Requestはありません。</p>}
+          {requests.length === 0 && (
+            <EmptyState
+              title="まだAI要求はありません"
+              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。"
+            />
+          )}
         </div>
+        <details className="advanced-panel request-test-panel">
+          <summary>手動でContext Packを試す</summary>
+          <div className="form-stack">
+            <label className="field">
+              <span>AIクライアント</span>
+              <select value={requestClientId} onChange={(event) => setRequestClientId(event.target.value)}>
+                {connectors
+                  .filter((connector) => connector.scopes.includes("context_pack.request"))
+                  .map((connector) => (
+                    <option key={connector.id} value={connector.id}>
+                      {connector.clientName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
+            <button className="primary-button" onClick={buildPack} type="button">
+              <Sparkles size={16} />
+              テスト要求を作成
+            </button>
+            <p className="muted">手動テストでも、AIへ返す前に同じContext Pack確認とAuditを通します。</p>
+          </div>
+        </details>
       </div>
 
       <div className="panel context-pack-panel" ref={packPanelRef}>
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Context Pack</p>
-            <h3>AIに渡す文脈の確認</h3>
+            <p className="eyebrow">AI-bound preview</p>
+            <h3>この内容だけAIへ渡す</h3>
           </div>
           {currentRequest && <Badge>{currentRequest.clientName}</Badge>}
         </div>
@@ -4124,7 +4166,7 @@ function ContextRequestsView({
                 type="button"
               >
                 <CheckCircle2 size={16} />
-                承認してAI取得可能にする
+                この内容だけAIへ許可
               </button>
               <button
                 className="secondary-button"
@@ -4133,7 +4175,7 @@ function ContextRequestsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Context Pack本文をコピー
+                {aiReady ? "本文をコピー" : "確認してコピーFallback"}
               </button>
               <button
                 className="secondary-button"
@@ -4142,11 +4184,11 @@ function ContextRequestsView({
                 type="button"
               >
                 <Check size={16} />
-                ローカル回答を生成
+                ローカル回答を下書き
               </button>
               <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
                 <X size={16} />
-                拒否
+                AIへ渡さず拒否
               </button>
             </div>
           </>
@@ -4160,7 +4202,7 @@ function ContextRequestsView({
           </div>
         )}
         {!currentPack ? (
-          <p className="muted">質問からContext Packを作成すると、ここに使用予定の背景情報が表示されます。</p>
+          <p className="muted">AI要求を選ぶと、送信予定の背景情報と根拠がここに表示されます。</p>
         ) : (
           <div className="context-pack">
             <div className={aiReady ? "pack-delivery ready" : "pack-delivery attention"}>
@@ -4195,6 +4237,7 @@ function ContextRequestsView({
                       <SensitivityBadge sensitivity={item.sensitivity} />
                       <span>{item.sourceTitles.join(", ")}</span>
                     </div>
+                    <small>{item.reasonIncluded}</small>
                     <button
                       className="secondary-button"
                       disabled={requestClosed || aiReady}
@@ -4208,6 +4251,30 @@ function ContextRequestsView({
                 </div>
               ))}
               {currentPack.items.length === 0 && <p className="muted">使える承認済みFactがまだありません。</p>}
+            </div>
+            <div className="source-snippet-list">
+              <strong>AIへ渡る根拠snippet</strong>
+              {currentPack.sourceSnippets && currentPack.sourceSnippets.length > 0 ? (
+                currentPack.sourceSnippets.slice(0, 5).map((snippet) => (
+                  <div className="source-snippet" key={snippet.id}>
+                    <div>
+                      <span>{snippet.title}</span>
+                      <SensitivityBadge sensitivity={snippet.sensitivity} />
+                    </div>
+                    <p>{snippet.text}</p>
+                    <small>{snippet.reasonIncluded}</small>
+                  </div>
+                ))
+              ) : (
+                <div className="source-snippet empty">
+                  <div>
+                    <span>今回はSource snippetを送信しません</span>
+                    <Badge>0 snippets</Badge>
+                  </div>
+                  <p>Raw Source本文や高感度SourceタイトルはAIへ渡しません。上のFact本文と理由だけがPack本文に含まれます。</p>
+                  <small>出典確認が必要な場合は、Sourcesで元データとポリシーを確認できます。</small>
+                </div>
+              )}
             </div>
             {currentPack.excludedItems.length > 0 && (
               <div className="exclusion-list">
@@ -5204,12 +5271,23 @@ function requestStatusLabel(status: ContextPackRequest["status"]): string {
   const labels: Record<ContextPackRequest["status"], string> = {
     draft: "下書き",
     pending_user_confirmation: "確認待ち",
-    approved: "低リスク・未返却",
+    approved: "確認不要・未返却",
     denied: "拒否済み",
     fulfilled: "AI返却可",
     expired: "期限切れ"
   };
   return labels[status];
+}
+
+function requestNeedsUserAction(request: ContextPackRequest): boolean {
+  return request.status === "pending_user_confirmation" || request.status === "approved";
+}
+
+function requestStatusTone(status: ContextPackRequest["status"]): "pending" | "ready" | "closed" | "neutral" {
+  if (status === "pending_user_confirmation" || status === "approved") return "pending";
+  if (status === "fulfilled") return "ready";
+  if (status === "denied" || status === "expired") return "closed";
+  return "neutral";
 }
 
 function packConfirmationLabel(status: ContextPack["confirmationStatus"]): string {
