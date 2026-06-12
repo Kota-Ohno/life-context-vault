@@ -268,7 +268,7 @@ Last updated: 2026-06-13
 - Legacy Office conversion beyond the Settings/env local OCR command provider, detected OCR provider presets, and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and hosted-client compatibility beyond the explicit POST-only `GET /mcp` 405 boundary.
+- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, and hosted-client compatibility beyond the explicit POST-only `GET /mcp` 405 boundary.
 - Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, and popup deletion of the latest captured Source body. Remaining product-hardening: extension-side recent captured Source review/open-in-app flow and durable delta queues across page reloads.
 - OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
@@ -751,6 +751,13 @@ Last updated: 2026-06-13
 - Technical design: `GET /mcp` and other unsupported `/mcp` methods return `405 Method Not Allowed`, `Allow: POST, OPTIONS`, JSON guidance, and CORS headers. `POST /mcp` remains the only JSON-RPC path.
 - Verification: Relay unit coverage fixes the `GET /mcp` status, reason, `Allow` header, and response body. `npm run product:check` passed.
 
+### Relay Origin Allowlist Slice
+
+- Product fit: hosted Relay setup now has a concrete `LCV_RELAY_ALLOWED_ORIGINS` path for ChatGPT/Claude-style browser clients instead of relying on wildcard CORS.
+- Security/privacy: public/shared Relay startup requires an Origin allowlist, and `/mcp` plus `/relay/handoff` reject disallowed browser Origins before authorization or request-body payload processing. OAuth discovery remains public metadata.
+- Technical design: loopback development keeps wildcard CORS when no Origin allowlist is configured; configured Origins receive exact `Access-Control-Allow-Origin` plus `Vary: Origin`; disallowed Origins receive `403 origin_not_allowed`.
+- Verification: Relay unit tests cover required public allowlist configuration, trusted preflight, and untrusted-Origin rejection. `npm run product:check` passed.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -758,6 +765,6 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
 - Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
-- Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, public Origin allowlists, detailed OAuth challenge headers, and hosted-client protocol negotiation remain before a hosted connector beta.
+- Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish beyond the POST-only method boundary, detailed OAuth challenge headers, and hosted-client protocol negotiation remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
 - Deferred general-user polish: browser Capture recent-source review/open-in-app flow, durable delta queues across page reloads, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.

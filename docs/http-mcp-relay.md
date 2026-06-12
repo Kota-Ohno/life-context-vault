@@ -83,6 +83,14 @@ Content-Type: application/json
 
 Remote clients should use OAuth discovery instead of the static token. Public or shared deployments should leave `LCV_RELAY_ENABLE_STATIC_TOKEN` unset.
 
+For public or shared deployments, set an explicit browser Origin allowlist for the AI-bound data endpoints:
+
+```bash
+LCV_RELAY_ALLOWED_ORIGINS=https://chatgpt.com,https://claude.ai
+```
+
+When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `LCV_RELAY_ALLOWED_ORIGINS`. The allowlist applies to `/mcp` and `/relay/handoff`; OAuth discovery endpoints remain public metadata.
+
 ## Endpoints
 
 - `GET /health`
@@ -104,6 +112,8 @@ Remote clients should use OAuth discovery instead of the static token. Public or
 - `GET /mcp` returns `405 Method Not Allowed` with `Allow: POST, OPTIONS`; SSE GET transport is not enabled in the current Relay.
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
+
+`OPTIONS /mcp`, `POST /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing.
 
 `GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 

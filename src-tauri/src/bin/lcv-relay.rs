@@ -88,6 +88,7 @@ struct RelayConfig {
   vault_db_path: Option<String>,
   relay_state_path: Option<PathBuf>,
   allow_direct_sidecar: bool,
+  allowed_origins: Vec<String>,
   retention: RelayRetentionPolicy,
 }
 
@@ -103,6 +104,7 @@ impl RelayConfig {
     let allow_static_bearer = env::var("LCV_RELAY_ENABLE_STATIC_TOKEN")
       .map(|value| value == "1")
       .unwrap_or(false);
+    let allowed_origins = parse_allowed_origins(env::var("LCV_RELAY_ALLOWED_ORIGINS").ok());
     validate_relay_surface(
       &bind,
       &base_url,
@@ -110,6 +112,7 @@ impl RelayConfig {
       allow_direct_sidecar,
       allow_static_bearer,
       env::var("LCV_RELAY_TOKEN").is_ok(),
+      &allowed_origins,
     )?;
     let tenant_id = relay_tenant_id_from_env(&bind)?;
     Ok(Self {
@@ -128,6 +131,7 @@ impl RelayConfig {
         .ok()
         .or_else(default_relay_state_path),
       allow_direct_sidecar,
+      allowed_origins,
       retention: RelayRetentionPolicy::from_env(),
     })
   }
@@ -232,6 +236,7 @@ fn validate_relay_surface(
   allow_direct_sidecar: bool,
   allow_static_bearer: bool,
   static_token_set: bool,
+  allowed_origins: &[String],
 ) -> Result<(), String> {
   if is_loopback_bind(bind) {
     return Ok(());
@@ -251,7 +256,22 @@ fn validate_relay_surface(
         .to_string(),
     );
   }
+  if allowed_origins.is_empty() {
+    return Err(
+      "LCV_RELAY_ALLOWED_ORIGINS is required when binding outside loopback".to_string(),
+    );
+  }
   Ok(())
+}
+
+fn parse_allowed_origins(raw: Option<String>) -> Vec<String> {
+  raw
+    .unwrap_or_default()
+    .split(|character: char| character == ',' || character.is_whitespace())
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(|value| value.trim_end_matches('/').to_string())
+    .collect()
 }
 
 fn relay_tenant_id_from_env(bind: &str) -> Result<String, String> {
@@ -1011,11 +1031,23 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/pairing/status") => pairing_status(request, state),
     ("GET", "/agent/status") => json_response(200, state.agent_status()),
     ("GET", "/relay/state") => relay_state_status(request, config, state),
-    ("OPTIONS", "/relay/handoff") => HttpResponse::empty(204).with_cors(),
-    ("POST", "/relay/handoff") => relay_handoff(request, config, state),
-    ("OPTIONS", "/mcp") => HttpResponse::empty(204).with_cors(),
-    ("POST", "/mcp") => handle_mcp_request(request, config, state),
-    (method, "/mcp") => mcp_method_not_allowed(method),
+    ("OPTIONS", "/relay/handoff") => cors_preflight_response(request, config),
+    ("POST", "/relay/handoff") => {
+      if cors_origin_for_request(request, config).is_none() {
+        cors_forbidden_response()
+      } else {
+        relay_handoff(request, config, state).with_cors_for_request(request, config)
+      }
+    }
+    ("OPTIONS", "/mcp") => cors_preflight_response(request, config),
+    ("POST", "/mcp") => {
+      if cors_origin_for_request(request, config).is_none() {
+        cors_forbidden_response()
+      } else {
+        handle_mcp_request(request, config, state)
+      }
+    }
+    (method, "/mcp") => mcp_method_not_allowed(method, request, config),
     _ => json_response(404, json!({
       "error": "not_found",
       "message": "Use POST /mcp for MCP JSON-RPC over HTTP."
@@ -1023,7 +1055,11 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
   }
 }
 
-fn mcp_method_not_allowed(method: &str) -> HttpResponse {
+fn mcp_method_not_allowed(
+  method: &str,
+  request: &HttpRequest,
+  config: &RelayConfig,
+) -> HttpResponse {
   HttpResponse::json(405, json!({
     "error": "method_not_allowed",
     "method": method,
@@ -1031,7 +1067,7 @@ fn mcp_method_not_allowed(method: &str) -> HttpResponse {
     "message": "This Relay supports MCP JSON-RPC over POST /mcp. SSE GET /mcp is not enabled."
   }))
   .with_header("Allow", "POST, OPTIONS")
-  .with_cors()
+  .with_cors_for_request(request, config)
 }
 
 fn protected_resource_metadata(config: &RelayConfig) -> HttpResponse {
@@ -1111,7 +1147,7 @@ fn relay_state_status(request: &HttpRequest, config: &RelayConfig, state: &Relay
 
 fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
   if !admin_authorized(request, config) {
-    return json_response(401, json!({
+    return HttpResponse::json(401, json!({
       "error": "unauthorized",
       "message": "Relay handoff requires loopback access or LCV_RELAY_ADMIN_TOKEN."
     }))
@@ -1120,7 +1156,7 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
   let body = match serde_json::from_str::<Value>(&request.body) {
     Ok(value) => value,
     Err(error) => {
-      return json_response(400, json!({
+      return HttpResponse::json(400, json!({
         "error": "invalid_json",
         "message": format!("handoff body must be JSON: {error}")
       }));
@@ -1133,7 +1169,7 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
   let request_id = match validate_handoff_mcp_response(&mcp_response) {
     Ok(request_id) => request_id,
     Err(error) => {
-      return json_response(400, json!({
+      return HttpResponse::json(400, json!({
         "error": "invalid_handoff",
         "message": error
       }));
@@ -1145,13 +1181,13 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     .filter(|value| !value.trim().is_empty())
     .map(str::to_string);
   let Some(client_id) = client_id else {
-    return json_response(400, json!({
+    return HttpResponse::json(400, json!({
       "error": "missing_client_id",
       "message": "handoff body must include clientId so cached Context Packs remain bound to the requesting AI client."
     }));
   };
   let handoff = state.store_handoff(request_id.clone(), Some(client_id), mcp_response);
-  json_response(200, json!({
+  HttpResponse::json(200, json!({
     "status": "stored",
     "requestId": request_id,
     "expiresAt": system_time_seconds(handoff.expires_at),
@@ -1420,7 +1456,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
       "rejected_unauthorized",
       "none",
     );
-    return json_response(401, json!({
+    return mcp_json_response(request, config, 401, json!({
       "error": "unauthorized",
       "message": "Missing or invalid Authorization bearer token."
     }))
@@ -1438,7 +1474,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "fulfilled",
         "agent_websocket",
       );
-      return HttpResponse::json(200, body).with_cors();
+      return HttpResponse::json(200, body).with_cors_for_request(request, config);
     }
     Ok(None) => {
       record_relay_event(
@@ -1450,7 +1486,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "accepted_no_body",
         "agent_websocket",
       );
-      return HttpResponse::empty(202).with_cors();
+      return HttpResponse::empty(202).with_cors_for_request(request, config);
     }
     Err(agent_error) => {
       if !config.allow_direct_sidecar {
@@ -1464,7 +1500,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
             "fulfilled_handoff_cache",
             "relay_handoff_cache",
           );
-          return HttpResponse::json(200, handoff_body).with_cors();
+          return HttpResponse::json(200, handoff_body).with_cors_for_request(request, config);
         }
         record_relay_event(
           state,
@@ -1475,7 +1511,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
           "pending_agent_offline",
           "none",
         );
-        return json_response(202, json!({
+        return mcp_json_response(request, config, 202, json!({
           "status": "pending_agent_offline",
           "message": "Local Vault Agent is offline; request is waiting for the user's desktop.",
           "detail": agent_error
@@ -1500,7 +1536,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "fulfilled",
         "direct_sidecar_fallback",
       );
-      HttpResponse::json(200, body).with_cors()
+      HttpResponse::json(200, body).with_cors_for_request(request, config)
     }
     Ok(None) => {
       record_relay_event(
@@ -1512,7 +1548,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "accepted_no_body",
         "direct_sidecar_fallback",
       );
-      HttpResponse::empty(202).with_cors()
+      HttpResponse::empty(202).with_cors_for_request(request, config)
     }
     Err(error) => {
       if let Some(handoff_body) = handoff_response_for_mcp_request(state, &request.body, &client_id) {
@@ -1525,7 +1561,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
           "fulfilled_handoff_cache",
           "relay_handoff_cache",
         );
-        return HttpResponse::json(200, handoff_body).with_cors();
+        return HttpResponse::json(200, handoff_body).with_cors_for_request(request, config);
       }
       record_relay_event(
         state,
@@ -1536,7 +1572,7 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
         "forward_failed",
         "direct_sidecar_fallback",
       );
-      json_response(500, json!({
+      mcp_json_response(request, config, 500, json!({
         "error": "relay_forward_failed",
         "message": error
       }))
@@ -1872,6 +1908,21 @@ impl HttpResponse {
       .with_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
   }
 
+  fn with_cors_for_request(self, request: &HttpRequest, config: &RelayConfig) -> Self {
+    let Some(origin) = cors_origin_for_request(request, config) else {
+      return self;
+    };
+    let response = self
+      .with_header("Access-Control-Allow-Origin", &origin)
+      .with_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+      .with_header("Access-Control-Allow-Methods", "POST, OPTIONS");
+    if origin == "*" {
+      response
+    } else {
+      response.with_header("Vary", "Origin")
+    }
+  }
+
   fn write_to(&self, stream: &mut TcpStream) -> Result<(), String> {
     write!(stream, "HTTP/1.1 {} {}\r\n", self.status, self.reason)
       .map_err(|error| format!("failed to write response line: {error}"))?;
@@ -1889,6 +1940,54 @@ impl HttpResponse {
 
 fn json_response(status: u16, body: Value) -> HttpResponse {
   HttpResponse::json(status, body).with_cors()
+}
+
+fn mcp_json_response(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  status: u16,
+  body: Value,
+) -> HttpResponse {
+  HttpResponse::json(status, body).with_cors_for_request(request, config)
+}
+
+fn cors_preflight_response(request: &HttpRequest, config: &RelayConfig) -> HttpResponse {
+  if cors_origin_for_request(request, config).is_some() {
+    HttpResponse::empty(204).with_cors_for_request(request, config)
+  } else {
+    cors_forbidden_response()
+  }
+}
+
+fn cors_forbidden_response() -> HttpResponse {
+  HttpResponse::json(403, json!({
+    "error": "origin_not_allowed",
+    "message": "This Relay endpoint is not available to the request Origin."
+  }))
+}
+
+fn cors_origin_for_request(request: &HttpRequest, config: &RelayConfig) -> Option<String> {
+  let Some(origin) = request.header("Origin") else {
+    return Some("*".to_string());
+  };
+  let normalized_origin = origin.trim().trim_end_matches('/');
+  if normalized_origin.is_empty() {
+    return Some("*".to_string());
+  }
+  if config.allowed_origins.is_empty() && is_loopback_bind(&config.bind) {
+    return Some("*".to_string());
+  }
+  if config.allowed_origins.iter().any(|allowed| allowed == "*") {
+    return Some("*".to_string());
+  }
+  if config
+    .allowed_origins
+    .iter()
+    .any(|allowed| allowed == normalized_origin)
+  {
+    return Some(normalized_origin.to_string());
+  }
+  None
 }
 
 fn mcp_authorized_client(
@@ -2060,6 +2159,7 @@ fn reason_phrase(status: u16) -> &'static str {
     302 => "Found",
     400 => "Bad Request",
     401 => "Unauthorized",
+    403 => "Forbidden",
     404 => "Not Found",
     405 => "Method Not Allowed",
     500 => "Internal Server Error",
@@ -2083,8 +2183,17 @@ mod tests {
       vault_db_path: None,
       relay_state_path: None,
       allow_direct_sidecar: true,
+      allowed_origins: Vec::new(),
       retention: RelayRetentionPolicy::default(),
     }
+  }
+
+  fn response_header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
+    response
+      .headers
+      .iter()
+      .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+      .map(|(_, value)| value.as_str())
   }
 
   #[test]
@@ -2111,6 +2220,41 @@ mod tests {
     let body = String::from_utf8(response.body).expect("response body");
     assert!(body.contains("method_not_allowed"));
     assert!(body.contains("POST /mcp"));
+  }
+
+  #[test]
+  fn mcp_cors_uses_configured_origin_allowlist() {
+    let config = RelayConfig {
+      allowed_origins: vec!["https://chatgpt.com".to_string()],
+      ..test_config()
+    };
+    let allowed = HttpRequest {
+      method: "OPTIONS".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![("Origin".to_string(), "https://chatgpt.com".to_string())],
+      body: String::new(),
+    };
+    let allowed_response = route_request(&allowed, &config, &RelayState::new());
+
+    assert_eq!(allowed_response.status, 204);
+    assert_eq!(
+      response_header(&allowed_response, "Access-Control-Allow-Origin"),
+      Some("https://chatgpt.com")
+    );
+    assert_eq!(response_header(&allowed_response, "Vary"), Some("Origin"));
+
+    let denied = HttpRequest {
+      headers: vec![("Origin".to_string(), "https://evil.example".to_string())],
+      ..allowed
+    };
+    let denied_response = route_request(&denied, &config, &RelayState::new());
+
+    assert_eq!(denied_response.status, 403);
+    assert_eq!(
+      response_header(&denied_response, "Access-Control-Allow-Origin"),
+      None
+    );
   }
 
   #[test]
@@ -2174,7 +2318,8 @@ mod tests {
       None,
       true,
       false,
-      false
+      false,
+      &[]
     )
     .is_ok());
     assert!(validate_relay_surface(
@@ -2183,7 +2328,8 @@ mod tests {
       Some(&admin_token),
       false,
       false,
-      false
+      false,
+      &["https://chatgpt.com".to_string()]
     )
     .expect_err("public relay must require https")
     .contains("https://"));
@@ -2193,7 +2339,8 @@ mod tests {
       None,
       false,
       false,
-      false
+      false,
+      &["https://chatgpt.com".to_string()]
     )
     .expect_err("public relay must require admin token")
     .contains("ADMIN_TOKEN"));
@@ -2203,7 +2350,8 @@ mod tests {
       Some(&admin_token),
       true,
       false,
-      false
+      false,
+      &["https://chatgpt.com".to_string()]
     )
     .expect_err("public relay must disable direct sidecar")
     .contains("ALLOW_DIRECT_SIDECAR=0"));
@@ -2213,7 +2361,8 @@ mod tests {
       Some(&admin_token),
       false,
       true,
-      false
+      false,
+      &["https://chatgpt.com".to_string()]
     )
     .expect_err("explicit static bearer requires token")
     .contains("LCV_RELAY_TOKEN"));
@@ -2223,7 +2372,19 @@ mod tests {
       Some(&admin_token),
       false,
       false,
-      false
+      false,
+      &[]
+    )
+    .expect_err("public relay must require allowed origins")
+    .contains("ALLOWED_ORIGINS"));
+    assert!(validate_relay_surface(
+      "0.0.0.0:8765",
+      "https://relay.example.com",
+      Some(&admin_token),
+      false,
+      false,
+      false,
+      &["https://chatgpt.com".to_string()]
     )
     .is_ok());
   }

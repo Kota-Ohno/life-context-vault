@@ -20,12 +20,15 @@ LCV_RELAY_BASE_URL=https://relay.example.com
 LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token>
 LCV_RELAY_TENANT_ID=<tenant-or-environment-id>
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=0
+LCV_RELAY_ALLOWED_ORIGINS=https://chatgpt.com,https://claude.ai
 LCV_RELAY_STATE_PATH=/data/relay-state.json
 ```
 
 The public endpoint must terminate HTTPS before traffic reaches the container. `LCV_RELAY_BASE_URL` must be the public HTTPS origin because OAuth metadata, connector URLs, and Agent WebSocket URLs are derived from it.
 
 Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STATIC_TOKEN=1` in public or shared deployments; real clients should use OAuth Authorization Code + PKCE.
+
+`LCV_RELAY_ALLOWED_ORIGINS` gates browser CORS for `/mcp` and `/relay/handoff`. Keep it to the exact AI client origins you intend to support. OAuth discovery metadata remains public, but the AI-bound data endpoints reject browser requests from other Origins before authorization or request-body payload processing.
 
 ## Recommended Runtime Settings
 
@@ -65,7 +68,15 @@ Confirmed Context Pack handoff bodies are memory-only, admin-gated, client-bound
 curl -fsS https://relay.example.com/health
 curl -fsS https://relay.example.com/.well-known/oauth-authorization-server
 curl -fsS https://relay.example.com/.well-known/oauth-protected-resource
+curl -i -X OPTIONS \
+  -H "Origin: https://chatgpt.com" \
+  https://relay.example.com/mcp
+curl -i -X OPTIONS \
+  -H "Origin: https://untrusted.example" \
+  https://relay.example.com/mcp
 ```
+
+The trusted-Origin preflight should return `204` with `Access-Control-Allow-Origin: https://chatgpt.com`. The untrusted-Origin preflight should return `403`.
 
 Pairing must be started from a trusted admin path:
 
