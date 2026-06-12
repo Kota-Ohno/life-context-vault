@@ -280,6 +280,9 @@ Last updated: 2026-06-13
   - `.doc`, `.xls`, and `.ppt` remain blocked by default, but can be accepted when the user configures a local LibreOffice/soffice-style conversion command
   - conversion runs locally in a private temp directory, then the converted DOCX/PPTX/XLSX/PDF output goes through the existing native extraction and Memory Inbox review flow
   - Settings now includes OS-specific LibreOffice install commands, safe default conversion arguments, and clear/copy actions
+- Added guided Legacy Office provider detection:
+  - Desktop detects installed LibreOffice/soffice candidates from PATH and common install locations without executing them
+  - Settings shows detected candidates with one-click command/argument/timeout setup and explains that detection does not run LibreOffice or send documents
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -290,7 +293,7 @@ Last updated: 2026-06-13
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Remote MCP hosted-client certification, long-running SSE soak, and provider-specific connector registration against a real public HTTPS Relay.
 - Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
-- OCR setup now detects common local Tesseract providers, offers one-click Settings presets, and includes OS-specific guided install commands for users who do not already have an OCR provider. Remaining product-hardening: bundled OCR runtime for users who do not want to install Tesseract separately.
+- OCR setup now detects common local Tesseract providers, Legacy Office setup detects common local LibreOffice/soffice providers, both offer one-click Settings presets, and both include OS-specific guided install commands. Remaining product-hardening: bundled OCR/Office conversion runtimes for users who do not want to install providers separately.
 
 ## Verification
 
@@ -328,6 +331,7 @@ Last updated: 2026-06-13
 - Upload guard tests proving text-like files are accepted, native PDF/Office files require Desktop extraction, OCR images require a provider unless configured, legacy Office binaries require a converter unless configured, and oversized files are rejected before Source creation
 - Native document extraction tests proving DOCX XML text can be extracted locally, image OCR is refused without a provider, and a configured local OCR command can provide image text without creating ApprovedFacts
 - Native Legacy Office conversion tests proving `.doc` remains blocked without a converter and a configured local converter produces extracted text without creating ApprovedFacts
+- Native provider detection tests proving OCR and Legacy Office candidates are discovered from PATH/common paths without executing the provider
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
 - Native Source body re-extraction tests proving body edits regenerate MemoryCandidates, move linked Facts to `needs_review`, invalidate affected Context Packs, and refresh normalized search/source projection
@@ -855,6 +859,15 @@ Last updated: 2026-06-13
 - UX/design: Settings includes OS-specific LibreOffice install commands and editable conversion arguments. The Sources upload copy now distinguishes OCR Provider and Legacy Office conversion Provider readiness.
 - Verification: `npm test -- --run src/sourceUpload.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_document_extraction`, `npm run build`, desktop `1280x920` Settings render, and mobile `390x844` Settings render passed with no horizontal overflow or clipped provider fields.
 - Review fallback: SubAgents were not used for this local extraction slice; the main thread ran separate product-fit, security/privacy, technical, and visual QA passes.
+
+### Legacy Office Provider Detection UX Slice
+
+- Product fit: users who already have LibreOffice installed can now configure old Office conversion without knowing the command path or arguments.
+- Security/privacy: provider discovery only checks file existence in PATH and common install locations; it does not execute LibreOffice, read documents, or create Sources.
+- Technical design: the native detection command mirrors OCR discovery, returns command/argument/timeout candidates, and deduplicates PATH/common-path results before the Settings view offers one-click preference setup.
+- UX/design: the Settings card now shows detected LibreOffice candidates above install guides and includes explicit copy that detection has not run the provider or sent documents.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml provider_detection`, `npm run build`, and Playwright desktop `1280x920` plus mobile `390x844` Settings renders passed with no horizontal overflow.
+- Review fallback: SubAgents were not used for this narrow detection slice; the main thread ran separate product-fit, privacy, technical, and visual QA passes.
 
 ### Remote MCP Connection Diagnostics UX Slice
 

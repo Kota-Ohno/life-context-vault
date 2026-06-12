@@ -36,6 +36,7 @@ import {
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
   NativeDocumentExtractionCapabilities,
+  NativeLegacyOfficeProviderCandidate,
   NativeOcrProviderCandidate,
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
@@ -43,6 +44,7 @@ import {
   confirmNativeContextPack,
   createNativeContextPackRequest,
   denyNativeContextPackRequest,
+  detectNativeLegacyOfficeProviderCandidates,
   detectNativeOcrProviderCandidates,
   extractNativeDocumentText,
   getAiAccessServiceStatus,
@@ -264,6 +266,8 @@ export function App() {
   const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
     useState<NativeDocumentExtractionCapabilities | null>(null);
   const [ocrProviderCandidates, setOcrProviderCandidates] = useState<NativeOcrProviderCandidate[]>([]);
+  const [legacyOfficeProviderCandidates, setLegacyOfficeProviderCandidates] =
+    useState<NativeLegacyOfficeProviderCandidate[]>([]);
   const [runtimePreferences, setRuntimePreferences] = useState<RuntimePreferences>(() =>
     loadRuntimePreferences()
   );
@@ -289,12 +293,20 @@ export function App() {
     let cancelled = false;
     async function hydrateNativeStorage() {
       try {
-        const [nativeSnapshot, path, configTemplate, extractionCapabilities, detectedOcrProviders] = await Promise.all([
+        const [
+          nativeSnapshot,
+          path,
+          configTemplate,
+          extractionCapabilities,
+          detectedOcrProviders,
+          detectedLegacyOfficeProviders
+        ] = await Promise.all([
           loadNativeVaultSnapshot(),
           getNativeVaultPath(),
           getClaudeDesktopConfigTemplate(),
           getNativeDocumentExtractionCapabilities().catch(() => null),
-          detectNativeOcrProviderCandidates().catch(() => [])
+          detectNativeOcrProviderCandidates().catch(() => []),
+          detectNativeLegacyOfficeProviderCandidates().catch(() => [])
         ]);
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
@@ -303,6 +315,7 @@ export function App() {
         setNativePath(path);
         setDocumentExtractionCapabilities(extractionCapabilities);
         setOcrProviderCandidates(detectedOcrProviders);
+        setLegacyOfficeProviderCandidates(detectedLegacyOfficeProviders);
         if (configTemplate) setClaudeConfig(configTemplate);
       } catch (error) {
         console.warn("Native storage unavailable", error);
@@ -1807,6 +1820,7 @@ export function App() {
             storageReady={storageReady}
             runtimePreferences={runtimePreferences}
             ocrProviderCandidates={ocrProviderCandidates}
+            legacyOfficeProviderCandidates={legacyOfficeProviderCandidates}
             updateRuntimePreference={updateRuntimePreference}
             copyText={copyText}
           />
@@ -3896,6 +3910,7 @@ function SettingsView({
   storageReady,
   runtimePreferences,
   ocrProviderCandidates,
+  legacyOfficeProviderCandidates,
   updateRuntimePreference,
   copyText
 }: {
@@ -3912,6 +3927,7 @@ function SettingsView({
   storageReady: boolean;
   runtimePreferences: RuntimePreferences;
   ocrProviderCandidates: NativeOcrProviderCandidate[];
+  legacyOfficeProviderCandidates: NativeLegacyOfficeProviderCandidate[];
   updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
   copyText: (value: string, message: string) => Promise<boolean>;
 }) {
@@ -3955,6 +3971,38 @@ function SettingsView({
             <ShieldCheck size={16} />
             <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
           </div>
+          {legacyOfficeProviderCandidates.length > 0 ? (
+            <div className="table-list">
+              {legacyOfficeProviderCandidates.map((candidate) => (
+                <div className="table-row" key={`${candidate.source}:${candidate.command}`}>
+                  <div>
+                    <strong>{candidate.label}</strong>
+                    <span>{candidate.command}</span>
+                    <span>検出だけを行い、ここではLibreOffice実行や文書送信はしていません。</span>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateRuntimePreference({
+                        legacyOfficeCommand: candidate.command,
+                        legacyOfficeArgs: candidate.args,
+                        legacyOfficeTimeoutSeconds: candidate.timeoutSeconds
+                      })
+                    }
+                    type="button"
+                  >
+                    <Check size={16} />
+                    この候補を使う
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="trust-note">
+              <ShieldAlert size={16} />
+              <span>LibreOfficeはまだ見つかっていません。インストール後にこの画面を開き直すか、下のCommandへローカル変換コマンドを直接入力してください。</span>
+            </div>
+          )}
           <div className="table-list">
             {legacyOfficeInstallGuides.map((guide) => (
               <div className="table-row" key={guide.id}>

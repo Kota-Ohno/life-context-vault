@@ -4602,6 +4602,36 @@ fn detect_ocr_provider_candidates_internal() -> Vec<OcrProviderCandidate> {
   detect_ocr_provider_candidates_from_sources(env::var_os("PATH"), &common_ocr_provider_paths())
 }
 
+fn detect_legacy_office_provider_candidates_from_sources(
+  path_env: Option<OsString>,
+  common_paths: &[PathBuf],
+) -> Vec<OcrProviderCandidate> {
+  let mut candidates = Vec::new();
+  let mut seen = HashSet::new();
+
+  if let Some(path_env) = path_env {
+    for dir in env::split_paths(&path_env) {
+      for binary in legacy_office_binary_names() {
+        let path = dir.join(binary);
+        push_legacy_office_candidate(&mut candidates, &mut seen, &path, "PATH");
+      }
+    }
+  }
+
+  for path in common_paths {
+    push_legacy_office_candidate(&mut candidates, &mut seen, path, "common-path");
+  }
+
+  candidates
+}
+
+fn detect_legacy_office_provider_candidates_internal() -> Vec<OcrProviderCandidate> {
+  detect_legacy_office_provider_candidates_from_sources(
+    env::var_os("PATH"),
+    &common_legacy_office_provider_paths(),
+  )
+}
+
 fn common_ocr_provider_paths() -> Vec<PathBuf> {
   let mut paths = vec![
     PathBuf::from("/opt/homebrew/bin/tesseract"),
@@ -4616,11 +4646,39 @@ fn common_ocr_provider_paths() -> Vec<PathBuf> {
   paths
 }
 
+fn common_legacy_office_provider_paths() -> Vec<PathBuf> {
+  let mut paths = vec![
+    PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+    PathBuf::from("/opt/homebrew/bin/soffice"),
+    PathBuf::from("/usr/local/bin/soffice"),
+    PathBuf::from("/usr/bin/libreoffice"),
+    PathBuf::from("/usr/bin/soffice"),
+    PathBuf::from("/snap/bin/libreoffice"),
+  ];
+  if cfg!(windows) {
+    paths.push(PathBuf::from(
+      r"C:\Program Files\LibreOffice\program\soffice.exe",
+    ));
+    paths.push(PathBuf::from(
+      r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+    ));
+  }
+  paths
+}
+
 fn tesseract_binary_names() -> Vec<&'static str> {
   if cfg!(windows) {
     vec!["tesseract.exe", "tesseract"]
   } else {
     vec!["tesseract"]
+  }
+}
+
+fn legacy_office_binary_names() -> Vec<&'static str> {
+  if cfg!(windows) {
+    vec!["soffice.exe", "libreoffice.exe", "soffice", "libreoffice"]
+  } else {
+    vec!["soffice", "libreoffice"]
   }
 }
 
@@ -4642,6 +4700,28 @@ fn push_tesseract_candidate(
     command,
     args: "{input} stdout".to_string(),
     timeout_seconds: 30,
+    source: source.to_string(),
+  });
+}
+
+fn push_legacy_office_candidate(
+  candidates: &mut Vec<OcrProviderCandidate>,
+  seen: &mut HashSet<String>,
+  path: &Path,
+  source: &str,
+) {
+  if !path_is_file(path) {
+    return;
+  }
+  let command = path.to_string_lossy().to_string();
+  if !seen.insert(command.clone()) {
+    return;
+  }
+  candidates.push(OcrProviderCandidate {
+    label: format!("LibreOffice ({source})"),
+    command,
+    args: "--headless --convert-to {target_ext} --outdir {output_dir} {input}".to_string(),
+    timeout_seconds: 60,
     source: source.to_string(),
   });
 }
@@ -7421,6 +7501,11 @@ fn detect_ocr_provider_candidates() -> Vec<OcrProviderCandidate> {
 }
 
 #[tauri::command]
+fn detect_legacy_office_provider_candidates() -> Vec<OcrProviderCandidate> {
+  detect_legacy_office_provider_candidates_internal()
+}
+
+#[tauri::command]
 fn approve_native_candidate(
   app: AppHandle,
   candidate_id: String,
@@ -7798,6 +7883,7 @@ pub fn run() {
       extract_native_document_text,
       native_document_extraction_capabilities,
       detect_ocr_provider_candidates,
+      detect_legacy_office_provider_candidates,
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
@@ -8081,6 +8167,36 @@ mod tests {
     assert_eq!(candidates[0].command, binary_path.to_string_lossy().to_string());
     assert_eq!(candidates[0].args, "{input} stdout");
     assert_eq!(candidates[0].timeout_seconds, 30);
+    assert_eq!(candidates[0].source, "PATH");
+
+    fs::remove_dir_all(temp_dir).ok();
+  }
+
+  #[test]
+  fn legacy_office_provider_detection_finds_path_candidate_without_running_it() {
+    let temp_dir = env::temp_dir().join(new_id("lcv_legacy_office_detect_test"));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let binary_name = if cfg!(windows) {
+      "soffice.exe"
+    } else {
+      "soffice"
+    };
+    let binary_path = temp_dir.join(binary_name);
+    fs::write(&binary_path, b"not a real executable").expect("write fake provider");
+    let path_env = env::join_paths([temp_dir.clone()]).expect("join path");
+
+    let candidates = detect_legacy_office_provider_candidates_from_sources(
+      Some(path_env),
+      &[binary_path.clone()],
+    );
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].command, binary_path.to_string_lossy().to_string());
+    assert_eq!(
+      candidates[0].args,
+      "--headless --convert-to {target_ext} --outdir {output_dir} {input}"
+    );
+    assert_eq!(candidates[0].timeout_seconds, 60);
     assert_eq!(candidates[0].source, "PATH");
 
     fs::remove_dir_all(temp_dir).ok();
