@@ -648,6 +648,13 @@ Last updated: 2026-06-13
 - Operations: hosted Relay deployment docs now require HTTPS base URL, admin token, direct sidecar disabled, and OAuth-only client access; accidental public static bearer fallback is treated as a misconfiguration.
 - Verification: relay tests cover pending OAuth authorization sessions, empty-scope rejection, static bearer disabling, and client-bound handoff cache behavior. Native document extraction tests cover the OCR command path.
 
+### Control Center UX Hardening Slice
+
+- Product fit: Connections now puts the AI Access quick start at the top of the page, so everyday AI connectivity is no longer buried below policy details.
+- UX: Context Requests keeps the Context Pack panel beside the incoming request on desktop, and on narrow screens moves the active Pack before the request form so the user reviews the AI-bound payload first.
+- UX: Pack risk, maximum sensitivity, confirmation status, and the approve/copy/local-answer/deny actions now sit at the top of the Pack panel. The copy action is labeled as copying the Context Pack body, separating "saved" from "AI-bound or copied."
+- Verification: in-app Browser checks at `1280x900` and `390x844` confirmed no horizontal overflow. Connections shows `Start AI Access` in the first viewport; Requests shows the Pack approval actions in the first viewport after selecting a request on both desktop and mobile.
+
 ## Independent Review Passes
 
 SubAgents were not used because the user did not request parallel agent work. Review was performed in-thread.

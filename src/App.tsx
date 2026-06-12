@@ -2582,6 +2582,48 @@ function ConnectionsView({
 
   return (
     <section className="view-grid connections-grid">
+      <div className={`panel wide ai-access-quickstart ${accessReadiness.tone}`}>
+        <div className="readiness-main">
+          <div className="readiness-icon">
+            {accessReadiness.tone === "ready" ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}
+          </div>
+          <div>
+            <p className="eyebrow">AI Access</p>
+            <h3>{accessReadiness.title}</h3>
+            <p>{accessReadiness.body}</p>
+          </div>
+        </div>
+        <div className="service-actions ai-access-primary-actions">
+          <button
+            className="primary-button"
+            disabled={!nativePath || aiServiceBusy}
+            onClick={startAiAccess}
+            type="button"
+          >
+            <PlayCircle size={16} />
+            Start AI Access
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!nativePath || aiServiceBusy}
+            onClick={refreshAiAccess}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+          <button
+            className="danger-button"
+            disabled={!nativePath || aiServiceBusy || (!aiServiceStatus?.relayManagedRunning && !aiServiceStatus?.agentManagedRunning)}
+            onClick={stopAiAccess}
+            type="button"
+          >
+            <PauseCircle size={16} />
+            Stop managed
+          </button>
+        </div>
+      </div>
+
       <div className="panel wide">
         <div className="panel-heading">
           <div>
@@ -3186,9 +3228,18 @@ function ContextRequestsView({
           fact: facts.find((fact) => fact.id === item.referencedId)
         }))
     : [];
+  const packPanelRef = useRef<HTMLDivElement | null>(null);
+  const packActionRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!currentPack || !window.matchMedia("(max-width: 980px)").matches) {
+      return;
+    }
+    packActionRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [currentPack?.id]);
 
   return (
-    <section className="ask-layout">
+    <section className={currentPack ? "ask-layout has-active-pack" : "ask-layout"}>
       <div className="panel">
         <div className="panel-heading">
           <div>
@@ -3231,7 +3282,7 @@ function ContextRequestsView({
         </div>
       </div>
 
-      <div className="panel wide">
+      <div className="panel context-pack-panel" ref={packPanelRef}>
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Context Pack</p>
@@ -3239,6 +3290,48 @@ function ContextRequestsView({
           </div>
           {currentRequest && <Badge>{currentRequest.clientName}</Badge>}
         </div>
+        {currentPack && (
+          <>
+            <div className="pack-summary top-pack-summary">
+              <Badge>{currentPack.riskLevel} risk</Badge>
+              <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
+              <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
+            </div>
+            <div className="action-row pack-action-row" ref={packActionRef}>
+              <button
+                className="primary-button"
+                disabled={requestClosed || aiReady}
+                onClick={() => approvePackForAi(currentPack)}
+                type="button"
+              >
+                <CheckCircle2 size={16} />
+                承認してAI取得可能にする
+              </button>
+              <button
+                className="secondary-button"
+                disabled={requestClosed}
+                onClick={() => copyPackForAi(currentPack)}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Context Pack本文をコピー
+              </button>
+              <button
+                className="secondary-button"
+                disabled={requestClosed}
+                onClick={() => generateAnswer(currentPack)}
+                type="button"
+              >
+                <Check size={16} />
+                ローカル回答を生成
+              </button>
+              <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
+                <X size={16} />
+                拒否
+              </button>
+            </div>
+          </>
+        )}
         {currentRequest && (
           <div className="request-detail">
             <Metric label="目的" value={currentRequest.purpose} />
@@ -3261,11 +3354,6 @@ function ContextRequestsView({
                     : "承認するまで、外部AIにはPack本文を返しません。"}
                 </span>
               </div>
-            </div>
-            <div className="pack-summary">
-              <Badge>{currentPack.riskLevel} risk</Badge>
-              <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
-              <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
             </div>
             <div className="pack-scope-summary">
               <ShieldCheck size={16} />
@@ -3331,39 +3419,6 @@ function ContextRequestsView({
                 ))}
               </div>
             )}
-            <div className="action-row">
-              <button
-                className="primary-button"
-                disabled={requestClosed || aiReady}
-                onClick={() => approvePackForAi(currentPack)}
-                type="button"
-              >
-                <CheckCircle2 size={16} />
-                AIへ返すために承認
-              </button>
-              <button
-                className="secondary-button"
-                disabled={requestClosed}
-                onClick={() => copyPackForAi(currentPack)}
-                type="button"
-              >
-                <Clipboard size={16} />
-                承認済みPackをコピー
-              </button>
-              <button
-                className="secondary-button"
-                disabled={requestClosed}
-                onClick={() => generateAnswer(currentPack)}
-                type="button"
-              >
-                <Check size={16} />
-                ローカル回答を生成
-              </button>
-              <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
-                <X size={16} />
-                拒否
-              </button>
-            </div>
             {currentPack.localAnswer && <pre className="answer-box">{currentPack.localAnswer}</pre>}
           </div>
         )}

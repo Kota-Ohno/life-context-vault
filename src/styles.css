@@ -738,6 +738,27 @@ button:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.ai-access-quickstart {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.ai-access-quickstart.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.ai-access-quickstart.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.ai-access-primary-actions {
+  justify-content: flex-end;
+}
+
 .service-console {
   display: grid;
   gap: 14px;
@@ -1131,6 +1152,16 @@ button:focus-visible {
   align-items: center;
 }
 
+.pack-action-row {
+  padding: 10px 0 2px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #edf1ea;
+}
+
+.top-pack-summary {
+  margin-bottom: 2px;
+}
+
 .candidate-card p {
   margin: 0;
   color: #4c584f;
@@ -1499,6 +1530,7 @@ button:focus-visible {
   .policy-grid,
   .policy-controls,
   .readiness-panel,
+  .ai-access-quickstart,
   .service-status-grid,
   .automation-grid,
   .setup-grid,
@@ -1509,6 +1541,10 @@ button:focus-visible {
 
   .home-grid .background-panel {
     grid-row: auto;
+  }
+
+  .ask-layout.has-active-pack .context-pack-panel {
+    order: -1;
   }
 
   .onboarding-step {
@@ -1654,5 +1690,9 @@ button:focus-visible {
 
   .request-detail {
     grid-template-columns: 1fr;
+  }
+
+  .ai-access-primary-actions {
+    justify-content: flex-start;
   }
 }
