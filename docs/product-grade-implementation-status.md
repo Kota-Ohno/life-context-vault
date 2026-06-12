@@ -98,6 +98,12 @@ Last updated: 2026-06-12
   - request metadata is pruned by both maximum count and default 30-day retention
   - OAuth client registrations remain durable by default but can be expired through `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS`
   - `/relay/state` exposes retention settings without exposing MCP bodies, Raw Sources, Vault content, or Context Pack bodies
+- Added Relay tenant isolation controls:
+  - loopback development defaults to `LCV_RELAY_TENANT_ID=local`
+  - non-loopback binds require explicit `LCV_RELAY_TENANT_ID`
+  - persisted relay state stores the tenant id and refuses to load if configured for a different tenant
+  - legacy tenantless local relay state migrates to the configured tenant on load
+  - `/health` and `/relay/state` expose tenant id as operational metadata without exposing Vault or Context Pack bodies
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
 - Added app-managed AI Access Service in the Tauri Control Center:
   - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
@@ -215,7 +221,7 @@ Last updated: 2026-06-12
 ## Still Remaining For Full Product Grade
 
 - Public HTTPS deployment and durable hosted relay domain.
-- Hosted relay operations for the metadata-only state store: tenant isolation, backup policy, and deployment-specific rotation runbooks beyond the new retention controls.
+- Hosted relay operations for the metadata-only state store: backup policy and deployment-specific rotation/incident runbooks beyond the new retention and tenant controls.
 - OCR/provider-backed extraction for image-only documents and legacy Office conversion beyond the new local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
 - Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
@@ -237,6 +243,7 @@ Last updated: 2026-06-12
 - stdio MCP binary smoke test for shared-core `life_context.request_context_pack` returning a `ContextPack only` payload
 - HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
 - Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
+- Relay tenant tests proving non-loopback binds require tenant id, mismatched tenant state is refused, and legacy tenantless metadata migrates to the configured tenant
 - macOS login item plist unit tests for app-binary-only launch, `RunAtLoad`, `KeepAlive=false`, XML escaping, and no Vault key or Context Pack payload fields
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
 - Background lifecycle unit tests proving window close hides to tray without stopping managed AI Access, while window destruction/quit still stops managed Relay and Agent
@@ -280,6 +287,7 @@ Last updated: 2026-06-12
   - mobile `390x844`: Browser Capture host installer card, invalid-id help, and disabled install button fit without page-level horizontal overflow
   - desktop `1280x720`: Connections background-mode automation card appears with three automation cards and no page-level horizontal overflow
   - mobile `390x844`: Connections background-mode automation cards stack to one column without page-level or card-level horizontal overflow
+  - desktop `1280x720` and mobile `390x844`: Connections Remote Relay command includes `LCV_RELAY_TENANT_ID=local` inside the code block without page-level horizontal overflow
   - desktop `1280x900`: Connections manual Capture can start Passive Capture, create an Inbox candidate, and keep Facts at zero
   - mobile `390x844`: Connections Capture surfaces render without page-level horizontal overflow
   - desktop `1280x920`: editable policy controls and Capture allowed-site controls render and update without page-level horizontal overflow
@@ -442,6 +450,15 @@ Last updated: 2026-06-12
 - Lifecycle: accepted; regular window close prevents window destruction and hides to background, while explicit tray Quit and real window destruction still stop app-managed Relay and Agent.
 - UX: accepted; Connections explains that closing the window keeps AI Access running and that full exit is available through `Quit Life Context Vault`.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
+
+### Relay Tenant Isolation Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, hosted-ops, and compatibility passes.
+- Product fit: accepted; hosted Relay state now has an explicit tenant boundary before any future shared deployment work.
+- Security/privacy: accepted; tenant id is operational metadata only. The change does not persist MCP bodies, Raw Sources, Vault content, Context Pack bodies, access tokens, or authorization codes.
+- Hosted operations: accepted; non-loopback binds require an explicit tenant id, and state files configured for a different tenant are refused instead of silently reused.
+- Compatibility: accepted; old tenantless local state migrates to the configured tenant, preserving existing local development state.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm test`, `npm run build`, `cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-relay`, `npm run tauri:build`, and `git diff --check` passed; Browser checked Connections at 1280px and 390px with no page-level horizontal overflow.
 
 ### First-Run AI Access UX Slice
 

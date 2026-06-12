@@ -29,6 +29,7 @@ const AUTH_CODE_TTL_SECONDS: u64 = 300;
 const PAIRING_TTL_SECONDS: u64 = 600;
 const MAX_RELAY_REQUEST_EVENTS: usize = 500;
 const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const SUPPORTED_SCOPES: &[&str] = &[
   "context_pack.request",
   "memory.propose",
@@ -45,8 +46,11 @@ fn main() {
 
 fn run() -> Result<(), String> {
   let config = Arc::new(RelayConfig::from_env()?);
-  let state =
-    RelayState::load_with_retention(config.relay_state_path.clone(), config.retention)?;
+  let state = RelayState::load_with_retention(
+    config.relay_state_path.clone(),
+    config.retention,
+    config.tenant_id.clone(),
+  )?;
   eprintln!("Life Context Vault relay listening on {}", config.base_url);
   let listener = TcpListener::bind(&config.bind)
     .map_err(|error| format!("failed to bind {}: {error}", config.bind))?;
@@ -75,6 +79,7 @@ struct RelayConfig {
   base_url: String,
   token: String,
   admin_token: Option<String>,
+  tenant_id: String,
   mcp_command: PathBuf,
   vault_db_path: Option<String>,
   relay_state_path: Option<PathBuf>,
@@ -89,12 +94,14 @@ impl RelayConfig {
     if !is_loopback_bind(&bind) && env::var("LCV_RELAY_TOKEN").is_err() {
       return Err("LCV_RELAY_TOKEN is required when binding outside loopback".to_string());
     }
+    let tenant_id = relay_tenant_id_from_env(&bind)?;
     let base_url = env::var("LCV_RELAY_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
     Ok(Self {
       bind,
       base_url,
       token,
       admin_token: env::var("LCV_RELAY_ADMIN_TOKEN").ok(),
+      tenant_id,
       mcp_command: env::var("LCV_MCP_COMMAND")
         .map(PathBuf::from)
         .unwrap_or_else(|_| mcp_stdio::resolve_sibling_binary("lcv-mcp")),
@@ -181,6 +188,38 @@ fn env_optional_duration_seconds(seconds_name: &str, days_name: &str) -> Option<
     })
 }
 
+fn relay_tenant_id_from_env(bind: &str) -> Result<String, String> {
+  resolve_relay_tenant_id(bind, env::var("LCV_RELAY_TENANT_ID").ok().as_deref())
+}
+
+fn resolve_relay_tenant_id(bind: &str, configured: Option<&str>) -> Result<String, String> {
+  let tenant_id = match configured {
+    Some(value) => value.trim(),
+    None if is_loopback_bind(bind) => DEFAULT_LOCAL_TENANT_ID,
+    None => {
+      return Err(
+        "LCV_RELAY_TENANT_ID is required when binding outside loopback".to_string(),
+      )
+    }
+  };
+  if valid_relay_tenant_id(tenant_id) {
+    Ok(tenant_id.to_string())
+  } else {
+    Err(
+      "LCV_RELAY_TENANT_ID must be 1-80 ASCII letters, numbers, dots, underscores, or hyphens"
+        .to_string(),
+    )
+  }
+}
+
+fn valid_relay_tenant_id(value: &str) -> bool {
+  !value.is_empty()
+    && value.len() <= 80
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 #[cfg(target_os = "macos")]
 fn default_relay_state_path() -> Option<PathBuf> {
   env::var("HOME").ok().map(|home| {
@@ -217,6 +256,7 @@ struct RelayState {
   inner: Arc<Mutex<RelayStateInner>>,
   store_path: Option<PathBuf>,
   retention: RelayRetentionPolicy,
+  tenant_id: String,
 }
 
 struct RelayStateInner {
@@ -233,6 +273,8 @@ struct RelayStateInner {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RegisteredClient {
+  #[serde(default)]
+  tenant_id: String,
   client_id: String,
   client_name: String,
   redirect_uris: Vec<String>,
@@ -258,6 +300,8 @@ struct AccessToken {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RelayRequestEvent {
+  #[serde(default)]
+  tenant_id: String,
   id: String,
   client_id: Option<String>,
   required_scope: String,
@@ -271,6 +315,8 @@ struct RelayRequestEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PersistedRelayState {
   version: u32,
+  #[serde(default)]
+  tenant_id: String,
   registered_clients: Vec<RegisteredClient>,
   #[serde(default)]
   request_events: Vec<RelayRequestEvent>,
@@ -323,6 +369,44 @@ fn prune_request_events(
   }
 }
 
+fn normalize_persisted_relay_state_tenant(
+  persisted: &mut PersistedRelayState,
+  tenant_id: &str,
+) -> Result<(), String> {
+  if persisted.tenant_id.is_empty() {
+    persisted.tenant_id = tenant_id.to_string();
+  } else if persisted.tenant_id != tenant_id {
+    return Err(format!(
+      "relay state tenant mismatch: store belongs to '{}' but relay is configured for '{}'",
+      persisted.tenant_id, tenant_id
+    ));
+  }
+
+  for client in &mut persisted.registered_clients {
+    if client.tenant_id.is_empty() {
+      client.tenant_id = tenant_id.to_string();
+    } else if client.tenant_id != tenant_id {
+      return Err(format!(
+        "relay state contains client '{}' for tenant '{}' but relay is configured for '{}'",
+        client.client_id, client.tenant_id, tenant_id
+      ));
+    }
+  }
+
+  for event in &mut persisted.request_events {
+    if event.tenant_id.is_empty() {
+      event.tenant_id = tenant_id.to_string();
+    } else if event.tenant_id != tenant_id {
+      return Err(format!(
+        "relay state contains request event '{}' for tenant '{}' but relay is configured for '{}'",
+        event.id, event.tenant_id, tenant_id
+      ));
+    }
+  }
+
+  Ok(())
+}
+
 impl RelayState {
   #[cfg(test)]
   fn new() -> Self {
@@ -331,37 +415,51 @@ impl RelayState {
 
   #[cfg(test)]
   fn load(store_path: Option<PathBuf>) -> Result<Self, String> {
-    Self::load_with_retention(store_path, RelayRetentionPolicy::default())
+    Self::load_with_retention(
+      store_path,
+      RelayRetentionPolicy::default(),
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
+    )
   }
 
   fn load_with_retention(
     store_path: Option<PathBuf>,
     retention: RelayRetentionPolicy,
+    tenant_id: String,
   ) -> Result<Self, String> {
-    let persisted = match &store_path {
+    let mut persisted = match &store_path {
       Some(path) if path.exists() => {
         let raw = fs::read_to_string(path)
           .map_err(|error| format!("failed to read relay state store: {error}"))?;
         serde_json::from_str::<PersistedRelayState>(&raw)
           .map_err(|error| format!("failed to parse relay state store: {error}"))?
       }
-      _ => PersistedRelayState::empty(),
+      _ => PersistedRelayState::empty_for_tenant(&tenant_id),
     };
+    normalize_persisted_relay_state_tenant(&mut persisted, &tenant_id)?;
     Ok(Self::from_persisted_with_retention(
-      store_path, persisted, retention,
+      store_path, persisted, retention, tenant_id,
     ))
   }
 
   #[cfg(test)]
   fn from_persisted(store_path: Option<PathBuf>, persisted: PersistedRelayState) -> Self {
-    Self::from_persisted_with_retention(store_path, persisted, RelayRetentionPolicy::default())
+    Self::from_persisted_with_retention(
+      store_path,
+      persisted,
+      RelayRetentionPolicy::default(),
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
+    )
   }
 
   fn from_persisted_with_retention(
     store_path: Option<PathBuf>,
     mut persisted: PersistedRelayState,
     retention: RelayRetentionPolicy,
+    tenant_id: String,
   ) -> Self {
+    normalize_persisted_relay_state_tenant(&mut persisted, &tenant_id)
+      .expect("persisted relay state tenant must match");
     prune_persisted_relay_state(&mut persisted, retention, system_time_seconds(SystemTime::now()));
     persisted.request_events.truncate(MAX_RELAY_REQUEST_EVENTS);
     let registered_clients = persisted
@@ -383,6 +481,7 @@ impl RelayState {
       })),
       store_path,
       retention,
+      tenant_id,
     }
   }
 
@@ -392,6 +491,7 @@ impl RelayState {
     redirect_uris: Vec<String>,
   ) -> Result<RegisteredClient, String> {
     let client = RegisteredClient {
+      tenant_id: self.tenant_id.clone(),
       client_id: random_token("client"),
       client_name,
       redirect_uris,
@@ -437,6 +537,10 @@ impl RelayState {
   }
 
   fn record_request_event(&self, event: RelayRequestEvent) -> Result<(), String> {
+    let mut event = event;
+    if event.tenant_id.is_empty() {
+      event.tenant_id = self.tenant_id.clone();
+    }
     {
       let mut inner = self.inner.lock().expect("relay state");
       inner.request_events.insert(0, event);
@@ -469,6 +573,7 @@ impl RelayState {
       .take(20)
       .map(|event| {
         json!({
+          "tenantId": event.tenant_id,
           "id": event.id,
           "clientId": event.client_id,
           "requiredScope": event.required_scope,
@@ -481,6 +586,7 @@ impl RelayState {
       })
       .collect();
     json!({
+      "tenantId": self.tenant_id,
       "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
       "registeredClientCount": inner.registered_clients.len(),
       "requestEventCount": inner.request_events.len(),
@@ -622,6 +728,7 @@ impl RelayState {
       }
       PersistedRelayState {
         version: 1,
+        tenant_id: self.tenant_id.clone(),
         registered_clients: inner.registered_clients.values().cloned().collect(),
         request_events: inner.request_events.clone(),
       }
@@ -665,9 +772,15 @@ impl RelayState {
 }
 
 impl PersistedRelayState {
+  #[cfg(test)]
   fn empty() -> Self {
+    Self::empty_for_tenant(DEFAULT_LOCAL_TENANT_ID)
+  }
+
+  fn empty_for_tenant(tenant_id: &str) -> Self {
     Self {
       version: 1,
+      tenant_id: tenant_id.to_string(),
       registered_clients: Vec::new(),
       request_events: Vec::new(),
     }
@@ -689,6 +802,7 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/health") => json_response(200, json!({
       "status": "ok",
       "server": "life-context-vault-relay",
+      "tenantId": config.tenant_id,
       "mcpEndpoint": "/mcp",
       "oauth": true,
       "agent": state.agent_status()
@@ -1154,6 +1268,7 @@ fn record_relay_event(
   transport: &str,
 ) {
   let event = RelayRequestEvent {
+    tenant_id: String::new(),
     id: random_token("relay_evt"),
     client_id,
     required_scope: required_scope.to_string(),
@@ -1599,6 +1714,7 @@ mod tests {
       base_url: "http://127.0.0.1:8765".to_string(),
       token: "test-token".to_string(),
       admin_token: None,
+      tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       mcp_command: PathBuf::from("lcv-mcp"),
       vault_db_path: None,
       relay_state_path: None,
@@ -1645,6 +1761,20 @@ mod tests {
     assert!(is_loopback_bind("127.0.0.1:8765"));
     assert!(is_loopback_bind("localhost:8765"));
     assert!(!is_loopback_bind("0.0.0.0:8765"));
+  }
+
+  #[test]
+  fn non_loopback_bind_requires_explicit_tenant_id() {
+    assert_eq!(
+      resolve_relay_tenant_id("127.0.0.1:8765", None).expect("local tenant"),
+      DEFAULT_LOCAL_TENANT_ID
+    );
+    assert!(resolve_relay_tenant_id("0.0.0.0:8765", None).is_err());
+    assert_eq!(
+      resolve_relay_tenant_id("0.0.0.0:8765", Some("prod.us_1")).expect("tenant"),
+      "prod.us_1"
+    );
+    assert!(resolve_relay_tenant_id("127.0.0.1:8765", Some("bad tenant")).is_err());
   }
 
   #[test]
@@ -1705,6 +1835,7 @@ mod tests {
       .expect("register client");
     state
       .record_request_event(RelayRequestEvent {
+        tenant_id: String::new(),
         id: "evt_1".to_string(),
         client_id: Some(client.client_id.clone()),
         required_scope: "memory.propose".to_string(),
@@ -1729,9 +1860,101 @@ mod tests {
     );
 
     let raw = fs::read_to_string(&path).expect("state json");
+    assert!(raw.contains("\"tenant_id\": \"local\""));
     assert!(raw.contains("Smoke Client"));
     assert!(raw.contains("life_context.propose_memory"));
     assert!(!raw.contains("Tone preference"));
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn relay_state_refuses_mismatched_tenant_store() {
+    let dir = env::temp_dir().join(format!(
+      "lcv-relay-state-tenant-mismatch-test-{}",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("test dir");
+    let path = dir.join("relay-state.json");
+    fs::write(
+      &path,
+      r#"{"version":1,"tenant_id":"tenant-a","registered_clients":[],"request_events":[]}"#,
+    )
+    .expect("state json");
+
+    let error = match RelayState::load_with_retention(
+      Some(path),
+      RelayRetentionPolicy::default(),
+      "tenant-b".to_string(),
+    ) {
+      Ok(_) => panic!("tenant mismatch should fail"),
+      Err(error) => error,
+    };
+    assert!(error.contains("tenant mismatch"));
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn relay_state_migrates_legacy_tenantless_metadata_to_configured_tenant() {
+    let dir = env::temp_dir().join(format!(
+      "lcv-relay-state-tenant-migration-test-{}",
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("test dir");
+    let path = dir.join("relay-state.json");
+    fs::write(
+      &path,
+      r#"{
+        "version": 1,
+        "registered_clients": [{
+          "client_id": "client_legacy",
+          "client_name": "Legacy Client",
+          "redirect_uris": ["http://127.0.0.1/callback"],
+          "created_at": 10
+        }],
+        "request_events": [{
+          "id": "evt_legacy",
+          "client_id": "client_legacy",
+          "required_scope": "policy.read",
+          "method": "tools/list",
+          "tool_name": null,
+          "status": "fulfilled",
+          "transport": "agent_websocket",
+          "occurred_at": 10
+        }]
+      }"#,
+    )
+    .expect("state json");
+
+    let state = RelayState::load_with_retention(
+      Some(path),
+      RelayRetentionPolicy {
+        request_event_retention_seconds: u64::MAX,
+        client_registration_retention_seconds: None,
+      },
+      "tenant-migrated".to_string(),
+    )
+    .expect("legacy state migrates");
+    assert!(state.client("client_legacy").is_some());
+    let status = state.store_status();
+    assert_eq!(
+      status.get("tenantId").and_then(Value::as_str),
+      Some("tenant-migrated")
+    );
+    assert_eq!(
+      status
+        .get("recentRequestEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("tenantId"))
+        .and_then(Value::as_str),
+      Some("tenant-migrated")
+    );
     let _ = fs::remove_dir_all(dir);
   }
 
@@ -1742,9 +1965,11 @@ mod tests {
       None,
       PersistedRelayState {
         version: 1,
+        tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
         registered_clients: Vec::new(),
         request_events: vec![
           RelayRequestEvent {
+            tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
             id: "evt_old".to_string(),
             client_id: Some("client_old".to_string()),
             required_scope: "context_pack.request".to_string(),
@@ -1755,6 +1980,7 @@ mod tests {
             occurred_at: now.saturating_sub(120),
           },
           RelayRequestEvent {
+            tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
             id: "evt_recent".to_string(),
             client_id: Some("client_recent".to_string()),
             required_scope: "policy.read".to_string(),
@@ -1770,6 +1996,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
       },
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
 
     let status = state.store_status();
@@ -1792,12 +2019,14 @@ mod tests {
   fn relay_state_prunes_clients_only_when_client_ttl_is_set() {
     let now = system_time_seconds(SystemTime::now());
     let old_client = RegisteredClient {
+      tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       client_id: "client_old".to_string(),
       client_name: "Old Client".to_string(),
       redirect_uris: vec!["http://127.0.0.1/old".to_string()],
       created_at: now.saturating_sub(120),
     };
     let recent_client = RegisteredClient {
+      tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       client_id: "client_recent".to_string(),
       client_name: "Recent Client".to_string(),
       redirect_uris: vec!["http://127.0.0.1/recent".to_string()],
@@ -1805,6 +2034,7 @@ mod tests {
     };
     let persisted = PersistedRelayState {
       version: 1,
+      tenant_id: DEFAULT_LOCAL_TENANT_ID.to_string(),
       registered_clients: vec![old_client, recent_client],
       request_events: Vec::new(),
     };
@@ -1816,6 +2046,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: None,
       },
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
     assert!(durable_state.client("client_old").is_some());
 
@@ -1826,6 +2057,7 @@ mod tests {
         request_event_retention_seconds: 60,
         client_registration_retention_seconds: Some(60),
       },
+      DEFAULT_LOCAL_TENANT_ID.to_string(),
     );
     assert!(pruned_state.client("client_old").is_none());
     assert!(pruned_state.client("client_recent").is_some());

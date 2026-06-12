@@ -4171,6 +4171,7 @@ function makeRelayCommand(nativePath: string | null): string {
     `LCV_RELAY_TOKEN=${localRelayToken}`,
     `LCV_RELAY_BIND=127.0.0.1:8765`,
     `LCV_RELAY_BASE_URL=${localRelayBaseUrl}`,
+    `LCV_RELAY_TENANT_ID=local`,
     `LCV_RELAY_STATE_PATH="${makeRelayStatePath(nativePath)}"`,
     `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`,
     `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,

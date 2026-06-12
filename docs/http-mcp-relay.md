@@ -32,7 +32,7 @@ If another relay is already running on the same port, the app treats it as exter
 
 **Stop managed** only stops processes started by the app and does not kill external relay processes.
 
-Closing the app window also stops app-managed Relay and Agent processes.
+Closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent processes running. Use **Stop managed** to stop AI Access, or **Quit Life Context Vault** from the menu bar/system tray to stop managed processes and exit the app.
 
 For day-to-day use, the same **Connections** screen can install a macOS LaunchAgent login item and toggle **起動時にAI Accessを自動開始**. The login item only starts the app binary at user login; Relay and Agent still start from the local app process, and external AI still receives Context Packs only after the normal local approval path.
 
@@ -42,6 +42,7 @@ For day-to-day use, the same **Connections** screen can install a macOS LaunchAg
 LCV_RELAY_TOKEN=dev-local-token \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
+LCV_RELAY_TENANT_ID=local \
 LCV_RELAY_STATE_PATH="$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json" \
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=1 \
 LCV_MCP_COMMAND="/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp" \
@@ -105,6 +106,7 @@ Remote clients should use OAuth discovery instead of the static token.
 
 `lcv-relay` persists only relay control metadata:
 
+- Relay tenant id.
 - OAuth dynamic client registrations.
 - Recent MCP request metadata: request id, client id, required scope, JSON-RPC method, MCP tool name, status, transport, and timestamp.
 
@@ -115,6 +117,13 @@ Request metadata is pruned by both count and time:
 - `LCV_RELAY_REQUEST_EVENT_RETENTION_SECONDS` can override days for smoke tests or tightly controlled deployments.
 - OAuth client registrations remain durable by default.
 - `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS` can expire old OAuth client registrations when a hosted or shared relay needs stricter rotation.
+
+Tenant isolation is explicit:
+
+- Loopback development defaults to `LCV_RELAY_TENANT_ID=local`.
+- Binding outside loopback requires explicit `LCV_RELAY_TENANT_ID`.
+- The relay state file stores the tenant id and refuses to load if it belongs to a different tenant.
+- Legacy tenantless local state is migrated to the configured tenant on load.
 
 It does not persist:
 
@@ -156,6 +165,7 @@ npm run agent:build
 LCV_RELAY_TOKEN=dev-local-token \
 LCV_RELAY_BIND=127.0.0.1:8765 \
 LCV_RELAY_BASE_URL=http://127.0.0.1:8765 \
+LCV_RELAY_TENANT_ID=local \
 LCV_RELAY_STATE_PATH="$(mktemp -t lcv-relay-state.XXXXXX.json)" \
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=1 \
 LCV_MCP_COMMAND="$PWD/src-tauri/target/release/lcv-mcp" \
@@ -196,6 +206,5 @@ Remaining production work:
 
 - HTTPS deployment.
 - Durable hosted relay deployment and domain.
-- Windows/Linux startup helpers and a true headless/menu-bar background mode.
-- Hosted relay storage operations, rotation, and tenant isolation for the same metadata-only state model.
+- Hosted relay storage backup policy, rotation runbooks, and deployment-specific incident procedures for the same metadata-only state model.
 - Hosted short-lived Context Pack handoff state, with default 10-minute TTL and no durable Pack body storage.
