@@ -84,6 +84,23 @@ button:disabled {
   cursor: wait;
 }
 
+.delete-capture {
+  border-color: #9c3b25;
+  background: #fff7f3;
+  color: #8b2f1d;
+}
+
+.delete-capture:hover:not(:disabled) {
+  background: #ffece4;
+}
+
+.delete-capture:disabled {
+  border-color: #d7c8c2;
+  background: #f7f1ee;
+  color: #9b8178;
+  cursor: default;
+}
+
 #status[data-state="ok"] {
   color: #245b35;
 }

@@ -22,6 +22,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "LCV_DELETE_CAPTURED_SOURCE") {
+    deleteCapturedSource(message.sourceId).then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Delete failed"
+      });
+    });
+    return true;
+  }
+
   return false;
 });
 
@@ -65,11 +75,28 @@ async function capturePageFragment(page, reason) {
   return result;
 }
 
+async function deleteCapturedSource(sourceId) {
+  if (!sourceId) {
+    throw new Error("No recent captured Source is available to delete.");
+  }
+  const result = await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
+    type: "delete_capture_source",
+    sourceId
+  });
+  if (!result?.ok) {
+    throw new Error(result?.error ?? result?.message ?? "Delete failed");
+  }
+  return result;
+}
+
 async function recordCaptureMeta(page, result, reason) {
   const meta = {
     ok: Boolean(result?.ok),
     status: result?.status ?? (result?.ok ? "captured" : "failed"),
     candidateCount: result?.candidateCount ?? 0,
+    sourceId: result?.sourceId ?? null,
+    eventId: result?.eventId ?? null,
+    retentionUntil: result?.retentionUntil ?? null,
     sourceClient: page.sourceClient,
     conversationId: page.conversationId,
     url: page.url,

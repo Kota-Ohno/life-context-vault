@@ -2323,6 +2323,32 @@ pub fn update_source_lifecycle_at_path(
   })
 }
 
+pub fn purge_browser_passive_capture_source_at_path(
+  path: &Path,
+  source_id: &str,
+) -> Result<VaultCoreSourceLifecycleResult, String> {
+  let source_id = source_id.trim();
+  if source_id.is_empty() {
+    return Err("sourceId is required.".to_string());
+  }
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let Some(source) = vault
+    .get("sources")
+    .and_then(Value::as_array)
+    .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_id))
+  else {
+    return Err(format!("Source was not found: {source_id}"));
+  };
+  if str_field(source, "kind") != "passive_capture"
+    || str_field(source, "origin") != "passive_browser"
+  {
+    return Err("Capture host can only delete browser passive-capture Sources.".to_string());
+  }
+  drop(connection);
+  update_source_lifecycle_at_path(path, source_id, "purge_body")
+}
+
 pub fn update_source_metadata_at_path(
   path: &Path,
   source_id: &str,
@@ -8366,6 +8392,29 @@ mod tests {
 
     assert!(search.is_empty());
     assert_eq!(normalized_status, "needs_review");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn browser_capture_source_purge_refuses_non_browser_sources() {
+    use_test_vault_key();
+    let path = temp_vault_path("capture-host-source-boundary");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Manual note",
+      "Need to renew lease by 2027-01-15.",
+    )
+    .expect("source ingest");
+
+    let error =
+      match purge_browser_passive_capture_source_at_path(&path, &source_result.source_id) {
+        Ok(_) => panic!("manual source should not be purgeable from capture host"),
+        Err(error) => error,
+      };
+
+    assert!(error.contains("browser passive-capture"));
     remove_temp_vault(&path);
   }
 

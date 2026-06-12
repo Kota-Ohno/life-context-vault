@@ -10,7 +10,7 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
 
 - Capture is explicit from the popup button unless the user turns on the extension's Auto Capture toggle.
 - Auto Capture is off by default, shows a small in-page status badge, debounces page changes, and skips writes when the captured text hash has not changed.
-- Chrome extension storage keeps Auto Capture preference, the last text hash, and recent capture status metadata only; it does not store captured transcript text.
+- Chrome extension storage keeps Auto Capture preference, the last text hash, recent capture status metadata, and the latest captured `sourceId` only; it does not store captured transcript text.
 - The extension only runs on:
   - `chatgpt.com`
   - `chat.openai.com`
@@ -22,6 +22,7 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
 - Captured text becomes an Inbox candidate only.
 - ApprovedFact creation still requires review in the app.
 - Raw captured Source text follows the app's Passive Capture retention policy.
+- The popup can delete the latest captured Source body from the local Vault by `sourceId`. The native host only allows this for browser passive-capture Sources.
 - Secrets are redacted by Vault Core before storage when detected.
 - The host does not implement its own extraction, redaction, persistence, or audit logic.
 
@@ -79,8 +80,9 @@ browser-extension/native-host.dev.json
 4. Open ChatGPT, Claude, or Gemini in Chrome.
 5. Click the Life Context Vault extension.
 6. Click **Capture current chat**, or turn on **Auto capture supported AI pages** for debounced page-change capture.
-7. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
-8. Review the generated candidate in **Memory Inbox**.
+7. If the last capture was wrong, click **Delete recent captured Source** in the popup to purge that captured Source body from the local Vault.
+8. Return to the app. The desktop app polls the native Vault for capture updates; **Sync** remains available as a manual refresh.
+9. Review the generated candidate in **Memory Inbox**.
 
 ## Native Message
 
@@ -106,6 +108,18 @@ The host replies:
 {
   "ok": true,
   "status": "candidate_generated",
+  "sourceId": "src_...",
   "candidateCount": 1
 }
 ```
+
+The popup delete action sends:
+
+```json
+{
+  "type": "delete_capture_source",
+  "sourceId": "src_..."
+}
+```
+
+The host refuses this action unless the Source is a browser `passive_capture` Source.

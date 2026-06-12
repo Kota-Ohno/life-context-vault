@@ -5,6 +5,7 @@ const button = document.querySelector("#capture");
 const status = document.querySelector("#status");
 const autoCapture = document.querySelector("#auto-capture");
 const lastCapture = document.querySelector("#last-capture");
+const deleteSource = document.querySelector("#delete-source");
 
 void initializePopup();
 
@@ -32,6 +33,39 @@ autoCapture.addEventListener("change", async () => {
   await chrome.storage.local.set({ [STORAGE_AUTO_CAPTURE]: enabled });
   await notifyActiveTab(enabled);
   setStatus(enabled ? "Auto capture is on for supported AI pages." : "Auto capture is paused.", enabled ? "ok" : "");
+});
+
+deleteSource.addEventListener("click", async () => {
+  deleteSource.disabled = true;
+  setStatus("Deleting recent captured Source...", "");
+  try {
+    const stored = await chrome.storage.local.get({ [STORAGE_LAST_CAPTURE_META]: null });
+    const meta = stored[STORAGE_LAST_CAPTURE_META];
+    if (!meta?.sourceId || meta.status === "source_purged") {
+      throw new Error("No recent captured Source is available to delete.");
+    }
+    const result = await chrome.runtime.sendMessage({
+      type: "LCV_DELETE_CAPTURED_SOURCE",
+      sourceId: meta.sourceId
+    });
+    if (!result?.ok) {
+      throw new Error(result?.error ?? "Delete failed");
+    }
+    await chrome.storage.local.set({
+      [STORAGE_LAST_CAPTURE_META]: {
+        ...meta,
+        ok: false,
+        status: result.status ?? "source_purged",
+        candidateCount: 0,
+        deletedAt: new Date().toISOString()
+      }
+    });
+    setStatus("Recent captured Source body was deleted from the local Vault.", "ok");
+    await refreshLastCapture();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Delete failed", "error");
+    await refreshLastCapture();
+  }
 });
 
 async function initializePopup() {
@@ -65,11 +99,14 @@ function renderLastCapture(meta) {
   if (!meta) {
     lastCapture.textContent = "No recent capture in this browser.";
     delete lastCapture.dataset.state;
+    deleteSource.disabled = true;
     return;
   }
   const time = meta.capturedAt ? new Date(meta.capturedAt).toLocaleTimeString() : "recently";
-  lastCapture.textContent = `${time}: ${meta.status} / ${meta.candidateCount ?? 0} candidate(s)`;
+  const client = meta.sourceClient ? `${meta.sourceClient} ` : "";
+  lastCapture.textContent = `${time}: ${client}${meta.status} / ${meta.candidateCount ?? 0} candidate(s)`;
   lastCapture.dataset.state = meta.ok ? "ok" : "attention";
+  deleteSource.disabled = !meta.sourceId || meta.status === "source_purged";
 }
 
 function setStatus(text, state) {

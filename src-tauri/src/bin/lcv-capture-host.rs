@@ -1,4 +1,6 @@
-use life_context_vault_lib::add_passive_capture_event_at_path;
+use life_context_vault_lib::{
+  add_passive_capture_event_at_path, purge_browser_passive_capture_source_at_path,
+};
 use serde_json::{json, Value};
 use std::{
   env,
@@ -28,6 +30,7 @@ fn handle_message(message: &Value) -> Result<Value, String> {
   match get_str(message, "type") {
     "ping" => Ok(json!({ "ok": true, "status": "ready" })),
     "capture_fragment" => capture_fragment(message),
+    "delete_capture_source" => delete_capture_source(message),
     other => Err(format!("unsupported message type: {other}")),
   }
 }
@@ -57,6 +60,21 @@ fn capture_fragment(message: &Value) -> Result<Value, String> {
     "candidateCount": result.candidate_ids.len(),
     "retentionUntil": result.retention_until,
     "message": result.message
+  }))
+}
+
+fn delete_capture_source(message: &Value) -> Result<Value, String> {
+  let source_id = required_str(message, "sourceId")?;
+  let result = purge_browser_passive_capture_source_at_path(&vault_db_path()?, source_id)?;
+  Ok(json!({
+    "ok": true,
+    "status": "source_purged",
+    "action": result.action,
+    "sourceId": result.source_id,
+    "affectedCandidateCount": result.affected_candidate_count,
+    "affectedFactCount": result.affected_fact_count,
+    "invalidatedPackCount": result.invalidated_pack_count,
+    "message": "Recent captured Source body was deleted from the local Vault."
   }))
 }
 
@@ -144,6 +162,10 @@ fn get_str<'a>(value: &'a Value, key: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use life_context_vault_lib::update_passive_capture_settings_at_path;
+  use std::sync::Mutex;
+
+  static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
   #[test]
   fn native_message_roundtrip_uses_native_length_prefix() {
@@ -155,6 +177,7 @@ mod tests {
 
   #[test]
   fn disabled_passive_capture_refuses_capture() {
+    let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
     let path = env::temp_dir().join(format!(
       "lcv-capture-disabled-test-{}.sqlite3",
       std::time::SystemTime::now()
@@ -175,6 +198,57 @@ mod tests {
     .expect("capture response");
 
     assert_eq!(result.get("status").and_then(Value::as_str), Some("capture_paused"));
+    env::remove_var("LCV_VAULT_DB_PATH");
+    env::remove_var("LCV_VAULT_DB_KEY");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+  }
+
+  #[test]
+  fn delete_capture_source_purges_recent_browser_capture() {
+    let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
+    let path = env::temp_dir().join(format!(
+      "lcv-capture-delete-test-{}.sqlite3",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("time")
+        .as_nanos()
+    ));
+    env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+    env::set_var("LCV_VAULT_DB_PATH", &path);
+    update_passive_capture_settings_at_path(
+      &path,
+      Some(true),
+      Some(14),
+      Some(vec!["chatgpt.com".to_string()]),
+    )
+    .expect("enable capture");
+
+    let capture = capture_fragment(&json!({
+      "type": "capture_fragment",
+      "sourceClient": "chatgpt",
+      "conversationId": "thread",
+      "url": "https://chatgpt.com/c/thread",
+      "pageTitle": "ChatGPT",
+      "text": "Insurance policy renewal is due on 2027-08-31."
+    }))
+    .expect("capture response");
+    let source_id = capture
+      .get("sourceId")
+      .and_then(Value::as_str)
+      .expect("source id");
+
+    let deleted = delete_capture_source(&json!({
+      "type": "delete_capture_source",
+      "sourceId": source_id
+    }))
+    .expect("delete response");
+
+    assert_eq!(deleted.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(deleted.get("status").and_then(Value::as_str), Some("source_purged"));
+    assert_eq!(deleted.get("sourceId").and_then(Value::as_str), Some(source_id));
+
     env::remove_var("LCV_VAULT_DB_PATH");
     env::remove_var("LCV_VAULT_DB_KEY");
     let _ = std::fs::remove_file(&path);

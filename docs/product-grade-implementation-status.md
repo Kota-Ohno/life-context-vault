@@ -269,7 +269,7 @@ Last updated: 2026-06-13
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including protocol-version negotiation, exact OAuth challenge headers, public Origin allowlists, and `GET /mcp` behavior expected by hosted clients.
-- Browser Capture now supports explicit popup capture and opt-in Auto Capture with persistent in-page status. Remaining product-hardening: extension-side recent captured Source review/delete and true delta queueing instead of debounced changed-text capture.
+- Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, and popup deletion of the latest captured Source body. Remaining product-hardening: extension-side recent captured Source review/open-in-app flow and true delta queueing instead of debounced changed-text capture.
 - OCR setup now detects common local Tesseract providers and offers one-click Settings presets. Remaining product-hardening: bundled OCR runtime or guided installer for non-technical users who do not already have an OCR provider.
 
 ## Verification
@@ -730,6 +730,13 @@ Last updated: 2026-06-13
 - Technical design: Tauri exposes `detect_ocr_provider_candidates`, TypeScript keeps the native boundary typed, and the Settings view applies detected command, basic `{input} stdout` args, and timeout through existing runtime preferences.
 - Verification: Rust provider-detection test covers PATH detection and duplicate suppression without executing the fake provider. `npm run product:check` passed. Browser checks at desktop `1280x900` and mobile `390x844` confirmed the Settings Local OCR card renders without horizontal overflow and keeps the preset buttons within the panel.
 
+### Browser Capture Delete Slice
+
+- Product fit: the extension popup now lets a user immediately delete the latest captured Source body when Auto Capture or manual capture grabbed the wrong conversation, reducing the anxiety cost of trying passive capture.
+- Security/privacy: Chrome storage stores only the latest `sourceId` plus capture metadata, not transcript text. Native host deletion is scoped to browser `passive_capture` Sources and refuses arbitrary/manual Source ids.
+- Technical design: the capture host exposes a `delete_capture_source` Native Messaging action backed by a Vault Core wrapper that validates Source kind/origin before calling the existing `purge_body` lifecycle path. The popup updates recent-capture metadata after deletion.
+- Verification: Rust tests cover both the capture-host delete path and refusal of non-browser Sources. Extension static checks cover the popup/background changes. `npm run product:check` passed; popup visual inspection remains limited by the in-app browser `file://` URL policy noted in the Browser Auto Capture slice.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -739,4 +746,4 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
 - Deferred protocol-hardening findings: exact Streamable HTTP compatibility polish, public Origin allowlists, detailed OAuth challenge headers, and `GET /mcp` semantics remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
-- Deferred general-user polish: browser Capture recent-source review/delete, true delta queueing, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
+- Deferred general-user polish: browser Capture recent-source review/open-in-app flow, true delta queueing, and bundled OCR runtime or guided non-developer OCR installer remain product-hardening work after the core AI access boundary.
