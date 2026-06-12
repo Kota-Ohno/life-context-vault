@@ -33,6 +33,7 @@ const DEFAULT_RELAY_STATE_BACKUP_COUNT: usize = 3;
 const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_MCP_SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
+const DEFAULT_MCP_SSE_RETRY_MS: u64 = 5_000;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -1142,6 +1143,13 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       }
     }
     ("OPTIONS", "/mcp") => cors_preflight_response(request, config),
+    ("GET", "/mcp") => {
+      if cors_origin_for_request(request, config).is_none() {
+        cors_forbidden_response()
+      } else {
+        handle_mcp_sse_get(request, config, state)
+      }
+    }
     ("POST", "/mcp") => {
       if cors_origin_for_request(request, config).is_none() {
         cors_forbidden_response()
@@ -1172,10 +1180,10 @@ fn mcp_method_not_allowed(
   HttpResponse::json(405, json!({
     "error": "method_not_allowed",
     "method": method,
-    "allowedMethods": ["POST", "DELETE", "OPTIONS"],
-    "message": "This Relay supports MCP JSON-RPC over POST /mcp. SSE GET /mcp is not enabled."
+    "allowedMethods": ["GET", "POST", "DELETE", "OPTIONS"],
+    "message": "This Relay supports MCP Streamable HTTP over GET, POST, and DELETE /mcp."
   }))
-  .with_header("Allow", "POST, DELETE, OPTIONS")
+  .with_header("Allow", "GET, POST, DELETE, OPTIONS")
   .with_cors_for_request(request, config)
 }
 
@@ -1823,6 +1831,98 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
   }
 }
 
+fn handle_mcp_sse_get(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+) -> HttpResponse {
+  let protocol_version = match mcp_protocol_version_for_request(request) {
+    Ok(protocol_version) => protocol_version,
+    Err(message) => {
+      record_relay_event(
+        state,
+        None,
+        "sse.listen",
+        "GET",
+        None,
+        "rejected_protocol_version",
+        "http_sse",
+      );
+      return mcp_json_response(request, config, 400, json!({
+        "error": "unsupported_protocol_version",
+        "message": message,
+        "supportedProtocolVersions": SUPPORTED_MCP_PROTOCOL_VERSIONS
+      }));
+    }
+  };
+  if !accepts_mcp_sse_response_type(request) {
+    record_relay_event(
+      state,
+      None,
+      "sse.listen",
+      "GET",
+      None,
+      "rejected_transport",
+      "http_sse",
+    );
+    return mcp_json_response(request, config, 406, json!({
+      "error": "not_acceptable",
+      "message": "MCP Streamable HTTP GET requests must include Accept with text/event-stream."
+    }))
+    .with_mcp_protocol_version(&protocol_version);
+  }
+
+  let Some(client_id) = mcp_authenticated_client(request, config, state) else {
+    record_relay_event(
+      state,
+      None,
+      "sse.listen",
+      "GET",
+      None,
+      "rejected_unauthorized",
+      "http_sse",
+    );
+    return mcp_json_response(request, config, 401, json!({
+      "error": "unauthorized",
+      "message": "Missing or invalid Authorization bearer token."
+    }))
+    .with_mcp_protocol_version(&protocol_version)
+    .with_header(
+      "WWW-Authenticate",
+      &mcp_www_authenticate_challenge(config, "policy.read"),
+    );
+  };
+  if let Some(response) = mcp_session_error_for_request(
+    request,
+    config,
+    state,
+    &protocol_version,
+    &client_id,
+  ) {
+    record_relay_event(
+      state,
+      Some(client_id),
+      "sse.listen",
+      "GET",
+      None,
+      "rejected_session",
+      "http_sse",
+    );
+    return response;
+  }
+
+  record_relay_event(
+    state,
+    Some(client_id.clone()),
+    "sse.listen",
+    "GET",
+    None,
+    "sse_ready",
+    "http_sse",
+  );
+  mcp_sse_ready_response(request, config, &protocol_version, &client_id)
+}
+
 fn handle_mcp_session_delete(
   request: &HttpRequest,
   config: &RelayConfig,
@@ -2021,6 +2121,11 @@ fn accepts_mcp_post_response_types(request: &HttpRequest) -> bool {
       .all(|required| media_range_accepts(&accept_values, required))
 }
 
+fn accepts_mcp_sse_response_type(request: &HttpRequest) -> bool {
+  let accept_values = request.header_values("Accept");
+  !accept_values.is_empty() && media_range_accepts(&accept_values, "text/event-stream")
+}
+
 fn media_range_accepts(header_values: &[&str], required: &str) -> bool {
   header_values.iter().any(|value| {
     value.split(',').any(|part| {
@@ -2049,6 +2154,39 @@ fn media_type_without_parameters(value: &str) -> Option<String> {
   } else {
     Some(media_type)
   }
+}
+
+fn mcp_sse_ready_response(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  protocol_version: &str,
+  client_id: &str,
+) -> HttpResponse {
+  let event_id = random_token("mcp_sse");
+  let last_event_id_received = request
+    .header("Last-Event-ID")
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .is_some();
+  let data = json!({
+    "status": "ready",
+    "transport": "mcp_streamable_http_sse",
+    "clientId": client_id,
+    "resumeSupported": false,
+    "lastEventIdReceived": last_event_id_received,
+    "message": "SSE receive channel is available. Life Context Vault does not replay prior events from Relay memory."
+  });
+  let body = format!(
+    "retry: {DEFAULT_MCP_SSE_RETRY_MS}\n\
+     id: {event_id}\n\
+     event: ready\n\
+     data: {data}\n\n"
+  );
+  HttpResponse::sse(200, body)
+    .with_mcp_protocol_version(protocol_version)
+    .with_header("Connection", "close")
+    .with_header("X-Accel-Buffering", "no")
+    .with_cors_for_request(request, config)
 }
 
 fn required_scope_for_mcp_body(body: &str) -> &'static str {
@@ -2363,6 +2501,18 @@ impl HttpResponse {
     response
   }
 
+  fn sse(status: u16, body: String) -> Self {
+    Self {
+      status,
+      reason: reason_phrase(status),
+      headers: vec![
+        ("Content-Type".to_string(), "text/event-stream".to_string()),
+        ("Cache-Control".to_string(), "no-store".to_string()),
+      ],
+      body: body.into_bytes(),
+    }
+  }
+
   fn redirect(location: &str) -> Self {
     Self::empty(302).with_header("Location", location)
   }
@@ -2389,7 +2539,7 @@ impl HttpResponse {
     self
       .with_header("Access-Control-Allow-Origin", "*")
       .with_header("Access-Control-Allow-Headers", RELAY_CORS_ALLOW_HEADERS)
-      .with_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      .with_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
   }
 
   fn with_cors_for_request(self, request: &HttpRequest, config: &RelayConfig) -> Self {
@@ -2399,7 +2549,7 @@ impl HttpResponse {
     let response = self
       .with_header("Access-Control-Allow-Origin", &origin)
       .with_header("Access-Control-Allow-Headers", RELAY_CORS_ALLOW_HEADERS)
-      .with_header("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS");
+      .with_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     if origin == "*" {
       response
     } else {
@@ -2760,6 +2910,14 @@ mod tests {
     headers
   }
 
+  fn authorized_mcp_sse_headers(token: &str) -> Vec<(String, String)> {
+    vec![
+      ("Accept".to_string(), "text/event-stream".to_string()),
+      ("Authorization".to_string(), format!("Bearer {token}")),
+      ("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()),
+    ]
+  }
+
   fn authorized_mcp_delete_headers(token: &str, session_id: &str) -> Vec<(String, String)> {
     vec![
       ("Authorization".to_string(), format!("Bearer {token}")),
@@ -2782,7 +2940,7 @@ mod tests {
   }
 
   #[test]
-  fn get_mcp_returns_method_not_allowed_boundary() {
+  fn get_mcp_rejects_missing_sse_accept_before_auth() {
     let request = HttpRequest {
       method: "GET".to_string(),
       path: "/mcp".to_string(),
@@ -2792,19 +2950,118 @@ mod tests {
     };
 
     let response = route_request(&request, &test_config(), &RelayState::new());
+
+    assert_eq!(response.status, 406);
+    assert_eq!(response.reason, "Not Acceptable");
+    let body = String::from_utf8(response.body).expect("response body");
+    assert!(body.contains("not_acceptable"));
+    assert!(body.contains("text/event-stream"));
+  }
+
+  #[test]
+  fn get_mcp_requires_auth_after_sse_accept() {
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: vec![
+        ("Accept".to_string(), "text/event-stream".to_string()),
+        ("MCP-Protocol-Version".to_string(), "2025-11-25".to_string()),
+      ],
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &RelayState::new());
+
+    assert_eq!(response.status, 401);
+    assert_eq!(
+      response_header(&response, "MCP-Protocol-Version"),
+      Some("2025-11-25")
+    );
+    let challenge = response_header(&response, "WWW-Authenticate").unwrap_or_default();
+    assert!(challenge.contains("resource_metadata="));
+  }
+
+  #[test]
+  fn get_mcp_returns_sse_ready_event_for_authorized_client() {
+    let state = RelayState::new();
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: authorized_mcp_sse_headers("test-token"),
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &state);
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+      response_header(&response, "Content-Type"),
+      Some("text/event-stream")
+    );
+    assert_eq!(
+      response_header(&response, "MCP-Protocol-Version"),
+      Some("2025-11-25")
+    );
+    let body = String::from_utf8(response.body).expect("sse body");
+    assert!(body.contains("event: ready"));
+    assert!(body.contains("retry: 5000"));
+    assert!(body.contains("\"resumeSupported\":false"));
+    assert!(body.contains("\"lastEventIdReceived\":false"));
+    let status = state.store_status();
+    assert_eq!(
+      status
+        .get("recentRequestEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("status"))
+        .and_then(Value::as_str),
+      Some("sse_ready")
+    );
+  }
+
+  #[test]
+  fn get_mcp_accepts_last_event_id_without_persisting_replay_body() {
+    let state = RelayState::new();
+    let session = state.start_mcp_session("static-dev-token".to_string());
+    let mut headers = authorized_mcp_sse_headers("test-token");
+    headers.push(("MCP-Session-Id".to_string(), session.id.clone()));
+    headers.push(("Last-Event-ID".to_string(), "mcp_sse_previous".to_string()));
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers,
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &state);
+    let body = String::from_utf8(response.body).expect("sse body");
+
+    assert_eq!(response.status, 200);
+    assert!(body.contains("\"lastEventIdReceived\":true"));
+    assert!(!state.store_status().to_string().contains("mcp_sse_previous"));
+  }
+
+  #[test]
+  fn unsupported_mcp_methods_return_allow_boundary() {
+    let request = HttpRequest {
+      method: "PUT".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+
+    let response = route_request(&request, &test_config(), &RelayState::new());
+
     assert_eq!(response.status, 405);
     assert_eq!(response.reason, "Method Not Allowed");
-    assert_eq!(
-      response
-        .headers
-        .iter()
-        .find(|(name, _)| name == "Allow")
-        .map(|(_, value)| value.as_str()),
-      Some("POST, DELETE, OPTIONS")
-    );
+    assert_eq!(response_header(&response, "Allow"), Some("GET, POST, DELETE, OPTIONS"));
     let body = String::from_utf8(response.body).expect("response body");
     assert!(body.contains("method_not_allowed"));
-    assert!(body.contains("POST /mcp"));
+    assert!(body.contains("GET"));
   }
 
   #[test]

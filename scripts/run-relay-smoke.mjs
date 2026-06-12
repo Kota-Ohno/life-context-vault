@@ -149,11 +149,28 @@ async function main() {
     assert(healthBody.status === "ok", "health response must be ok");
     assert(healthBody.tenantId === "smoke", "health must expose configured tenant only");
 
-    const methodBoundary = await request(baseUrl, { path: "/mcp" });
-    assert(methodBoundary.status === 405, "GET /mcp must return method boundary");
+    const getMissingAccept = await request(baseUrl, { path: "/mcp" });
+    assert(getMissingAccept.status === 406, "GET /mcp without SSE Accept must return 406");
+    assert(getMissingAccept.body.includes("not_acceptable"), "GET missing Accept body must explain not_acceptable");
+
+    const getUnauth = await request(baseUrl, {
+      path: "/mcp",
+      headers: {
+        Accept: "text/event-stream",
+        "MCP-Protocol-Version": "2025-11-25"
+      }
+    });
+    assert(getUnauth.status === 401, "GET /mcp SSE without auth must return OAuth challenge");
     assert(
-      headerValue(methodBoundary.headers, "allow") === "POST, DELETE, OPTIONS",
-      "GET /mcp Allow header must include POST, DELETE, OPTIONS"
+      headerValue(getUnauth.headers, "www-authenticate").includes("resource_metadata="),
+      "unauthenticated SSE GET must include OAuth resource metadata challenge"
+    );
+
+    const methodBoundary = await request(baseUrl, { method: "PUT", path: "/mcp" });
+    assert(methodBoundary.status === 405, "unsupported /mcp method must return method boundary");
+    assert(
+      headerValue(methodBoundary.headers, "allow") === "GET, POST, DELETE, OPTIONS",
+      "unsupported /mcp method Allow header must include GET, POST, DELETE, OPTIONS"
     );
 
     const preflight = await request(baseUrl, {
@@ -222,6 +239,25 @@ async function main() {
     const sessionId = headerValue(initialize.headers, "mcp-session-id");
     assert(sessionId.startsWith("mcp_session_"), "initialize must return MCP-Session-Id");
 
+    const sseWithSession = await request(baseUrl, {
+      path: "/mcp",
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${token}`,
+        "MCP-Protocol-Version": "2025-11-25",
+        "MCP-Session-Id": sessionId,
+        "Last-Event-ID": "mcp_sse_previous"
+      }
+    });
+    assert(sseWithSession.status === 200, `GET /mcp SSE with session must succeed: ${sseWithSession.body}`);
+    assert(
+      headerValue(sseWithSession.headers, "content-type").includes("text/event-stream"),
+      "SSE GET must return text/event-stream"
+    );
+    assert(sseWithSession.body.includes("event: ready"), "SSE GET must emit a ready event");
+    assert(sseWithSession.body.includes("\"resumeSupported\":false"), "SSE GET must explicitly mark replay unsupported");
+    assert(sseWithSession.body.includes("\"lastEventIdReceived\":true"), "SSE GET must acknowledge Last-Event-ID presence");
+
     const missingSession = await request(baseUrl, {
       method: "POST",
       path: "/mcp",
@@ -269,6 +305,7 @@ async function main() {
     assert(typeof stateBody.mcpSessionCount === "number", "relay state must expose session count metadata");
     assert(!state.body.includes("life_context.request_context_pack"), "relay state must not store MCP response bodies");
     assert(!state.body.includes("protocolVersion"), "relay state must not store initialize response bodies");
+    assert(!state.body.includes("mcp_sse_previous"), "relay state must not store Last-Event-ID values");
 
     const persistedState = await readFile(statePath, "utf8");
     assert(persistedState.includes("\"tenant_id\": \"smoke\""), "persisted state must include tenant metadata");

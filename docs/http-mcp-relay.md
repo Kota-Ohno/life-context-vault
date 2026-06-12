@@ -1,6 +1,6 @@
 # HTTP MCP Relay
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 Life Context Vault includes two Remote MCP bridge binaries:
 
@@ -117,10 +117,11 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 - `GET /relay/state`
 - `POST /relay/handoff`
 - `GET /agent/ws?...` for the local Agent WebSocket
+- `GET /mcp`
 - `POST /mcp`
 - `DELETE /mcp`
 - `OPTIONS /mcp`
-- `GET /mcp` returns `405 Method Not Allowed` with `Allow: POST, DELETE, OPTIONS`; SSE GET transport is not enabled in the current Relay.
+- Unsupported `/mcp` methods return `405 Method Not Allowed` with `Allow: GET, POST, DELETE, OPTIONS`.
 
 `POST /mcp` accepts one MCP JSON-RPC message. If a local Agent is paired, the relay forwards the message over WebSocket. If no Agent is online and `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`, the relay returns a pending/offline response instead of reading the Vault directly. Local development can set `LCV_RELAY_ALLOW_DIRECT_SIDECAR=1` to preserve direct sidecar fallback.
 
@@ -128,11 +129,11 @@ When `LCV_RELAY_BIND` is outside loopback, the relay refuses to start without `L
 
 `POST /mcp` validates `MCP-Protocol-Version` when the header is present. Missing versions are treated as the 2025-03-26 default for older local clients. Supported versions are 2025-03-26, 2025-06-18, and 2025-11-25; unsupported versions receive `400 unsupported_protocol_version` before authorization or forwarding.
 
-When an MCP `initialize` request is fulfilled, the relay returns a memory-only `MCP-Session-Id` bound to the authenticated client id. Later requests that include that session id must match the same client; unknown, expired, or cross-client session ids receive `404 mcp_session_not_found`. If the same client has an active session and omits `MCP-Session-Id` on a non-initialize POST, the relay returns `400 missing_mcp_session`. `DELETE /mcp` with the same bearer token and session id terminates the session and returns `204`. Session ids expire after 24 hours, are never written to the relay state store, and `/relay/state` exposes only session metadata.
+When an MCP `initialize` request is fulfilled, the relay returns a memory-only `MCP-Session-Id` bound to the authenticated client id. Later requests that include that session id must match the same client; unknown, expired, or cross-client session ids receive `404 mcp_session_not_found`. If the same client has an active session and omits `MCP-Session-Id` on a non-initialize POST or GET, the relay returns `400 missing_mcp_session`. `DELETE /mcp` with the same bearer token and session id terminates the session and returns `204`. Session ids expire after 24 hours, are never written to the relay state store, and `/relay/state` exposes only session metadata.
 
-Full Streamable HTTP SSE/resumability semantics remain a hosted-connector hardening item; `GET /mcp` intentionally returns `405` until that path is implemented.
+`GET /mcp` opens a Streamable HTTP SSE receive channel for clients that probe or maintain a server-to-client channel. It requires `Accept: text/event-stream` and a valid bearer token. The current Relay emits a short `ready` event with `retry: 5000`, acknowledges whether `Last-Event-ID` was present, and then closes the connection. Relay-side event replay is not enabled, so `resumeSupported` is `false` and `Last-Event-ID` values are not persisted. Context Pack bodies, MCP response bodies, Raw Sources, and replay payloads are never written to relay state.
 
-`OPTIONS /mcp`, `POST /mcp`, `DELETE /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
+`OPTIONS /mcp`, `GET /mcp`, `POST /mcp`, `DELETE /mcp`, `OPTIONS /relay/handoff`, and `POST /relay/handoff` use `LCV_RELAY_ALLOWED_ORIGINS` when a browser `Origin` header is present. A disallowed Origin receives `403 origin_not_allowed` before authorization or request-body payload processing. Browser preflight responses allow `Authorization`, `Content-Type`, `Accept`, `MCP-Protocol-Version`, `MCP-Session-Id`, and `Last-Event-ID`.
 
 `GET /relay/state` returns operational metadata for the local Control Center and smoke tests. It requires non-browser loopback access or `LCV_RELAY_ADMIN_TOKEN`.
 
@@ -227,7 +228,7 @@ npm run mcp:build
 npm run relay:smoke
 ```
 
-`npm run relay:smoke` starts `lcv-relay` on a random loopback port with a temporary encrypted Vault and metadata store. It verifies `/health`, `/mcp` method boundaries, CORS preflight headers, OAuth challenge behavior, `406`/`415` header failures, `initialize` session issuance, `MCP-Session-Id` reuse, `DELETE /mcp` termination, and metadata-only relay state persistence. `npm run product:check` runs this smoke after building release sidecars.
+`npm run relay:smoke` starts `lcv-relay` on a random loopback port with a temporary encrypted Vault and metadata store. It verifies `/health`, `/mcp` method boundaries, CORS preflight headers, OAuth challenge behavior, `GET /mcp` SSE readiness, `Last-Event-ID` non-persistence, `406`/`415` header failures, `initialize` session issuance, `MCP-Session-Id` reuse, `DELETE /mcp` termination, and metadata-only relay state persistence. `npm run product:check` runs this smoke after building release sidecars.
 
 Manual smoke:
 

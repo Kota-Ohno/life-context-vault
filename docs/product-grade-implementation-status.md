@@ -268,6 +268,10 @@ Last updated: 2026-06-13
   - `npm run relay:smoke` starts release `lcv-relay` and `lcv-mcp` on a random loopback port with a temporary encrypted Vault
   - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, and metadata-only relay persistence
   - `npm run product:check` now runs the smoke after release sidecar binaries are built
+- Added Streamable HTTP SSE receive-channel support:
+  - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
+  - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`
+  - relay state and persisted metadata remain body-free and exclude SSE cursor values
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -276,7 +280,7 @@ Last updated: 2026-06-13
 - Legacy Office conversion beyond the Settings/env local OCR command provider, detected OCR provider presets, and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Streamable HTTP / Remote MCP compatibility hardening beyond the current functional Relay path, including SSE/resumability transport semantics and hosted-client certification beyond the explicit POST-only `GET /mcp` 405 boundary.
+- Remote MCP hosted-client certification, long-running SSE soak, and provider-specific connector registration against a real public HTTPS Relay.
 - Browser Capture now supports explicit popup capture, opt-in Auto Capture with persistent in-page status, page-session delta capture, reload-safe hash/length delta checkpoints, popup deletion of the latest captured Source body, and popup-to-Control Center opening after capture.
 - OCR setup now detects common local Tesseract providers, offers one-click Settings presets, and includes OS-specific guided install commands for users who do not already have an OCR provider. Remaining product-hardening: bundled OCR runtime for users who do not want to install Tesseract separately.
 
@@ -775,10 +779,10 @@ Last updated: 2026-06-13
 
 ### Remote MCP Method Boundary Slice
 
-- Product fit: hosted-client smoke tests against `/mcp` now get an explicit method boundary instead of a generic 404 when they probe with GET.
+- Product fit: hosted-client smoke tests against unsupported `/mcp` methods now get an explicit method boundary instead of a generic 404.
 - Security/privacy: unsupported MCP transports still do not expose Vault, Raw Source, or Context Pack bodies; the Relay returns metadata-only method guidance.
-- Technical design: `GET /mcp` and other unsupported `/mcp` methods return `405 Method Not Allowed`, `Allow: POST, OPTIONS`, JSON guidance, and CORS headers. `POST /mcp` remains the only JSON-RPC path.
-- Verification: Relay unit coverage fixes the `GET /mcp` status, reason, `Allow` header, and response body. `npm run product:check` passed.
+- Technical design: unsupported `/mcp` methods return `405 Method Not Allowed`, `Allow: GET, POST, DELETE, OPTIONS`, JSON guidance, and CORS headers. `POST /mcp` remains the only JSON-RPC request path; `GET /mcp` is now the SSE receive-channel path.
+- Verification: Relay unit coverage fixes the unsupported method status, reason, `Allow` header, and response body. `npm run product:check` passed for the original boundary slice.
 
 ### Relay Origin Allowlist Slice
 
@@ -817,6 +821,14 @@ Last updated: 2026-06-13
 - Technical design: `scripts/run-relay-smoke.mjs` starts release `lcv-relay` on a random loopback port with static bearer enabled only for the local smoke, sends real HTTP requests with `Connection: close`, and cleans up the process plus temp directory.
 - Verification: `npm run relay:smoke` passed locally and is now included in `npm run product:check`.
 - Review fallback: SubAgents were not used for this verification-hardening slice; the main thread ran separate product, security/privacy, operations, and maintainability passes.
+
+### Remote MCP SSE Receive Slice
+
+- Product fit: hosted MCP clients can now open `GET /mcp` as an SSE receive channel instead of hitting a POST-only method boundary, which reduces connector compatibility risk while keeping `POST /mcp` as the only JSON-RPC request path.
+- Security/privacy: SSE GET requires `Accept: text/event-stream` plus a valid bearer token, session ids remain client-bound, `Last-Event-ID` values are not persisted, and the ready event carries no Context Pack, Raw Source, tool result, or request body content.
+- Technical design: the Relay emits a short `ready` SSE event with `retry: 5000`, `resumeSupported: false`, and `lastEventIdReceived` so clients get a clear non-replayable receive-channel contract. Unsupported `/mcp` methods now advertise `Allow: GET, POST, DELETE, OPTIONS`.
+- Verification: Relay unit coverage was added for missing SSE Accept, unauthorized SSE GET, authorized ready events, Last-Event-ID non-persistence, and unsupported method boundaries. The release HTTP smoke now checks real-binary SSE behavior.
+- Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran separate protocol compatibility, security/privacy, operations, and maintainability passes.
 
 ### Remote MCP Connection Diagnostics UX Slice
 
