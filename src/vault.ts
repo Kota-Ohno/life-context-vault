@@ -15,6 +15,7 @@ import {
   PassiveCaptureSettings,
   RawSource,
   SensitivityTier,
+  SourceLifecycleAction,
   SourceKind,
   VaultState
 } from "./types";
@@ -372,6 +373,9 @@ export function approveCandidate(
   const candidate = state.candidates.find((item) => item.id === candidateId);
   if (!candidate) return state;
   if (candidate.detectedSensitivity === "secret_never_send") return state;
+  if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
+    return state;
+  }
 
   const text = (editedText ?? candidate.proposedFactText).trim();
   if (!text) return state;
@@ -441,6 +445,124 @@ export function updateCandidateStatus(
       ...state.auditEvents
     ]
   };
+}
+
+export function updateSourceLifecycle(
+  state: VaultState,
+  sourceId: string,
+  action: SourceLifecycleAction
+): VaultState {
+  const source = state.sources.find((item) => item.id === sourceId);
+  if (!source) return state;
+  if (action === "restore" && source.deletionState === "purged") return state;
+
+  const now = nowIso();
+  const isDeleting = action === "soft_delete" || action === "purge_body";
+  const affectedFactIds = new Set(
+    state.facts
+      .filter((fact) => fact.sourceIds.includes(sourceId))
+      .map((fact) => fact.id)
+  );
+  const nextSources = state.sources.map((item) => {
+    if (item.id !== sourceId) return item;
+    if (action === "restore") {
+      return { ...item, deletionState: "active" as const, processingStatus: "ready" as const };
+    }
+    if (action === "purge_body") {
+      return {
+        ...item,
+        body: "",
+        deletionState: "purged" as const,
+        processingStatus: "deleted" as const,
+        promotedToLongTerm: false
+      };
+    }
+    return { ...item, deletionState: "soft_deleted" as const, processingStatus: "deleted" as const };
+  });
+  const nextCandidates = isDeleting
+    ? state.candidates.map((candidate) =>
+        candidate.sourceIds.includes(sourceId) &&
+        ["new", "needs_user_detail", "blocked_sensitive"].includes(candidate.status)
+          ? { ...candidate, status: "archived" as const, reviewedAt: now }
+          : candidate
+      )
+    : state.candidates;
+  const nextFacts = state.facts.map((fact) => {
+    if (!fact.sourceIds.includes(sourceId)) return fact;
+    if (isDeleting && fact.status === "active") {
+      return {
+        ...fact,
+        status: "needs_review" as const,
+        updatedAt: now,
+        reviewReason: "source_deleted" as const,
+        reviewSourceId: sourceId
+      };
+    }
+    if (
+      action === "restore" &&
+      fact.status === "needs_review" &&
+      fact.reviewReason === "source_deleted" &&
+      fact.reviewSourceId === sourceId
+    ) {
+      const { reviewReason: _reviewReason, reviewSourceId: _reviewSourceId, ...restored } = fact;
+      return { ...restored, status: "active" as const, updatedAt: now };
+    }
+    return fact;
+  });
+  const nextPacks = isDeleting ? invalidatePacksForFacts(state.contextPacks, affectedFactIds) : state.contextPacks;
+  const invalidatedRequestIds = new Set(
+    nextPacks
+      .filter((pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus)
+      .map((pack) => pack.requestId)
+      .filter((requestId): requestId is string => Boolean(requestId))
+  );
+  const nextRequests = isDeleting
+    ? state.contextPackRequests.map((request) =>
+        invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+      )
+    : state.contextPackRequests;
+  const eventType =
+    action === "restore" ? "source_restored" : action === "purge_body" ? "source_purged" : "source_deleted";
+
+  return {
+    ...state,
+    sources: nextSources,
+    candidates: nextCandidates,
+    facts: nextFacts,
+    contextPacks: nextPacks,
+    contextPackRequests: nextRequests,
+    auditEvents: [
+      audit(eventType, "source", sourceId, source.defaultSensitivity, {
+        title: source.title,
+        affectedFactCount: affectedFactIds.size,
+        invalidatedPackCount: invalidatedRequestIds.size
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+function invalidatePacksForFacts(
+  packs: VaultState["contextPacks"],
+  affectedFactIds: Set<string>
+): VaultState["contextPacks"] {
+  if (affectedFactIds.size === 0) return packs;
+  return packs.map((pack) => {
+    const hasAffectedItem = pack.items.some((item) => affectedFactIds.has(item.factId));
+    if (!hasAffectedItem || pack.confirmationStatus === "cancelled") return pack;
+    return {
+      ...pack,
+      confirmationStatus: "cancelled",
+      warnings: [
+        {
+          kind: "source_deleted",
+          message: "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。",
+          relatedIds: Array.from(affectedFactIds)
+        },
+        ...pack.warnings
+      ]
+    };
+  });
 }
 
 export function searchFacts(

@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+  collections::HashSet,
   env,
   fs,
   io::{Read, Write},
@@ -186,6 +187,19 @@ struct NativeVaultSettingsUpdateResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSourceLifecycleResult {
+  payload: String,
+  updated_at: Option<String>,
+  source_id: String,
+  action: String,
+  affected_candidate_count: usize,
+  affected_fact_count: usize,
+  invalidated_pack_count: usize,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -239,6 +253,16 @@ pub struct VaultCorePassiveCaptureResult {
 pub struct VaultCoreSettingsUpdateResult {
   pub payload: String,
   pub updated_at: Option<String>,
+}
+
+pub struct VaultCoreSourceLifecycleResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub source_id: String,
+  pub action: String,
+  pub affected_candidate_count: usize,
+  pub affected_fact_count: usize,
+  pub invalidated_pack_count: usize,
 }
 
 pub struct VaultCoreRequestStatusResult {
@@ -1733,6 +1757,105 @@ pub fn update_access_policy_at_path(
   Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
 }
 
+pub fn update_source_lifecycle_at_path(
+  path: &Path,
+  source_id: &str,
+  action: &str,
+) -> Result<VaultCoreSourceLifecycleResult, String> {
+  let source_id = source_id.trim();
+  if source_id.is_empty() {
+    return Err("sourceId is required.".to_string());
+  }
+  let action = source_lifecycle_action(action)?;
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let (source_title, source_sensitivity) = {
+    let Some(sources) = vault.get_mut("sources").and_then(Value::as_array_mut) else {
+      return Err("Vault has no sources array.".to_string());
+    };
+    let Some(source) = sources
+      .iter_mut()
+      .find(|source| str_field(source, "id") == source_id)
+    else {
+      return Err(format!("Source was not found: {source_id}"));
+    };
+    let source_title = str_field(source, "title");
+    let source_sensitivity = str_field(source, "defaultSensitivity");
+
+    match action {
+      "restore" => {
+        if str_field(source, "deletionState") == "purged" {
+          return Err("purged Sources cannot be restored because the Raw body was removed.".to_string());
+        }
+        source["deletionState"] = Value::String("active".to_string());
+        source["processingStatus"] = Value::String("ready".to_string());
+      }
+      "purge_body" => {
+        source["body"] = Value::String(String::new());
+        source["deletionState"] = Value::String("purged".to_string());
+        source["processingStatus"] = Value::String("deleted".to_string());
+        source["promotedToLongTerm"] = Value::Bool(false);
+      }
+      "soft_delete" => {
+        source["deletionState"] = Value::String("soft_deleted".to_string());
+        source["processingStatus"] = Value::String("deleted".to_string());
+      }
+      _ => unreachable!("source_lifecycle_action validated the action"),
+    }
+    (source_title, source_sensitivity)
+  };
+
+  let affected_candidate_count = if action == "restore" {
+    0
+  } else {
+    archive_pending_candidates_for_source(&mut vault, source_id, &now)
+  };
+  let affected_fact_ids = if action == "restore" {
+    restore_source_deleted_facts(&mut vault, source_id, &now)
+  } else {
+    mark_source_facts_needing_review(&mut vault, source_id, &now)
+  };
+  let invalidated_pack_count = if action == "restore" {
+    0
+  } else {
+    invalidate_context_packs_for_facts(&mut vault, &affected_fact_ids)
+  };
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      match action {
+        "restore" => "source_restored",
+        "purge_body" => "source_purged",
+        _ => "source_deleted",
+      },
+      "source",
+      source_id,
+      &source_sensitivity,
+      json!({
+        "title": source_title,
+        "action": action,
+        "affectedCandidateCount": affected_candidate_count,
+        "affectedFactCount": affected_fact_ids.len(),
+        "invalidatedPackCount": invalidated_pack_count,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceLifecycleResult {
+    payload,
+    updated_at,
+    source_id: source_id.to_string(),
+    action: action.to_string(),
+    affected_candidate_count,
+    affected_fact_count: affected_fact_ids.len(),
+    invalidated_pack_count,
+  })
+}
+
 pub fn approve_candidate_at_path(
   path: &Path,
   candidate_id: &str,
@@ -1769,6 +1892,9 @@ pub fn approve_candidate_at_path(
     .get("sourceIds")
     .cloned()
     .unwrap_or_else(|| json!([]));
+  if source_ids_have_deleted_source_in_vault(&vault, &source_ids) {
+    return Err("candidates from deleted or purged Sources cannot be approved as Facts.".to_string());
+  }
   let source_backed = source_ids
     .as_array()
     .map(|ids| !ids.is_empty())
@@ -2983,6 +3109,164 @@ fn candidate_review_status(status: &str) -> Result<&'static str, String> {
   }
 }
 
+fn source_lifecycle_action(action: &str) -> Result<&'static str, String> {
+  match action {
+    "soft_delete" => Ok("soft_delete"),
+    "restore" => Ok("restore"),
+    "purge_body" => Ok("purge_body"),
+    _ => Err(format!("unsupported source lifecycle action: {action}")),
+  }
+}
+
+fn json_array_contains_string(value: &Value, needle: &str) -> bool {
+  value
+    .as_array()
+    .map(|items| items.iter().any(|item| item.as_str() == Some(needle)))
+    .unwrap_or(false)
+}
+
+fn source_ids_have_deleted_source_in_vault(vault: &Value, source_ids: &Value) -> bool {
+  source_ids
+    .as_array()
+    .map(|ids| {
+      ids.iter().filter_map(Value::as_str).any(|source_id| {
+        vault
+          .get("sources")
+          .and_then(Value::as_array)
+          .and_then(|sources| {
+            sources
+              .iter()
+              .find(|source| str_field(source, "id") == source_id)
+          })
+          .map(|source| str_field(source, "deletionState") != "active")
+          .unwrap_or(true)
+      })
+    })
+    .unwrap_or(false)
+}
+
+fn archive_pending_candidates_for_source(vault: &mut Value, source_id: &str, now: &str) -> usize {
+  let Some(candidates) = vault.get_mut("candidates").and_then(Value::as_array_mut) else {
+    return 0;
+  };
+  let mut affected = 0;
+  for candidate in candidates {
+    let status = str_field(candidate, "status");
+    if json_array_contains_string(candidate.get("sourceIds").unwrap_or(&Value::Null), source_id)
+      && matches!(status.as_str(), "new" | "needs_user_detail" | "blocked_sensitive")
+    {
+      candidate["status"] = Value::String("archived".to_string());
+      candidate["reviewedAt"] = Value::String(now.to_string());
+      affected += 1;
+    }
+  }
+  affected
+}
+
+fn mark_source_facts_needing_review(vault: &mut Value, source_id: &str, now: &str) -> Vec<String> {
+  let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
+    return Vec::new();
+  };
+  let mut affected = Vec::new();
+  for fact in facts {
+    if str_field(fact, "status") == "active"
+      && json_array_contains_string(fact.get("sourceIds").unwrap_or(&Value::Null), source_id)
+    {
+      let fact_id = str_field(fact, "id");
+      fact["status"] = Value::String("needs_review".to_string());
+      fact["updatedAt"] = Value::String(now.to_string());
+      fact["reviewReason"] = Value::String("source_deleted".to_string());
+      fact["reviewSourceId"] = Value::String(source_id.to_string());
+      affected.push(fact_id);
+    }
+  }
+  affected
+}
+
+fn restore_source_deleted_facts(vault: &mut Value, source_id: &str, now: &str) -> Vec<String> {
+  let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
+    return Vec::new();
+  };
+  let mut affected = Vec::new();
+  for fact in facts {
+    if str_field(fact, "status") == "needs_review"
+      && str_field(fact, "reviewReason") == "source_deleted"
+      && str_field(fact, "reviewSourceId") == source_id
+    {
+      let fact_id = str_field(fact, "id");
+      fact["status"] = Value::String("active".to_string());
+      fact["updatedAt"] = Value::String(now.to_string());
+      if let Some(object) = fact.as_object_mut() {
+        object.remove("reviewReason");
+        object.remove("reviewSourceId");
+      }
+      affected.push(fact_id);
+    }
+  }
+  affected
+}
+
+fn invalidate_context_packs_for_facts(vault: &mut Value, fact_ids: &[String]) -> usize {
+  if fact_ids.is_empty() {
+    return 0;
+  }
+  let fact_set = fact_ids.iter().cloned().collect::<HashSet<_>>();
+  let mut invalidated_request_ids = HashSet::new();
+  let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) else {
+    return 0;
+  };
+  let mut affected = 0;
+  for pack in packs {
+    let has_affected_item = pack
+      .get("items")
+      .and_then(Value::as_array)
+      .map(|items| {
+        items.iter().any(|item| {
+          item
+            .get("factId")
+            .and_then(Value::as_str)
+            .map(|fact_id| fact_set.contains(fact_id))
+            .unwrap_or(false)
+        })
+      })
+      .unwrap_or(false);
+    if has_affected_item && str_field(pack, "confirmationStatus") != "cancelled" {
+      pack["confirmationStatus"] = Value::String("cancelled".to_string());
+      let mut warnings = pack
+        .get("warnings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+      warnings.insert(
+        0,
+        json!({
+          "kind": "source_deleted",
+          "message": "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。",
+          "relatedIds": fact_ids
+        }),
+      );
+      pack["warnings"] = Value::Array(warnings);
+      if let Some(request_id) = pack.get("requestId").and_then(Value::as_str) {
+        invalidated_request_ids.insert(request_id.to_string());
+      }
+      affected += 1;
+    }
+  }
+
+  if let Some(requests) = vault
+    .get_mut("contextPackRequests")
+    .and_then(Value::as_array_mut)
+  {
+    for request in requests {
+      if invalidated_request_ids.contains(&str_field(request, "id")) {
+        request["status"] = Value::String("expired".to_string());
+      }
+    }
+  }
+
+  affected
+}
+
 fn copy_optional_candidate_field(candidate: &Value, fact: &mut Value, key: &str) {
   if let Some(value) = candidate.get(key).cloned() {
     if !value.as_str().map(str::is_empty).unwrap_or(false) {
@@ -4064,6 +4348,26 @@ fn update_native_access_policy(
 }
 
 #[tauri::command]
+fn update_native_source_lifecycle(
+  app: AppHandle,
+  source_id: String,
+  action: String,
+) -> Result<NativeSourceLifecycleResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_source_lifecycle_at_path(&path, &source_id, &action)?;
+  Ok(NativeSourceLifecycleResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    action: result.action,
+    affected_candidate_count: result.affected_candidate_count,
+    affected_fact_count: result.affected_fact_count,
+    invalidated_pack_count: result.invalidated_pack_count,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -4185,6 +4489,7 @@ pub fn run() {
       add_native_passive_capture_event,
       update_native_passive_capture_settings,
       update_native_access_policy,
+      update_native_source_lifecycle,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -4644,6 +4949,132 @@ mod tests {
         .map(Vec::is_empty)
         .unwrap_or(false)
     );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_soft_delete_marks_facts_review_and_invalidates_packs() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-soft-delete");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Lease note",
+      "Need to renew lease by 2027-01-15.\nContact landlord at landlord@example.com.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about my lease renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+
+    let result = update_source_lifecycle_at_path(&path, &source_result.source_id, "soft_delete")
+      .expect("soft delete source");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .expect("source");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .expect("fact");
+    let pack = saved
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let request = saved
+      .get("contextPackRequests")
+      .and_then(Value::as_array)
+      .and_then(|requests| requests.first())
+      .expect("request");
+
+    assert_eq!(source.get("deletionState").and_then(Value::as_str), Some("soft_deleted"));
+    assert_eq!(source.get("processingStatus").and_then(Value::as_str), Some("deleted"));
+    assert_eq!(fact.get("status").and_then(Value::as_str), Some("needs_review"));
+    assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_deleted"));
+    assert_eq!(result.affected_fact_count, 1);
+    assert_eq!(result.invalidated_pack_count, 1);
+    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+    assert_eq!(request.get("status").and_then(Value::as_str), Some("expired"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    let normalized_status: String = connection
+      .query_row("SELECT status FROM facts LIMIT 1", [], |row| row.get(0))
+      .expect("normalized fact status");
+
+    assert!(search.is_empty());
+    assert_eq!(normalized_status, "needs_review");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_source_purge_removes_body_and_blocks_candidate_approval() {
+    use_test_vault_key();
+    let path = temp_vault_path("source-purge");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Moving note",
+      "Need to update address before moving.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+
+    let result = update_source_lifecycle_at_path(&path, &source_result.source_id, "purge_body")
+      .expect("purge source");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let source = saved
+      .get("sources")
+      .and_then(Value::as_array)
+      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .expect("source");
+    let candidate = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|candidates| candidates.iter().find(|candidate| str_field(candidate, "id") == candidate_id))
+      .expect("candidate");
+    let approval_error = match approve_candidate_at_path(&path, &candidate_id, None) {
+      Ok(_) => panic!("purged source candidate should not approve"),
+      Err(error) => error,
+    };
+
+    assert_eq!(source.get("body").and_then(Value::as_str), Some(""));
+    assert_eq!(source.get("deletionState").and_then(Value::as_str), Some("purged"));
+    assert_eq!(candidate.get("status").and_then(Value::as_str), Some("archived"));
+    assert!(approval_error.contains("deleted or purged Sources"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_body: String = connection
+      .query_row(
+        "SELECT body FROM sources WHERE id = ?1",
+        params![source_result.source_id],
+        |row| row.get(0),
+      )
+      .expect("normalized source body");
+    assert!(normalized_body.is_empty());
     remove_temp_vault(&path);
   }
 

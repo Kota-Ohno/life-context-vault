@@ -152,6 +152,8 @@ Initial command behavior:
 - Redact secret indicators and adjacent secret values before persistence.
 - Sync normalized `sources`, `source_chunks`, and `memory_candidates` tables before the command returns.
 
+Source lifecycle is also a typed Vault Core command in the desktop path. Soft delete keeps recoverable metadata, archives unapproved candidates from that Source, and marks linked active Facts as `needs_review`. Raw body purge removes the Source body and uses the same candidate/Fact safeguards. Both actions cancel existing Context Packs that included affected Facts so external AI clients cannot retrieve stale Packs after the user removes the evidence.
+
 ### Passive Capture
 
 Passive Capture handles opt-in capture from everyday AI conversations and local AI connection logs.

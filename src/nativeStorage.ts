@@ -3,6 +3,7 @@ import {
   CandidateStatus,
   LifeContextDomain,
   SensitivityTier,
+  SourceLifecycleAction,
   SourceKind,
   SourceOrigin,
   VaultState
@@ -173,6 +174,17 @@ interface NativeVaultSettingsUpdatePayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeSourceLifecyclePayload {
+  payload: string;
+  updatedAt: string | null;
+  sourceId: string;
+  action: SourceLifecycleAction;
+  affectedCandidateCount: number;
+  affectedFactCount: number;
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -216,6 +228,17 @@ export interface NativePassiveCaptureResult {
 export interface NativeVaultSettingsUpdateResult {
   state: VaultState;
   updatedAt: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeSourceLifecycleResult {
+  state: VaultState;
+  updatedAt: string | null;
+  sourceId: string;
+  action: SourceLifecycleAction;
+  affectedCandidateCount: number;
+  affectedFactCount: number;
+  invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
 
@@ -459,6 +482,28 @@ export async function updateNativeAccessPolicy(input: {
   return {
     state: normalizeVaultState(JSON.parse(result.payload)),
     updatedAt: result.updatedAt,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeSourceLifecycle(input: {
+  sourceId: string;
+  action: SourceLifecycleAction;
+}): Promise<NativeSourceLifecycleResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceLifecyclePayload>("update_native_source_lifecycle", {
+    sourceId: input.sourceId,
+    action: input.action
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
+    action: result.action,
+    affectedCandidateCount: result.affectedCandidateCount,
+    affectedFactCount: result.affectedFactCount,
+    invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };
 }

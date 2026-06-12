@@ -37,6 +37,11 @@ export type SourceOrigin =
   | "local_mcp"
   | "remote_relay";
 
+export type SourceLifecycleAction =
+  | "soft_delete"
+  | "restore"
+  | "purge_body";
+
 export type ConnectorKind =
   | "claude_desktop"
   | "chatgpt"
@@ -94,7 +99,7 @@ export type RawSource = {
   retentionUntil?: string;
   promotedToLongTerm?: boolean;
   defaultSensitivity: SensitivityTier;
-  processingStatus: "ready" | "failed";
+  processingStatus: "ready" | "failed" | "deleted";
   deletionState: "active" | "soft_deleted" | "purged";
 };
 
@@ -179,6 +184,8 @@ export type ApprovedFact = {
   createdAt: string;
   approvedAt: string;
   updatedAt: string;
+  reviewReason?: "source_deleted";
+  reviewSourceId?: string;
 };
 
 export type ContextPackItem = {
@@ -343,9 +350,13 @@ export type AuditEvent = {
   id: string;
   eventType:
     | "source_added"
+    | "source_deleted"
+    | "source_restored"
+    | "source_purged"
     | "candidate_generated"
     | "candidate_reviewed"
     | "fact_created"
+    | "fact_updated"
     | "context_pack_requested"
     | "context_pack_generated"
     | "context_pack_confirmed"

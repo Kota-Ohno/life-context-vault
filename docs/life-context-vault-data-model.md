@@ -656,6 +656,7 @@ PoC deletion semantics:
 - Exclude deleted items from retrieval immediately.
 - Provide purge later for permanent deletion.
 - Deleting a RawSource does not automatically delete approved facts, but linked facts become `needs_review` unless user chooses to keep them.
+- Deleting or purging a RawSource must invalidate existing ContextPacks that include facts linked to that Source.
 - Deleting an ApprovedFact does not delete the source.
 
 Tier 4 values detected during extraction should be redacted before ordinary persistence where possible.

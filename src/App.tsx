@@ -52,6 +52,7 @@ import {
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
   updateNativePassiveCaptureSettings,
+  updateNativeSourceLifecycle,
   uninstallLoginItem
 } from "./nativeStorage";
 import {
@@ -85,7 +86,8 @@ import {
   sensitivityLabel,
   updateAccessPolicy,
   updatePassiveCaptureSettings,
-  updateCandidateStatus
+  updateCandidateStatus,
+  updateSourceLifecycle
 } from "./vault";
 import {
   ApprovedFact,
@@ -100,6 +102,7 @@ import {
   MemoryCandidate,
   PassiveCaptureSettings,
   SensitivityTier,
+  SourceLifecycleAction,
   SourceKind,
   SourceOrigin,
   VaultState
@@ -620,6 +623,33 @@ export function App() {
     }
   }
 
+  async function changeSourceLifecycle(sourceId: string, action: SourceLifecycleAction) {
+    const source = state.sources.find((item) => item.id === sourceId);
+    if (!source) {
+      setNotice("Sourceが見つかりませんでした。");
+      return;
+    }
+    if (nativePath) {
+      try {
+        const updated = await updateNativeSourceLifecycle({ sourceId, action });
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(sourceLifecycleNotice(updated.action, updated.affectedFactCount, updated.invalidatedPackCount));
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを更新できませんでした。");
+        return;
+      }
+    }
+    apply(
+      updateSourceLifecycle(state, sourceId, action),
+      sourceLifecycleNotice(action, linkedFactCount(state, sourceId), 0)
+    );
+  }
+
   async function approve(candidate: MemoryCandidate) {
     const edited = candidateEdits[candidate.id];
     if (nativePath) {
@@ -644,6 +674,10 @@ export function App() {
         setNotice(error instanceof Error ? error.message : "Vault Coreで候補を承認できませんでした。");
         return;
       }
+    }
+    if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
+      setNotice("削除または消去されたSource由来の候補はFact化できません。Sourceを復元するか、新しいSourceとして追加してください。");
+      return;
     }
     const next = approveCandidate(state, candidate.id, edited);
     apply(next, "承認済みFactとして保存しました。");
@@ -1172,12 +1206,15 @@ export function App() {
         {view === "sources" && (
           <SourcesView
             sources={state.sources}
+            candidates={state.candidates}
+            facts={state.facts}
             manualTitle={manualTitle}
             manualBody={manualBody}
             setManualTitle={setManualTitle}
             setManualBody={setManualBody}
             addManualSource={addManualSource}
             handleFileUpload={handleFileUpload}
+            changeSourceLifecycle={changeSourceLifecycle}
           />
         )}
         {view === "connections" && (
@@ -1626,20 +1663,26 @@ function InboxView({
 
 function SourcesView({
   sources,
+  candidates,
+  facts,
   manualTitle,
   manualBody,
   setManualTitle,
   setManualBody,
   addManualSource,
-  handleFileUpload
+  handleFileUpload,
+  changeSourceLifecycle
 }: {
   sources: VaultState["sources"];
+  candidates: VaultState["candidates"];
+  facts: VaultState["facts"];
   manualTitle: string;
   manualBody: string;
   setManualTitle: (value: string) => void;
   setManualBody: (value: string) => void;
   addManualSource: () => void;
   handleFileUpload: (file: File) => void;
+  changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
 }) {
   return (
     <section className="view-grid">
@@ -1693,16 +1736,62 @@ function SourcesView({
             <h3>追加済みSource</h3>
           </div>
         </div>
+        <div className="trust-note">
+          <Archive size={16} />
+          <span>Sourceを停止または本文消去すると、未承認候補はLaterへ移り、関連Factは再確認待ちになります。再確認待ちFactはContext Packから外れます。</span>
+        </div>
         <div className="table-list">
-          {sources.map((source) => (
-            <div className="table-row" key={source.id}>
-              <div>
-                <strong>{source.title}</strong>
-                <span>{source.kind} / {new Date(source.createdAt).toLocaleString()}</span>
+          {sources.map((source) => {
+            const linkedCandidateCount = candidates.filter((candidate) => candidate.sourceIds.includes(source.id)).length;
+            const linkedFactCountValue = facts.filter((fact) => fact.sourceIds.includes(source.id)).length;
+            return (
+              <div className="table-row source-row" key={source.id}>
+                <div className="source-main">
+                  <strong>{source.title}</strong>
+                  <span>{source.kind} / {new Date(source.createdAt).toLocaleString()}</span>
+                  <div className="source-meta">
+                    <Badge>{sourceLifecycleLabel(source.deletionState)}</Badge>
+                    <Badge>{source.body ? "本文あり" : "本文なし"}</Badge>
+                    <Badge>候補 {linkedCandidateCount}</Badge>
+                    <Badge>Fact {linkedFactCountValue}</Badge>
+                  </div>
+                </div>
+                <div className="source-actions">
+                  <SensitivityBadge sensitivity={source.defaultSensitivity} />
+                  {source.deletionState === "active" && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
+                      type="button"
+                    >
+                      <Archive size={16} />
+                      使用停止
+                    </button>
+                  )}
+                  {source.deletionState === "soft_deleted" && (
+                    <button
+                      className="secondary-button"
+                      onClick={() => changeSourceLifecycle(source.id, "restore")}
+                      type="button"
+                    >
+                      <RefreshCw size={16} />
+                      復元
+                    </button>
+                  )}
+                  {source.deletionState !== "purged" && (
+                    <button
+                      className="danger-button"
+                      onClick={() => changeSourceLifecycle(source.id, "purge_body")}
+                      type="button"
+                    >
+                      <X size={16} />
+                      本文消去
+                    </button>
+                  )}
+                </div>
               </div>
-              <SensitivityBadge sensitivity={source.defaultSensitivity} />
-            </div>
-          ))}
+            );
+          })}
           {sources.length === 0 && <p className="muted">まだSourceがありません。</p>}
         </div>
       </div>
@@ -2810,6 +2899,33 @@ function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reas
     secret_never_send: "送信禁止"
   };
   return labels[reason];
+}
+
+function sourceLifecycleLabel(state: VaultState["sources"][number]["deletionState"]): string {
+  const labels: Record<VaultState["sources"][number]["deletionState"], string> = {
+    active: "使用中",
+    soft_deleted: "停止中",
+    purged: "本文消去済み"
+  };
+  return labels[state];
+}
+
+function sourceLifecycleNotice(
+  action: SourceLifecycleAction,
+  affectedFactCount: number,
+  invalidatedPackCount: number
+): string {
+  if (action === "restore") {
+    return `Sourceを復元しました。${affectedFactCount}件のFactを再びContext Pack候補に戻しました。`;
+  }
+  if (action === "purge_body") {
+    return `Source本文を消去しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+  }
+  return `Sourceを使用停止しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
+function linkedFactCount(state: VaultState, sourceId: string): number {
+  return state.facts.filter((fact) => fact.sourceIds.includes(sourceId)).length;
 }
 
 function searchModeCopy(

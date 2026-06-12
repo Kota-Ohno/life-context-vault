@@ -516,6 +516,29 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.source-row {
+  align-items: stretch;
+}
+
+.source-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.source-meta,
+.source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.source-actions {
+  justify-content: flex-end;
+  min-width: min(100%, 360px);
+}
+
 .connection-card {
   display: grid;
   gap: 14px;
@@ -1243,6 +1266,11 @@ button:focus-visible {
   .action-row {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .source-actions {
+    justify-content: flex-start;
+    min-width: 0;
   }
 
   .request-detail {

@@ -150,6 +150,11 @@ Last updated: 2026-06-12
   - `update_native_access_policy` saves per-client sensitivity ceilings and confirmation thresholds through Vault Core
   - Connections now lets users edit AI-bound sensitivity policy instead of only reading policy values
   - Capture allowed sites can be edited from the Passive Capture card and are normalized to host names before persistence
+- Added Rust-owned Source lifecycle path for the Tauri Control Center:
+  - `update_native_source_lifecycle` supports soft delete, restore, and Raw body purge through Vault Core
+  - Source deletion archives unapproved candidates from that Source and marks linked active Facts as `needs_review`
+  - Source deletion or body purge cancels existing Context Packs that included affected Facts so external AI cannot retrieve stale Packs again
+  - Sources now shows Source state, body retention state, linked candidate/Fact counts, and lifecycle actions in the Control Center
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -158,7 +163,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for broader source lifecycle operations beyond the current native Context Pack/source/candidate review/passive capture/policy settings/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for broader Source metadata editing and Fact lifecycle operations beyond the current native Context Pack/source ingest/source lifecycle/candidate review/passive capture/policy settings/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -187,6 +192,7 @@ Last updated: 2026-06-12
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
+- Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
@@ -209,6 +215,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Connections Capture surfaces render without page-level horizontal overflow
   - desktop `1280x920`: editable policy controls and Capture allowed-site controls render and update without page-level horizontal overflow
   - mobile `390x844`: editable policy controls stack to one column without page-level horizontal overflow
+  - desktop `1280x920`: Sources lifecycle controls show active/stopped state, linked counts, restore/body-purge actions, and no page-level horizontal overflow
+  - mobile `390x844`: Sources lifecycle row stacks badges and actions without page-level horizontal overflow
   - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
@@ -230,7 +238,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while some source lifecycle operations still use the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while Source metadata editing and some Fact lifecycle operations still use the JSON snapshot projected into tables.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -245,6 +253,11 @@ Last updated: 2026-06-12
 - Policy Settings security review: accepted; Capture site input is normalized to host names, empty allowlists are rejected by Vault Core, and every policy/settings update writes an audit event.
 - Policy Settings technical review: accepted; Tauri policy/settings writes now use shared Vault Core commands and sync normalized `access_policies` plus audit projection.
 - Policy Settings UX review: accepted; controls preserve the existing card density, avoid `secret_never_send` as a selectable AI-bound ceiling, and stack cleanly on mobile.
+- Source Lifecycle review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Source Lifecycle product review: accepted; users can now stop, restore, or purge Source body text while seeing whether the Source has linked candidates and Facts.
+- Source Lifecycle security review: accepted; deleted or purged Sources immediately remove linked active Facts from search/Context Pack retrieval and block later approval of stale candidates.
+- Source Lifecycle technical review: accepted; lifecycle writes go through Vault Core, sync normalized Source/Fact/Candidate/Context Pack projections, and invalidate AI-bound Packs that included affected Facts.
+- Source Lifecycle UX review: accepted; desktop and mobile Sources lifecycle rows render without page-level horizontal overflow, and stop/restore/body-purge actions remain visible without crowding the upload/manual Source panels.
 
 ### Relay State Store Slice
 
