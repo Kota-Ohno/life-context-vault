@@ -1835,6 +1835,9 @@ export function App() {
             markSensitive={(candidate) =>
               void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
             }
+            goHome={() => setView("home")}
+            goSources={() => setView("sources")}
+            goConnections={() => setView("connections")}
           />
         )}
         {view === "sources" && (
@@ -2330,7 +2333,7 @@ function SetupForm({
   );
 }
 
-function InboxView({
+export function InboxView({
   candidates,
   facts,
   edits,
@@ -2340,7 +2343,10 @@ function InboxView({
   approve,
   reject,
   archive,
-  markSensitive
+  markSensitive,
+  goHome,
+  goSources,
+  goConnections
 }: {
   candidates: MemoryCandidate[];
   facts: ApprovedFact[];
@@ -2352,12 +2358,37 @@ function InboxView({
   reject: (candidate: MemoryCandidate) => void;
   archive: (candidate: MemoryCandidate) => void;
   markSensitive: (candidate: MemoryCandidate) => void;
+  goHome: () => void;
+  goSources: () => void;
+  goConnections: () => void;
 }) {
   if (candidates.length === 0) {
     return (
       <EmptyState
         title="Inboxは空です"
-        body="背景セットアップ、会話メモ、文書アップロードから候補が生成されます。"
+        body="まずは生活背景、文書・メモ、AI会話Captureのどれかから候補を作れます。"
+        action={
+          <div className="inbox-empty-actions" aria-label="Memory Inbox start actions" role="group">
+            <div className="inbox-empty-action-grid">
+              <button className="primary-button" onClick={goHome} type="button">
+                <Sparkles size={16} />
+                背景情報を追加
+              </button>
+              <button className="secondary-button" onClick={goSources} type="button">
+                <FileText size={16} />
+                文書・メモを追加
+              </button>
+              <button className="secondary-button" onClick={goConnections} type="button">
+                <Plug size={16} />
+                AI会話Captureを設定
+              </button>
+            </div>
+            <div className="trust-note compact-note inbox-empty-note">
+              <ShieldCheck size={16} />
+              <span>候補は承認するとFactになり、Context Pack確認後だけAIに渡ります。</span>
+            </div>
+          </div>
+        }
       />
     );
   }

@@ -940,6 +940,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged "Unknown source" in Home as a trust regression. Security/privacy review checked that only titles, not Source bodies, are displayed. Maintainability review added unit coverage for source-title formatting so the regression is harder to reintroduce.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Chrome/CDP checked Home at desktop `1280x900` and mobile `390x844`: demo Background Snapshot shows Guided background setup and Sample insurance renewal note, no Unknown source or Source未検出 appears, and there is no page-level horizontal overflow.
 
+### Memory Inbox Empty Start Slice
+
+- Product fit: first-time users who open an empty Memory Inbox now get direct entry points for background setup, document/manual Sources, and AI chat Capture setup instead of a dead-end explanatory state.
+- UX/design: the empty state keeps the existing quiet Control Center style, uses three familiar icon buttons, and adds one compact trust note that separates "saved as a Fact" from "sent to AI."
+- Security/privacy: the new actions do not create Facts or enable Capture by themselves. They only navigate to existing user-controlled flows, and the empty-state copy reinforces that candidates require approval before Context Pack use.
+- Review fallback: Product fit review flagged empty Inbox as a likely first-run stall. Security/privacy review confirmed no automatic saving or sending was added. UI/UX review checks desktop and mobile button layout, focusable controls, and no horizontal overflow. Maintainability review keeps the change scoped to `InboxView` presentation and one static rendering test.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked the empty Inbox at desktop `1280x900` and mobile `390x844`: all three entry buttons render, the trust boundary copy is visible, each button navigates to the intended Control Center view, keyboard Tab reaches the three actions, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

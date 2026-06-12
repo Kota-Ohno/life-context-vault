@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   aiMcpEndpointDisplay,
   canCopyAiMcpEndpoint,
   factSourceNames,
+  InboxView,
   isHostedRelayConfirmed,
   webAiMcpEndpoint
 } from "./App";
@@ -43,5 +46,33 @@ describe("AI access UI safety", () => {
     ).toBe("Guided background setup, Sample insurance renewal note, +1");
     expect(factSourceNames({ sourceIds: [] }, [])).toBe("出典なし");
     expect(factSourceNames({ sourceIds: ["missing"] }, [])).toBe("Source未検出");
+  });
+
+  it("gives first-time users clear entry points from an empty Memory Inbox", () => {
+    const noop = () => undefined;
+    const html = renderToStaticMarkup(
+      createElement(InboxView, {
+        candidates: [],
+        facts: [],
+        edits: {},
+        supersedes: {},
+        setEdit: noop,
+        toggleSupersede: noop,
+        approve: noop,
+        reject: noop,
+        archive: noop,
+        markSensitive: noop,
+        goHome: noop,
+        goSources: noop,
+        goConnections: noop
+      })
+    );
+
+    expect(html).toContain("Inboxは空です");
+    expect(html).toContain("背景情報を追加");
+    expect(html).toContain("文書・メモを追加");
+    expect(html).toContain("AI会話Captureを設定");
+    expect(html).toContain("候補は承認するとFactになり");
+    expect(html).toContain("Context Pack確認後だけAIに渡ります");
   });
 });
