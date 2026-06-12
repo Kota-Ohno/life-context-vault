@@ -113,11 +113,14 @@ Last updated: 2026-06-13
   - `life_context.get_request_status` can return a cached handoff response when the local Agent path is temporarily offline
   - `/relay/state` exposes only handoff metadata and retention settings, never Pack body text
   - relay state persistence and metadata backups still exclude Context Pack bodies
-- Added Connections UI setup guidance for OAuth relay, pairing, local Agent, and connector URLs.
+- Added Connections UI setup guidance for OAuth relay, pairing, local Agent, connector URLs, and Remote MCP diagnostics.
 - Added app-managed AI Access Service in the Tauri Control Center:
   - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
   - app requests a pairing code and connects Agent automatically
   - status shows Relay reachability, Agent connection, managed process state, and MCP URL
+  - the top AI Access panel exposes a copyable MCP URL for connector setup
+  - the Remote Relay setup section exposes copyable health and Streamable HTTP `/mcp` smoke-test commands
+  - diagnostics distinguish reachable Relay, expected OAuth `401`, and header-contract `406/415` failures
   - external relays are status-only; the app does not automatically attach the local Agent to a relay it did not start
   - `Stop managed` only stops processes started by the app
   - closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent running
@@ -793,6 +796,14 @@ Last updated: 2026-06-13
 - Technical design: `POST /mcp` requires `Content-Type: application/json` and `Accept: application/json, text/event-stream`, returning `415 unsupported_media_type` or `406 not_acceptable` before authorization. The current Relay remains stateless for MCP HTTP and does not return `MCP-Session-Id`; full SSE/session support stays deferred.
 - Verification: Relay unit tests cover missing `Accept`, non-JSON `Content-Type`, preserved OAuth challenges for well-formed unauthenticated requests, and cached handoff behavior under the new header contract. `npm run product:check` passed.
 - Review fallback: SubAgents were not used for this incremental protocol-hardening slice; the main thread ran separate compatibility, security/privacy, product, and maintainability passes.
+
+### Remote MCP Connection Diagnostics UX Slice
+
+- Product fit: the first Connections panel now lets a user copy the MCP URL immediately, while the Remote Relay setup section includes health and `/mcp` smoke-test commands that match the Relay's Streamable HTTP header contract.
+- Security/privacy: diagnostic commands do not include Vault data, Context Pack bodies, OAuth tokens, or Raw Sources. The `/mcp` smoke test is intentionally unauthenticated and should produce an OAuth challenge when the Relay is reachable.
+- UX/design: the top panel keeps only one extra copy action so the first Connections card stays compact; detailed health and MCP check commands live in the existing Remote Relay setup grid.
+- Verification: `npm test -- --run`, `npm run build`, and `git diff --check` passed. Browser checks at desktop `1280x920` and mobile `390x844` confirmed no page-level horizontal overflow, no overflowing buttons, a compact top AI Access panel, and the lower Remote Relay diagnostic card present.
+- Review fallback: SubAgents were not used for this UI polish slice; the main thread ran separate product, security/privacy, visual QA, and maintainability passes.
 
 ## SubAgent Completion Review Disposition
 

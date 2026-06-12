@@ -2771,6 +2771,14 @@ function ConnectionsView({
             Refresh
           </button>
           <button
+            className="secondary-button"
+            onClick={() => copyText(aiServiceStatus?.mcpServerUrl ?? localRelayUrl, "MCP URLをコピーしました。")}
+            type="button"
+          >
+            <Clipboard size={16} />
+            Copy URL
+          </button>
+          <button
             className="danger-button"
             disabled={!nativePath || aiServiceBusy || (!aiServiceStatus?.relayManagedRunning && !aiServiceStatus?.agentManagedRunning)}
             onClick={stopAiAccess}
@@ -3204,6 +3212,35 @@ function ConnectionsView({
             <Badge>OAuth</Badge>
             <strong>ChatGPT / Claude connectorへ渡すURL</strong>
             <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(), null, 2)}</pre>
+          </div>
+          <div className="setup-step">
+            <Badge>Check</Badge>
+            <strong>接続前のHTTP診断</strong>
+            <div className="scope-row">
+              <Badge>health: 200</Badge>
+              <Badge>mcp: 401 OAuth</Badge>
+              <Badge>headers: 406/415</Badge>
+            </div>
+            <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
+            <div className="service-actions">
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeRelayHealthCheckCommand(), "Relay health checkをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy health
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => copyText(makeRemoteMcpHeaderCheckCommand(), "Remote MCP診断コマンドをコピーしました。")}
+                type="button"
+              >
+                <Clipboard size={16} />
+                Copy MCP check
+              </button>
+            </div>
+            <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
           </div>
           <div className="setup-step">
             <Badge>Boundary</Badge>
@@ -4908,6 +4945,21 @@ function makeRelayCommand(nativePath: string | null): string {
 
 function makePairingCommand(): string {
   return `curl -s -X POST ${localRelayBaseUrl}/pairing/start`;
+}
+
+function makeRelayHealthCheckCommand(): string {
+  return `curl -fsS ${localRelayBaseUrl}/health`;
+}
+
+function makeRemoteMcpHeaderCheckCommand(): string {
+  return [
+    "curl -i -X POST",
+    "  -H 'Content-Type: application/json'",
+    "  -H 'Accept: application/json, text/event-stream'",
+    "  -H 'MCP-Protocol-Version: 2025-11-25'",
+    "  --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'",
+    `  ${localRelayUrl}`
+  ].join(" \\\n");
 }
 
 function makeRelayStatePath(nativePath: string | null): string {
