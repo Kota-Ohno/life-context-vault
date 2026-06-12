@@ -1684,7 +1684,12 @@ function NavButton({
   badge?: number;
 }) {
   return (
-    <button className={active ? "nav-item active" : "nav-item"} onClick={onClick} type="button">
+    <button
+      aria-label={label}
+      className={active ? "nav-item active" : "nav-item"}
+      onClick={onClick}
+      type="button"
+    >
       {icon}
       <span>{label}</span>
       {badge ? <strong>{badge}</strong> : null}
@@ -1758,6 +1763,10 @@ function HomeView({
   const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
   const requestTried = requests.length > 0;
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const pendingRequestCount = requests.filter((request) => request.status === "pending_user_confirmation").length;
+  const focusSetup = () => {
+    document.getElementById("home-guided-setup")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const onboardingSteps: OnboardingStep[] = [
     {
       title: "生活背景を入れる",
@@ -1797,6 +1806,51 @@ function HomeView({
       action: goRequests
     }
   ];
+  const nextAction = (() => {
+    if (candidates.length > 0) {
+      return {
+        title: `${candidates.length}件の候補を確認`,
+        body: "保存する生活文脈だけをFactにします。承認前の候補はAIには渡りません。",
+        label: "Inboxで確認",
+        action: goInbox,
+        icon: <Inbox size={18} />
+      };
+    }
+    if (!backgroundStarted) {
+      return {
+        title: "生活背景を追加",
+        body: "呼び名、制約、いま動いている生活領域からMemory Inbox候補を作ります。",
+        label: "入力欄へ",
+        action: focusSetup,
+        icon: <Sparkles size={18} />
+      };
+    }
+    if (pendingRequestCount > 0) {
+      return {
+        title: `${pendingRequestCount}件のContext Packを確認`,
+        body: "外部AIに渡る最小文脈を見て、不要なFactを外してから承認できます。",
+        label: "Requestsで確認",
+        action: goRequests,
+        icon: <MessageSquare size={18} />
+      };
+    }
+    if (!aiAccessReady) {
+      return {
+        title: nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
+        body: accessReadiness.body,
+        label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
+        action: nativePath ? startAiAccess : goConnections,
+        icon: <Plug size={18} />
+      };
+    }
+    return {
+      title: "Context Packを試す",
+      body: "普段使うAIに渡る文脈を、Requestsで事前確認できます。",
+      label: "Requestsを開く",
+      action: goRequests,
+      icon: <MessageSquare size={18} />
+    };
+  })();
 
   return (
     <section className="view-grid home-grid">
@@ -1808,27 +1862,84 @@ function HomeView({
           </div>
           <Badge>{accessReadiness.badge}</Badge>
         </div>
-        <div className="onboarding-checklist">
-          {onboardingSteps.map((step, index) => (
+        <div className="home-start-grid">
+          <div className="next-action-card">
+            <div className="next-action-icon">{nextAction.icon}</div>
+            <div>
+              <p className="eyebrow">Next action</p>
+              <h4>{nextAction.title}</h4>
+              <p>{nextAction.body}</p>
+            </div>
             <button
-              className={`onboarding-step ${step.status}`}
-              disabled={step.disabled}
-              key={step.title}
-              onClick={step.action}
+              className="primary-button"
+              disabled={aiServiceBusy && nextAction.action === startAiAccess}
+              onClick={nextAction.action}
               type="button"
             >
-              <span className="step-index">
-                {step.status === "done" ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}
-                {index + 1}
-              </span>
-              <strong>{step.title}</strong>
-              <small>{step.body}</small>
-              <span className="step-action">
-                {step.actionLabel}
-                <ArrowRight size={14} />
-              </span>
+              {nextAction.icon}
+              {nextAction.label}
             </button>
+          </div>
+          <div className="onboarding-checklist">
+            {onboardingSteps.map((step, index) => (
+              <button
+                className={`onboarding-step ${step.status}`}
+                disabled={step.disabled}
+                key={step.title}
+                onClick={step.action}
+                type="button"
+              >
+                <span className="step-index">
+                  {step.status === "done" ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}
+                  {index + 1}
+                </span>
+                <strong>{step.title}</strong>
+                <small>{step.body}</small>
+                <span className="step-action">
+                  {step.actionLabel}
+                  <ArrowRight size={14} />
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel quick-setup-panel" id="home-guided-setup">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Guided setup</p>
+            <h3>背景情報を追加</h3>
+          </div>
+        </div>
+        <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} compact />
+      </div>
+
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI access</p>
+            <h3>普段使うAIとの接続</h3>
+          </div>
+          <button className="secondary-button" onClick={goConnections} type="button">
+            <Plug size={16} />
+            Open
+          </button>
+        </div>
+        <div className="connection-list compact">
+          {connectors.slice(0, 4).map((connector) => (
+            <div className="connection-row" key={connector.id}>
+              <div>
+                <strong>{connector.clientName}</strong>
+                <span>{connector.transport}</span>
+              </div>
+              <Badge>{connector.status}</Badge>
+            </div>
           ))}
+        </div>
+        <div className={captureSettings.enabled ? "capture-strip enabled" : "capture-strip"}>
+          {captureSettings.enabled ? <Radio size={16} /> : <PauseCircle size={16} />}
+          <span>{captureSettings.enabled ? "Passive Capture is on" : "Passive Capture is paused"}</span>
         </div>
       </div>
 
@@ -1866,44 +1977,6 @@ function HomeView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">AI access</p>
-            <h3>普段使うAIとの接続</h3>
-          </div>
-          <button className="secondary-button" onClick={goConnections} type="button">
-            <Plug size={16} />
-            Open
-          </button>
-        </div>
-        <div className="connection-list compact">
-          {connectors.slice(0, 4).map((connector) => (
-            <div className="connection-row" key={connector.id}>
-              <div>
-                <strong>{connector.clientName}</strong>
-                <span>{connector.transport}</span>
-              </div>
-              <Badge>{connector.status}</Badge>
-            </div>
-          ))}
-        </div>
-        <div className={captureSettings.enabled ? "capture-strip enabled" : "capture-strip"}>
-          {captureSettings.enabled ? <Radio size={16} /> : <PauseCircle size={16} />}
-          <span>{captureSettings.enabled ? "Passive Capture is on" : "Passive Capture is paused"}</span>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Guided setup</p>
-            <h3>背景情報を追加</h3>
-          </div>
-        </div>
-        <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} />
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
             <p className="eyebrow">Review queue</p>
             <h3>Memory Inbox</h3>
           </div>
@@ -1922,14 +1995,16 @@ function HomeView({
 function SetupForm({
   setup,
   setSetup,
-  submitBackground
+  submitBackground,
+  compact = false
 }: {
   setup: BackgroundSetupInput;
   setSetup: (input: BackgroundSetupInput) => void;
   submitBackground: () => void;
+  compact?: boolean;
 }) {
   return (
-    <div className="form-stack">
+    <div className={compact ? "form-stack setup-form compact" : "form-stack setup-form"}>
       <Input label="呼び名" value={setup.displayName} onChange={(displayName) => setSetup({ ...setup, displayName })} placeholder="例: Kota" />
       <Input label="好みの口調" value={setup.tonePreference} onChange={(tonePreference) => setSetup({ ...setup, tonePreference })} placeholder="例: 落ち着いて具体的に" />
       <Textarea label="いま動いている生活領域" value={setup.activeLifeAreas} onChange={(activeLifeAreas) => setSetup({ ...setup, activeLifeAreas })} placeholder="仕事、家族、引っ越し、学習、健康管理など" />

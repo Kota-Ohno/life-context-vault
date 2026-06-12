@@ -232,7 +232,58 @@ button {
 
 .launch-panel {
   display: grid;
-  gap: 4px;
+  gap: 14px;
+}
+
+.home-start-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.next-action-card {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #cbd8ca;
+  border-radius: 8px;
+  background: #f7faf4;
+}
+
+.next-action-card h4,
+.next-action-card p {
+  margin: 0;
+}
+
+.next-action-card h4 {
+  margin-top: 3px;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.next-action-card p:not(.eyebrow) {
+  margin-top: 6px;
+  color: #56645c;
+  line-height: 1.45;
+}
+
+.next-action-card .primary-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.next-action-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #bad0bb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26352b;
 }
 
 .onboarding-checklist {
@@ -241,12 +292,16 @@ button {
   gap: 10px;
 }
 
+.launch-panel .onboarding-checklist {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .onboarding-step {
   display: grid;
   align-content: start;
   gap: 8px;
   min-width: 0;
-  min-height: 168px;
+  min-height: 130px;
   padding: 12px;
   border: 1px solid #dde5da;
   border-radius: 8px;
@@ -327,6 +382,10 @@ button {
 .form-stack {
   display: grid;
   gap: 12px;
+}
+
+.setup-form.compact textarea {
+  min-height: 74px;
 }
 
 .field {
@@ -1434,7 +1493,9 @@ button:focus-visible {
   .view-grid,
   .home-grid,
   .ask-layout,
+  .home-start-grid,
   .onboarding-checklist,
+  .launch-panel .onboarding-checklist,
   .policy-grid,
   .policy-controls,
   .readiness-panel,
@@ -1448,6 +1509,10 @@ button:focus-visible {
 
   .home-grid .background-panel {
     grid-row: auto;
+  }
+
+  .onboarding-step {
+    min-height: 112px;
   }
 }
 
@@ -1467,19 +1532,90 @@ button:focus-visible {
   }
 
   .nav-list {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
   }
 
   .nav-item {
+    grid-template-columns: 1fr auto;
+    justify-items: center;
     min-width: 0;
+    min-height: 38px;
+    padding: 8px 9px;
+  }
+
+  .nav-item > span {
+    display: none;
+  }
+
+  .sidebar {
+    gap: 12px;
+  }
+
+  .sidebar-stats {
+    display: none;
   }
 
   .brand h1 {
     font-size: 15px;
   }
 
+  .brand p {
+    display: none;
+  }
+
+  .workspace {
+    padding: 14px;
+  }
+
   .topbar h2 {
     font-size: 23px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  .launch-panel .panel-heading {
+    margin-bottom: 0;
+  }
+
+  .next-action-card {
+    grid-template-columns: 36px 1fr;
+    padding: 12px;
+  }
+
+  .next-action-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .onboarding-step {
+    min-height: 96px;
+  }
+
+  .launch-panel .onboarding-checklist {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .launch-panel .onboarding-step {
+    min-height: 58px;
+    gap: 5px;
+    padding: 8px;
+  }
+
+  .launch-panel .onboarding-step small,
+  .launch-panel .step-action {
+    display: none;
+  }
+
+  .launch-panel .onboarding-step strong {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  .setup-form.compact textarea {
+    min-height: 64px;
   }
 
   .action-row {

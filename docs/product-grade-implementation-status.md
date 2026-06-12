@@ -123,6 +123,9 @@ Last updated: 2026-06-12
   - the UI makes login launch and AI Access auto-start distinct from Context Pack approval
 - Added first-run AI access launchpad UX:
   - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
+  - Home now prioritizes one actionable next step above the checklist, such as reviewing pending MemoryCandidates before asking users to inspect status panels
+  - Guided background setup appears before the long Background Snapshot so first-time users can start adding life context without scrolling through existing memories
+  - mobile navigation switches to icon-first controls with accessible labels, hiding secondary stats so the first action and setup form appear much earlier
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
   - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
 - Added Claude Desktop setup installer:
@@ -492,9 +495,9 @@ Last updated: 2026-06-12
 ### First-Run AI Access UX Slice
 
 - Product fit: Home now gives non-developer users a concrete sequence from "add life context" to "AI can request a Context Pack" instead of expecting them to discover Connections first.
-- UX: Connections now explains readiness in natural language and separates service state from Vault usefulness signals such as Approved Facts, Inbox, Requests, and Capture.
+- UX: Connections now explains readiness in natural language and separates service state from Vault usefulness signals such as Approved Facts, Inbox, Requests, and Capture. Home now places a single Next Action above the checklist and moves Guided Setup before the long Background Snapshot.
 - Safety: readiness copy reinforces that external AI receives only Context Packs, not Raw Sources, unapproved candidates, or the full Vault.
-- Verification: Browser DOM layout checks covered desktop `1280x720` and mobile `390x844`; screenshot capture timed out in the Browser runtime, so visual QA relied on rendered layout metrics and DOM state for this slice.
+- Verification: `npm run build` and `git diff --check` passed. Browser DOM/layout checks covered Home at desktop `1280x900` and mobile `390x844`, with no horizontal overflow; mobile setup moved from roughly `y=3026` before this pass to `y=743`, mobile nav buttons retain `aria-label`s, and the Next Action button navigated to **Inbox** in the rendered app.
 
 ### Claude Desktop Setup Slice
 
