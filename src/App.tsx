@@ -48,6 +48,7 @@ import {
   getLoginItemStatus,
   getNativeDocumentExtractionCapabilities,
   getNativeVaultPath,
+  handoffConfirmedContextPackToRelay,
   installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
   installLoginItem,
@@ -1071,12 +1072,53 @@ export function App() {
     apply(updateContextPackItemVisibility(state, pack.id, factId, included), verb);
   }
 
+  async function tryRelayHandoff(nextState: VaultState, requestId: string | null | undefined) {
+    if (!nativePath || !requestId) {
+      return { status: "skipped" as const };
+    }
+    const request = nextState.contextPackRequests.find((item) => item.id === requestId);
+    if (!request) {
+      return { status: "skipped" as const };
+    }
+    try {
+      const handoff = await handoffConfirmedContextPackToRelay({
+        clientId: request.clientId,
+        requestId: request.id
+      });
+      if (handoff?.stored) {
+        return { status: "stored" as const, ttlSeconds: handoff.ttlSeconds };
+      }
+      return { status: "skipped" as const };
+    } catch (error) {
+      return {
+        status: "failed" as const,
+        message: error instanceof Error ? error.message : "Relay handoffに失敗しました。"
+      };
+    }
+  }
+
+  function relayHandoffNotice(outcome: Awaited<ReturnType<typeof tryRelayHandoff>>): string {
+    if (outcome.status === "stored") {
+      const minutes = outcome.ttlSeconds ? Math.max(1, Math.round(outcome.ttlSeconds / 60)) : 10;
+      return `Context Packを承認し、Relayへ${minutes}分の短命handoffを登録しました。外部AIはget_request_statusで取得できます。`;
+    }
+    if (outcome.status === "failed") {
+      return `Context Packを承認しました。Relay handoffは未完了です: ${outcome.message}`;
+    }
+    return "Context Packを承認しました。外部AIはget_request_statusで取得できます。";
+  }
+
   async function approvePackForAi(pack: ContextPack) {
     const request = pack.requestId
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
       : null;
     if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
-      setNotice("このContext PackはすでにAIへ返せる状態です。");
+      const handoff = await tryRelayHandoff(state, request.id);
+      setNotice(
+        handoff.status !== "skipped"
+          ? relayHandoffNotice(handoff)
+          : "このContext PackはすでにAIへ返せる状態です。"
+      );
       return;
     }
     if (nativePath) {
@@ -1088,7 +1130,8 @@ export function App() {
           setState(updated.state);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
-          setNotice("Context Packを承認しました。外部AIはget_request_statusで取得できます。");
+          const handoff = await tryRelayHandoff(updated.state, updated.requestId ?? request?.id);
+          setNotice(relayHandoffNotice(handoff));
           return;
         }
       } catch (error) {

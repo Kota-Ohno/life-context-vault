@@ -162,6 +162,8 @@ Hosted Remote MCP flows sometimes need the desktop Agent to complete approval af
 
 When the Agent path is offline, `life_context.get_request_status` can return a still-valid handoff response from this cache. Live Agent/Vault reads remain canonical whenever a paired Agent is online.
 
+The desktop Control Center uses the same endpoint after a user confirms a Context Pack. The app posts only a safe MCP `life_context.get_request_status`-style response, bound to the original client id and request id; it does not post the Vault snapshot, Raw Source body, or unapproved MemoryCandidate records.
+
 ## Safety Boundary
 
 - Default bind is `127.0.0.1:8765`.

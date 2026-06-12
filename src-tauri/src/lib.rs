@@ -191,6 +191,16 @@ struct NativeContextPackMutationResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RelayContextPackHandoffResult {
+  stored: bool,
+  request_id: String,
+  expires_at: Option<u64>,
+  ttl_seconds: Option<u64>,
+  generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NativeSourceIngestResult {
   payload: String,
   updated_at: Option<String>,
@@ -5418,6 +5428,66 @@ fn parse_http_json_response(response: &str) -> Result<Value, String> {
   serde_json::from_str(body).map_err(|error| format!("relay returned invalid JSON: {error}"))
 }
 
+fn mcp_status_response_for_handoff(path: &Path, request_id: &str) -> Result<Value, String> {
+  let status = get_context_request_status_at_path(path, request_id)?;
+  let context_pack = status
+    .context_pack
+    .ok_or_else(|| "ContextPackRequest is not fulfilled yet.".to_string())?;
+  Ok(json!({
+    "jsonrpc": "2.0",
+    "id": request_id,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "The Context Pack has been confirmed and can be used for this answer."
+        }
+      ],
+      "structuredContent": {
+        "mutated": false,
+        "status": "fulfilled",
+        "requestId": status.request_id,
+        "contextPack": context_pack,
+        "message": "The Context Pack has been confirmed and can be used for this answer."
+      },
+      "isError": false
+    }
+  }))
+}
+
+fn handoff_context_pack_to_local_relay(
+  path: &Path,
+  client_id: &str,
+  request_id: &str,
+) -> Result<RelayContextPackHandoffResult, String> {
+  let client_id = client_id.trim();
+  if client_id.is_empty() {
+    return Err("clientId is required for Relay handoff.".to_string());
+  }
+  let request_id = request_id.trim();
+  if request_id.is_empty() {
+    return Err("requestId is required for Relay handoff.".to_string());
+  }
+  let mcp_response = mcp_status_response_for_handoff(path, request_id)?;
+  let body = serde_json::to_string(&json!({
+    "clientId": client_id,
+    "mcpResponse": mcp_response
+  }))
+  .map_err(|error| format!("failed to serialize relay handoff: {error}"))?;
+  let response = local_relay_json("POST", "/relay/handoff", Some(&body))?;
+  Ok(RelayContextPackHandoffResult {
+    stored: response.get("status").and_then(Value::as_str) == Some("stored"),
+    request_id: response
+      .get("requestId")
+      .and_then(Value::as_str)
+      .unwrap_or(request_id)
+      .to_string(),
+    expires_at: response.get("expiresAt").and_then(Value::as_u64),
+    ttl_seconds: response.get("ttlSeconds").and_then(Value::as_u64),
+    generated_by: "native_relay_handoff".to_string(),
+  })
+}
+
 fn relay_reachable() -> bool {
   local_relay_json("GET", "/health", None).is_ok()
 }
@@ -6378,6 +6448,16 @@ fn confirm_native_context_pack(
 }
 
 #[tauri::command]
+fn handoff_confirmed_context_pack_to_relay(
+  app: AppHandle,
+  client_id: String,
+  request_id: String,
+) -> Result<RelayContextPackHandoffResult, String> {
+  let path = vault_db_path(&app)?;
+  handoff_context_pack_to_local_relay(&path, &client_id, &request_id)
+}
+
+#[tauri::command]
 fn deny_native_context_pack_request(
   app: AppHandle,
   request_id: String,
@@ -6816,6 +6896,7 @@ pub fn run() {
       create_native_context_pack_request,
       update_native_context_pack_item_visibility,
       confirm_native_context_pack,
+      handoff_confirmed_context_pack_to_relay,
       deny_native_context_pack_request,
       extract_native_document_text,
       native_document_extraction_capabilities,
@@ -9012,6 +9093,62 @@ mod tests {
     assert_eq!(status.status, "fulfilled");
     assert!(!client_items_payload.contains("apartment rent contract"));
     assert!(client_pack.to_string().contains("user_hidden"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn relay_handoff_payload_uses_confirmed_context_pack_boundary() {
+    use_test_vault_key();
+    let path = temp_vault_path("relay-handoff-payload");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Passport reminder",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let response =
+      mcp_status_response_for_handoff(&path, &built.request_id).expect("handoff response");
+    let structured = response
+      .get("result")
+      .and_then(|result| result.get("structuredContent"))
+      .expect("structured content");
+    assert_eq!(
+      structured.get("status").and_then(Value::as_str),
+      Some("fulfilled")
+    );
+    assert_eq!(
+      structured.get("requestId").and_then(Value::as_str),
+      Some(built.request_id.as_str())
+    );
+    assert_eq!(
+      structured
+        .get("contextPack")
+        .and_then(|pack| pack.get("trustBoundary"))
+        .and_then(Value::as_str),
+      Some("ContextPack only")
+    );
+    assert!(structured.to_string().contains("Passport expires on 2028-05-01."));
+    assert!(!structured.to_string().contains("manual_entry"));
     remove_temp_vault(&path);
   }
 

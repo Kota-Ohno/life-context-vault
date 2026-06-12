@@ -180,6 +180,14 @@ interface NativeContextPackMutationPayload {
   generatedBy: "native_vault_core";
 }
 
+export interface RelayContextPackHandoffResult {
+  stored: boolean;
+  requestId: string;
+  expiresAt: number | null;
+  ttlSeconds: number | null;
+  generatedBy: "native_relay_handoff";
+}
+
 interface NativeSourceIngestPayload {
   payload: string;
   updatedAt: string | null;
@@ -515,6 +523,18 @@ export async function confirmNativeContextPack(packId: string): Promise<NativeCo
     packId: result.packId,
     generatedBy: result.generatedBy
   };
+}
+
+export async function handoffConfirmedContextPackToRelay(input: {
+  clientId: string;
+  requestId: string;
+}): Promise<RelayContextPackHandoffResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<RelayContextPackHandoffResult>("handoff_confirmed_context_pack_to_relay", {
+    clientId: input.clientId,
+    requestId: input.requestId
+  });
 }
 
 export async function denyNativeContextPackRequest(

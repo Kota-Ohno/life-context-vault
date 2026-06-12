@@ -655,6 +655,13 @@ Last updated: 2026-06-13
 - UX: Pack risk, maximum sensitivity, confirmation status, and the approve/copy/local-answer/deny actions now sit at the top of the Pack panel. The copy action is labeled as copying the Context Pack body, separating "saved" from "AI-bound or copied."
 - Verification: in-app Browser checks at `1280x900` and `390x844` confirmed no horizontal overflow. Connections shows `Start AI Access` in the first viewport; Requests shows the Pack approval actions in the first viewport after selecting a request on both desktop and mobile.
 
+### Control Center Relay Handoff Slice
+
+- Product fit: approving a Context Pack in Control Center can now register the already-confirmed Pack with the local Relay, so hosted Remote MCP clients can complete `life_context.get_request_status` without asking the Relay to read the Vault.
+- Security/privacy: the Tauri command posts only a safe MCP status response built from `safe_context_pack_for_client`; handoff is bound to the original request id and client id, and still excludes Raw Source bodies, Vault snapshots, and unapproved MemoryCandidates.
+- UX: approval notices distinguish Vault confirmation from Relay handoff. If Relay is unavailable, the Pack remains confirmed locally and the user is told that handoff is not complete.
+- Verification: Rust coverage confirms the handoff payload is fulfilled, declares `ContextPack only`, includes approved Pack facts, and does not include source-origin internals.
+
 ## Independent Review Passes
 
 SubAgents were not used because the user did not request parallel agent work. Review was performed in-thread.
