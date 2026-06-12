@@ -163,6 +163,8 @@ interface NativeCandidateReviewPayload {
   candidateId: string;
   status: CandidateStatus;
   factId: string | null;
+  supersededFactIds: string[];
+  invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
 
@@ -266,6 +268,8 @@ export interface NativeCandidateReviewResult {
   candidateId: string;
   status: CandidateStatus;
   factId: string | null;
+  supersededFactIds: string[];
+  invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
 
@@ -525,12 +529,14 @@ export async function addNativeSourceWithCandidates(input: {
 export async function approveNativeCandidate(input: {
   candidateId: string;
   editedText?: string;
+  supersedeFactIds?: string[];
 }): Promise<NativeCandidateReviewResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   const result = await invoke<NativeCandidateReviewPayload>("approve_native_candidate", {
     candidateId: input.candidateId,
-    editedText: input.editedText ?? null
+    editedText: input.editedText ?? null,
+    supersedeFactIds: input.supersedeFactIds ?? []
   });
   return {
     state: normalizeVaultState(JSON.parse(result.payload)),
@@ -538,6 +544,8 @@ export async function approveNativeCandidate(input: {
     candidateId: result.candidateId,
     status: result.status,
     factId: result.factId,
+    supersededFactIds: result.supersededFactIds,
+    invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };
 }
@@ -558,6 +566,8 @@ export async function updateNativeCandidateStatus(input: {
     candidateId: result.candidateId,
     status: result.status,
     factId: result.factId,
+    supersededFactIds: result.supersededFactIds,
+    invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };
 }

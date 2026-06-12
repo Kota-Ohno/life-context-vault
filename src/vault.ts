@@ -9,6 +9,7 @@ import {
   ContextPack,
   ContextPackItem,
   ContextPackRequest,
+  CandidateApprovalOptions,
   FactLifecycleAction,
   FactMetadataUpdate,
   LifeContextDomain,
@@ -106,7 +107,10 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     version: 2,
     sources: parsed.sources ?? [],
     candidates: parsed.candidates ?? [],
-    facts: parsed.facts ?? [],
+    facts: (parsed.facts ?? []).map((fact) => ({
+      ...fact,
+      supersedesFactIds: fact.supersedesFactIds ?? []
+    })),
     accessPolicies:
       parsed.accessPolicies && parsed.accessPolicies.length > 0
         ? parsed.accessPolicies
@@ -372,7 +376,7 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
 export function approveCandidate(
   state: VaultState,
   candidateId: string,
-  editedText?: string
+  approval?: string | CandidateApprovalOptions
 ): VaultState {
   const candidate = state.candidates.find((item) => item.id === candidateId);
   if (!candidate) return state;
@@ -381,8 +385,14 @@ export function approveCandidate(
     return state;
   }
 
+  const editedText = typeof approval === "string" ? approval : approval?.editedText;
+  const supersedeFactIds = typeof approval === "string" ? [] : approval?.supersedeFactIds ?? [];
   const text = (editedText ?? candidate.proposedFactText).trim();
   if (!text) return state;
+  const now = nowIso();
+  const supersededIds = Array.from(new Set(supersedeFactIds)).filter((factId) =>
+    state.facts.some((fact) => fact.id === factId && fact.status === "active")
+  );
 
   const fact: ApprovedFact = {
     id: newId("fact"),
@@ -397,14 +407,38 @@ export function approveCandidate(
     validFrom: candidate.validFrom,
     validUntil: candidate.validUntil,
     dueDate: candidate.dueDate,
-    createdAt: nowIso(),
-    approvedAt: nowIso(),
-    updatedAt: nowIso()
+    createdAt: now,
+    approvedAt: now,
+    updatedAt: now,
+    supersedesFactIds: supersededIds
   };
+  const affectedFactIds = new Set(supersededIds);
+  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
+    kind: "stale_fact",
+    message: "Factが新しいFactに置き換えられたため、このContext Packは無効化されました。"
+  });
+  const invalidatedPacks = nextPacks.filter(
+    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
+  );
+  const invalidatedRequestIds = new Set(
+    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  );
 
   return {
     ...state,
-    facts: [fact, ...state.facts],
+    facts: [
+      fact,
+      ...state.facts.map((item) =>
+        supersededIds.includes(item.id)
+          ? {
+              ...item,
+              status: "superseded" as const,
+              updatedAt: now,
+              supersededByFactId: fact.id
+            }
+          : item
+      )
+    ],
     candidates: state.candidates.map((item) =>
       item.id === candidateId
         ? {
@@ -413,18 +447,31 @@ export function approveCandidate(
               editedText && editedText.trim() !== item.proposedFactText
                 ? "edited_and_approved"
                 : "approved",
-            reviewedAt: nowIso(),
+            reviewedAt: now,
             createsFactIds: [fact.id]
           }
         : item
     ),
+    contextPacks: nextPacks,
+    contextPackRequests: state.contextPackRequests.map((request) =>
+      invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+    ),
     auditEvents: [
       audit("candidate_reviewed", "candidate", candidate.id, candidate.detectedSensitivity, {
-        action: "approved"
+        action: "approved",
+        supersededFactIds: supersededIds
       }),
       audit("fact_created", "fact", fact.id, fact.sensitivity, {
-        candidateId: candidate.id
+        candidateId: candidate.id,
+        supersedesFactIds: supersededIds,
+        invalidatedPackCount: invalidatedPacks.length
       }),
+      ...supersededIds.map((supersededFactId) =>
+        audit("fact_updated", "fact", supersededFactId, fact.sensitivity, {
+          action: "superseded",
+          supersededByFactId: fact.id
+        })
+      ),
       ...state.auditEvents
     ]
   };

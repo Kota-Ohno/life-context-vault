@@ -1078,6 +1078,45 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+.supersede-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.compact-note {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.supersede-options {
+  display: grid;
+  gap: 8px;
+}
+
+.supersede-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: #2b342e;
+  line-height: 1.45;
+}
+
+.supersede-option input {
+  width: auto;
+  min-height: auto;
+  margin-top: 3px;
+}
+
+.version-history-panel {
+  margin-top: 18px;
+}
+
 .warning-line {
   display: flex;
   align-items: flex-start;

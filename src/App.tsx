@@ -201,6 +201,7 @@ export function App() {
   const [view, setView] = useState<View>("home");
   const [setup, setSetup] = useState<BackgroundSetupInput>(blankSetup);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
+  const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
   const [manualBody, setManualBody] = useState("");
   const [question, setQuestion] = useState("");
@@ -517,6 +518,19 @@ export function App() {
     () => state.facts.filter((fact) => fact.status === "needs_review"),
     [state.facts]
   );
+  const supersededFacts = useMemo(
+    () =>
+      state.facts
+        .filter(
+          (fact) =>
+            fact.status === "superseded" &&
+            (domainFilter === "all" || fact.domain === domainFilter) &&
+            (sensitivityFilter === "all" || fact.sensitivity === sensitivityFilter) &&
+            (!searchQuery.trim() || fact.factText.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+        )
+        .slice(0, 25),
+    [domainFilter, searchQuery, sensitivityFilter, state.facts]
+  );
   const currentPack = useMemo(
     () => state.contextPacks.find((pack) => pack.id === activePackId) ?? null,
     [activePackId, state.contextPacks]
@@ -812,11 +826,13 @@ export function App() {
 
   async function approve(candidate: MemoryCandidate) {
     const edited = candidateEdits[candidate.id];
+    const supersedeFactIds = candidateSupersedes[candidate.id] ?? [];
     if (nativePath) {
       try {
         const reviewed = await approveNativeCandidate({
           candidateId: candidate.id,
-          editedText: edited
+          editedText: edited,
+          supersedeFactIds
         });
         if (reviewed) {
           nativeRevisionRef.current = reviewed.updatedAt;
@@ -827,7 +843,12 @@ export function App() {
             delete next[candidate.id];
             return next;
           });
-          setNotice("承認済みFactとして保存しました。AIへ渡るのはContext Pack確認後だけです。");
+          setCandidateSupersedes((current) => {
+            const next = { ...current };
+            delete next[candidate.id];
+            return next;
+          });
+          setNotice(candidateApprovalNotice(reviewed.supersededFactIds.length, reviewed.invalidatedPackCount));
           return;
         }
       } catch (error) {
@@ -839,8 +860,14 @@ export function App() {
       setNotice("削除または消去されたSource由来の候補はFact化できません。Sourceを復元するか、新しいSourceとして追加してください。");
       return;
     }
-    const next = approveCandidate(state, candidate.id, edited);
-    apply(next, "承認済みFactとして保存しました。");
+    const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
+    const next = approveCandidate(state, candidate.id, { editedText: edited, supersedeFactIds });
+    setCandidateSupersedes((current) => {
+      const nextSelections = { ...current };
+      delete nextSelections[candidate.id];
+      return nextSelections;
+    });
+    apply(next, candidateApprovalNotice(supersedeFactIds.length, invalidatedPackCount));
   }
 
   async function reviewCandidateStatus(
@@ -1430,8 +1457,16 @@ export function App() {
         {view === "inbox" && (
           <InboxView
             candidates={activeCandidates}
+            facts={activeFacts}
             edits={candidateEdits}
+            supersedes={candidateSupersedes}
             setEdit={(id, value) => setCandidateEdits((prev) => ({ ...prev, [id]: value }))}
+            toggleSupersede={(candidateId, factId) =>
+              setCandidateSupersedes((current) => ({
+                ...current,
+                [candidateId]: toggleSelectedId(current[candidateId] ?? [], factId)
+              }))
+            }
             approve={approve}
             reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "候補を却下しました。")}
             archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "候補をLaterに移しました。")}
@@ -1531,6 +1566,7 @@ export function App() {
             setSensitivityFilter={setSensitivityFilter}
             results={searchResults}
             reviewFacts={reviewFacts}
+            supersededFacts={supersededFacts}
             sources={state.sources}
             changeFactLifecycle={changeFactLifecycle}
             editFactMetadata={editFactMetadata}
@@ -1837,16 +1873,22 @@ function SetupForm({
 
 function InboxView({
   candidates,
+  facts,
   edits,
+  supersedes,
   setEdit,
+  toggleSupersede,
   approve,
   reject,
   archive,
   markSensitive
 }: {
   candidates: MemoryCandidate[];
+  facts: ApprovedFact[];
   edits: Record<string, string>;
+  supersedes: Record<string, string[]>;
   setEdit: (id: string, value: string) => void;
+  toggleSupersede: (candidateId: string, factId: string) => void;
   approve: (candidate: MemoryCandidate) => void;
   reject: (candidate: MemoryCandidate) => void;
   archive: (candidate: MemoryCandidate) => void;
@@ -1863,45 +1905,71 @@ function InboxView({
 
   return (
     <section className="candidate-list">
-      {candidates.map((candidate) => (
-        <article className="candidate-card" key={candidate.id}>
-          <div className="candidate-meta">
-            <Badge>{domainLabel(candidate.domain)}</Badge>
-            <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
-            <Badge>{candidate.confidence}</Badge>
-          </div>
-          <textarea
-            aria-label="Candidate text"
-            value={edits[candidate.id] ?? candidate.proposedFactText}
-            onChange={(event) => setEdit(candidate.id, event.target.value)}
-          />
-          <p>{candidate.reasonToRemember}</p>
-          {candidate.status === "blocked_sensitive" && (
-            <div className="warning-line">
-              <ShieldAlert size={16} />
-              センシティブ候補です。保存すると、この情報はContext Pack使用時にも確認対象になります。
+      {candidates.map((candidate) => {
+        const replacementOptions = facts
+          .filter((fact) => fact.domain === candidate.domain && fact.status === "active")
+          .slice(0, 4);
+        const selectedSupersedes = supersedes[candidate.id] ?? [];
+        return (
+          <article className="candidate-card" key={candidate.id}>
+            <div className="candidate-meta">
+              <Badge>{domainLabel(candidate.domain)}</Badge>
+              <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
+              <Badge>{candidate.confidence}</Badge>
             </div>
-          )}
-          <div className="action-row">
-            <button className="primary-button" onClick={() => approve(candidate)} type="button">
-              <Check size={16} />
-              保存
-            </button>
-            <button className="secondary-button" onClick={() => markSensitive(candidate)} type="button">
-              <ShieldAlert size={16} />
-              Sensitive
-            </button>
-            <button className="secondary-button" onClick={() => archive(candidate)} type="button">
-              <Archive size={16} />
-              Later
-            </button>
-            <button className="danger-button" onClick={() => reject(candidate)} type="button">
-              <X size={16} />
-              却下
-            </button>
-          </div>
-        </article>
-      ))}
+            <textarea
+              aria-label="Candidate text"
+              value={edits[candidate.id] ?? candidate.proposedFactText}
+              onChange={(event) => setEdit(candidate.id, event.target.value)}
+            />
+            <p>{candidate.reasonToRemember}</p>
+            {replacementOptions.length > 0 && (
+              <div className="supersede-panel">
+                <div className="trust-note compact-note">
+                  <RefreshCw size={16} />
+                  <span>この候補で古いFactを置き換える場合だけ選択します。置き換えたFactはAI候補から外れ、履歴に残ります。</span>
+                </div>
+                <div className="supersede-options">
+                  {replacementOptions.map((fact) => (
+                    <label className="supersede-option" key={fact.id}>
+                      <input
+                        checked={selectedSupersedes.includes(fact.id)}
+                        onChange={() => toggleSupersede(candidate.id, fact.id)}
+                        type="checkbox"
+                      />
+                      <span>{fact.factText}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {candidate.status === "blocked_sensitive" && (
+              <div className="warning-line">
+                <ShieldAlert size={16} />
+                センシティブ候補です。保存すると、この情報はContext Pack使用時にも確認対象になります。
+              </div>
+            )}
+            <div className="action-row">
+              <button className="primary-button" onClick={() => approve(candidate)} type="button">
+                <Check size={16} />
+                {selectedSupersedes.length > 0 ? "置き換えて保存" : "保存"}
+              </button>
+              <button className="secondary-button" onClick={() => markSensitive(candidate)} type="button">
+                <ShieldAlert size={16} />
+                Sensitive
+              </button>
+              <button className="secondary-button" onClick={() => archive(candidate)} type="button">
+                <Archive size={16} />
+                Later
+              </button>
+              <button className="danger-button" onClick={() => reject(candidate)} type="button">
+                <X size={16} />
+                却下
+              </button>
+            </div>
+          </article>
+        );
+      })}
     </section>
   );
 }
@@ -3077,6 +3145,7 @@ function SearchView({
   setSensitivityFilter,
   results,
   reviewFacts,
+  supersededFacts,
   sources,
   changeFactLifecycle,
   editFactMetadata,
@@ -3092,6 +3161,7 @@ function SearchView({
   setSensitivityFilter: (value: SensitivityTier | "all") => void;
   results: ApprovedFact[];
   reviewFacts: ApprovedFact[];
+  supersededFacts: ApprovedFact[];
   sources: VaultState["sources"];
   changeFactLifecycle: (factId: string, action: FactLifecycleAction) => void;
   editFactMetadata: (factId: string, input: FactMetadataUpdate) => Promise<boolean>;
@@ -3173,6 +3243,26 @@ function SearchView({
         ))}
         {results.length === 0 && <p className="muted">一致するApprovedFactがありません。</p>}
       </div>
+      {supersededFacts.length > 0 && (
+        <div className="memory-review-panel version-history-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <p className="eyebrow">Version history</p>
+              <h3>置き換え済みFact</h3>
+            </div>
+            <Badge>{supersededFacts.length}件</Badge>
+          </div>
+          <div className="trust-note">
+            <RefreshCw size={16} />
+            <span>ここにあるFactは履歴として残っていますが、通常の検索結果やContext Pack候補には入りません。</span>
+          </div>
+          <div className="domain-list">
+            {supersededFacts.map((fact) => (
+              <FactRow fact={fact} key={fact.id} sources={sources} variant="readonly" />
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -3640,10 +3730,33 @@ function factMetadataNotice(invalidatedPackCount: number): string {
   return `Factを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
 }
 
+function candidateApprovalNotice(supersededFactCount: number, invalidatedPackCount: number): string {
+  if (supersededFactCount > 0) {
+    return `新しいFactとして保存し、${supersededFactCount}件の古いFactを置き換えました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  }
+  return "承認済みFactとして保存しました。AIへ渡るのはContext Pack確認後だけです。";
+}
+
 function activeFactPackCount(state: VaultState, factId: string): number {
   return state.contextPacks.filter((pack) =>
     pack.confirmationStatus !== "cancelled" && pack.items.some((item) => item.factId === factId)
   ).length;
+}
+
+function packsForFacts(state: VaultState, factIds: string[]): ContextPack[] {
+  const factIdSet = new Set(factIds);
+  if (factIdSet.size === 0) return [];
+  return state.contextPacks.filter(
+    (pack) =>
+      pack.confirmationStatus !== "cancelled" &&
+      pack.items.some((item) => factIdSet.has(item.factId))
+  );
+}
+
+function toggleSelectedId(selectedIds: string[], id: string): string[] {
+  return selectedIds.includes(id)
+    ? selectedIds.filter((selectedId) => selectedId !== id)
+    : [...selectedIds, id];
 }
 
 function searchModeCopy(

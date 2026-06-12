@@ -121,6 +121,7 @@ Candidate review is the point where an AI-generated or passively extracted Memor
 In the desktop product path, review actions enter through typed Vault Core commands:
 
 - Approve: creates exactly one ApprovedFact from one MemoryCandidate.
+- Approve and supersede: creates one new ApprovedFact, marks selected active Facts as `superseded`, writes version links in both directions, and cancels Context Packs that included the superseded Facts.
 - Reject, archive, request detail, or mark sensitive: updates review status only and never creates a Fact.
 - Secret-never-send candidates: cannot be approved as Facts.
 - Every review action writes an audit event and refreshes normalized Candidate/Fact/FTS projection before returning.
@@ -128,6 +129,8 @@ In the desktop product path, review actions enter through typed Vault Core comma
 ### Fact Lifecycle
 
 Fact lifecycle actions are also typed Vault Core commands in the desktop path. Keeping a review-needed Fact makes it `active` again and removes Source-deletion review metadata. Hiding, deleting, or moving a Fact back to review removes it from active retrieval and cancels existing Context Packs that included it, so external AI clients cannot reuse stale Pack contents after the user changes memory visibility.
+
+Superseded Facts are preserved as human-readable version history but are excluded from default search results and Context Pack retrieval. The Search view may show them in a separate history section so the user can inspect why an older memory disappeared from AI-eligible context.
 
 Fact metadata edits are typed Vault Core commands as well. Editing canonical Fact text, domain, sensitivity, or date metadata refreshes normalized Facts and FTS projection, writes a `fact_updated` audit event, and cancels existing Context Packs that included the Fact before any external AI client can retrieve stale context.
 

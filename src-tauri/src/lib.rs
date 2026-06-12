@@ -170,6 +170,8 @@ struct NativeCandidateReviewResult {
   candidate_id: String,
   status: String,
   fact_id: Option<String>,
+  superseded_fact_ids: Vec<String>,
+  invalidated_pack_count: usize,
   generated_by: String,
 }
 
@@ -298,6 +300,8 @@ pub struct VaultCoreCandidateReviewResult {
   pub candidate_id: String,
   pub status: String,
   pub fact_id: Option<String>,
+  pub superseded_fact_ids: Vec<String>,
+  pub invalidated_pack_count: usize,
 }
 
 pub struct VaultCorePassiveCaptureResult {
@@ -510,7 +514,9 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         due_date TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        supersedes_fact_ids TEXT,
+        superseded_by_fact_id TEXT
       );
 
       CREATE TABLE IF NOT EXISTS entities (
@@ -614,6 +620,8 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
     .map_err(|error| format!("failed to initialize vault schema: {error}"))?;
   ensure_column(connection, "facts", "created_at", "TEXT")?;
   ensure_column(connection, "facts", "approved_at", "TEXT")?;
+  ensure_column(connection, "facts", "supersedes_fact_ids", "TEXT")?;
+  ensure_column(connection, "facts", "superseded_by_fact_id", "TEXT")?;
   connection
     .execute(
       "UPDATE facts
@@ -753,8 +761,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
       .execute(
         "INSERT INTO facts (
           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
-          status, valid_from, valid_until, due_date, created_at, approved_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          status, valid_from, valid_until, due_date, created_at, approved_at, updated_at,
+          supersedes_fact_ids, superseded_by_fact_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
           fact_id,
           str_field(fact, "factText"),
@@ -769,7 +778,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
           optional_str_field(fact, "dueDate"),
           fact_created_at,
           fact_approved_at,
-          fact_updated_at
+          fact_updated_at,
+          json_field(fact, "supersedesFactIds"),
+          optional_str_field(fact, "supersededByFactId")
         ],
       )
       .map_err(|error| format!("failed to sync fact {fact_id}: {error}"))?;
@@ -2460,6 +2471,15 @@ pub fn approve_candidate_at_path(
   candidate_id: &str,
   edited_text: Option<&str>,
 ) -> Result<VaultCoreCandidateReviewResult, String> {
+  approve_candidate_with_options_at_path(path, candidate_id, edited_text, &[])
+}
+
+pub fn approve_candidate_with_options_at_path(
+  path: &Path,
+  candidate_id: &str,
+  edited_text: Option<&str>,
+  supersede_fact_ids: &[String],
+) -> Result<VaultCoreCandidateReviewResult, String> {
   let candidate_id = candidate_id.trim();
   if candidate_id.is_empty() {
     return Err("candidateId is required.".to_string());
@@ -2487,6 +2507,20 @@ pub fn approve_candidate_at_path(
 
   let now = now_iso();
   let fact_id = new_id("fact");
+  let mut superseded_fact_ids = Vec::new();
+  for requested_id in supersede_fact_ids {
+    let requested_id = requested_id.trim();
+    if requested_id.is_empty() || superseded_fact_ids.iter().any(|id| id == requested_id) {
+      continue;
+    }
+    let Some(existing_fact) = find_vault_item_by_id(&vault, "facts", requested_id) else {
+      return Err(format!("Superseded Fact was not found: {requested_id}"));
+    };
+    if str_field(&existing_fact, "status") != "active" {
+      return Err(format!("Only active Facts can be superseded: {requested_id}"));
+    }
+    superseded_fact_ids.push(requested_id.to_string());
+  }
   let source_ids = candidate
     .get("sourceIds")
     .cloned()
@@ -2509,11 +2543,33 @@ pub fn approve_candidate_at_path(
     "status": "active",
     "createdAt": now.clone(),
     "approvedAt": now.clone(),
-    "updatedAt": now.clone()
+    "updatedAt": now.clone(),
+    "supersedesFactIds": superseded_fact_ids.clone()
   });
   copy_optional_candidate_field(&candidate, &mut fact, "validFrom");
   copy_optional_candidate_field(&candidate, &mut fact, "validUntil");
   copy_optional_candidate_field(&candidate, &mut fact, "dueDate");
+  let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
+    &mut vault,
+    &superseded_fact_ids,
+    "stale_fact",
+    "Factが新しいFactに置き換えられたため、このContext Packは無効化されました。",
+  );
+  if !superseded_fact_ids.is_empty() {
+    let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
+      return Err("Vault has no facts array.".to_string());
+    };
+    for fact in facts {
+      if superseded_fact_ids
+        .iter()
+        .any(|fact_id| fact_id == &str_field(fact, "id"))
+      {
+        fact["status"] = Value::String("superseded".to_string());
+        fact["updatedAt"] = Value::String(now.clone());
+        fact["supersededByFactId"] = Value::String(fact_id.clone());
+      }
+    }
+  }
 
   let approved_status = if edited_text
     .map(str::trim)
@@ -2540,6 +2596,7 @@ pub fn approve_candidate_at_path(
       &detected_sensitivity,
       json!({
         "action": "approved",
+        "supersededFactIds": superseded_fact_ids,
         "generatedBy": "native_vault_core"
       }),
     ),
@@ -2554,10 +2611,29 @@ pub fn approve_candidate_at_path(
       &detected_sensitivity,
       json!({
         "candidateId": candidate_id,
+        "supersedesFactIds": superseded_fact_ids,
+        "invalidatedPackCount": invalidated_pack_count,
         "generatedBy": "native_vault_core"
       }),
     ),
   );
+  for superseded_fact_id in &superseded_fact_ids {
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "fact_updated",
+        "fact",
+        superseded_fact_id,
+        &detected_sensitivity,
+        json!({
+          "action": "superseded",
+          "supersededByFactId": fact_id,
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
 
   let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
   Ok(VaultCoreCandidateReviewResult {
@@ -2566,6 +2642,8 @@ pub fn approve_candidate_at_path(
     candidate_id: candidate_id.to_string(),
     status: approved_status.to_string(),
     fact_id: Some(fact_id),
+    superseded_fact_ids,
+    invalidated_pack_count,
   })
 }
 
@@ -2612,6 +2690,8 @@ pub fn update_candidate_status_at_path(
     candidate_id: candidate_id.to_string(),
     status: status.to_string(),
     fact_id: None,
+    superseded_fact_ids: Vec::new(),
+    invalidated_pack_count: 0,
   })
 }
 
@@ -5272,15 +5352,23 @@ fn approve_native_candidate(
   app: AppHandle,
   candidate_id: String,
   edited_text: Option<String>,
+  supersede_fact_ids: Vec<String>,
 ) -> Result<NativeCandidateReviewResult, String> {
   let path = vault_db_path(&app)?;
-  let result = approve_candidate_at_path(&path, &candidate_id, edited_text.as_deref())?;
+  let result = approve_candidate_with_options_at_path(
+    &path,
+    &candidate_id,
+    edited_text.as_deref(),
+    &supersede_fact_ids,
+  )?;
   Ok(NativeCandidateReviewResult {
     payload: result.payload,
     updated_at: result.updated_at,
     candidate_id: result.candidate_id,
     status: result.status,
     fact_id: result.fact_id,
+    superseded_fact_ids: result.superseded_fact_ids,
+    invalidated_pack_count: result.invalidated_pack_count,
     generated_by: "native_vault_core".to_string(),
   })
 }
@@ -5299,6 +5387,8 @@ fn update_native_candidate_status(
     candidate_id: result.candidate_id,
     status: result.status,
     fact_id: result.fact_id,
+    superseded_fact_ids: result.superseded_fact_ids,
+    invalidated_pack_count: result.invalidated_pack_count,
     generated_by: "native_vault_core".to_string(),
   })
 }
@@ -6921,6 +7011,108 @@ mod tests {
 
     assert_eq!(fact_count, 1);
     assert_eq!(fts_count, 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_candidate_approval_can_supersede_existing_fact() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-supersede");
+    let old_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Old policy note",
+      "Insurance policy renews on 2026-08-31.",
+    )
+    .expect("old source ingest");
+    let old_candidate_id = old_source
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("old candidate id");
+    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
+      .expect("approve old candidate");
+    let old_fact_id = old_review.fact_id.expect("old fact id");
+    create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about insurance renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    let new_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "New policy note",
+      "Insurance policy renews on 2027-08-31.",
+    )
+    .expect("new source ingest");
+    let new_candidate_id = new_source
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("new candidate id");
+
+    let result = approve_candidate_with_options_at_path(
+      &path,
+      &new_candidate_id,
+      None,
+      std::slice::from_ref(&old_fact_id),
+    )
+    .expect("approve replacement candidate");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let new_fact_id = result.fact_id.clone().expect("new fact id");
+    let old_fact = find_vault_item_by_id(&saved, "facts", &old_fact_id).expect("old fact");
+    let new_fact = find_vault_item_by_id(&saved, "facts", &new_fact_id).expect("new fact");
+    let pack = saved
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("context pack");
+
+    assert_eq!(result.superseded_fact_ids, vec![old_fact_id.clone()]);
+    assert_eq!(result.invalidated_pack_count, 1);
+    assert_eq!(
+      new_fact.get("supersedesFactIds").cloned().unwrap_or_else(|| json!([])),
+      json!([old_fact_id.clone()])
+    );
+    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("superseded"));
+    assert_eq!(
+      old_fact.get("supersededByFactId").and_then(Value::as_str),
+      Some(new_fact_id.as_str())
+    );
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let old_search = search_facts_in_connection(&connection, "2026", None, None, 20).expect("old search");
+    let new_search = search_facts_in_connection(&connection, "2027", None, None, 20).expect("new search");
+    let normalized_old_status: String = connection
+      .query_row(
+        "SELECT status FROM facts WHERE id = ?1",
+        params![old_fact_id],
+        |row| row.get(0),
+      )
+      .expect("old status");
+    let normalized_new_supersedes: String = connection
+      .query_row(
+        "SELECT supersedes_fact_ids FROM facts WHERE id = ?1",
+        params![new_fact_id],
+        |row| row.get(0),
+      )
+      .expect("new supersedes");
+
+    assert!(old_search.is_empty());
+    assert_eq!(new_search.len(), 1);
+    assert_eq!(normalized_old_status, "superseded");
+    assert!(normalized_new_supersedes.contains("fact_"));
     remove_temp_vault(&path);
   }
 

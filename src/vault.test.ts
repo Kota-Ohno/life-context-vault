@@ -48,6 +48,38 @@ describe("vault flow", () => {
     expect(state.candidates[0].status).toBe("approved");
   });
 
+  it("can approve a candidate as a replacement for an older fact", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Old policy note",
+      body: "Insurance policy renews on 2026-08-31."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const oldFactId = state.facts[0].id;
+    const pack = buildContextPack(state, "What should I remember about insurance renewal?");
+    state = savePackForTest(state, pack);
+
+    state = addSourceWithCandidates(state, {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "New policy note",
+      body: "Insurance policy renews on 2027-08-31."
+    });
+    state = approveCandidate(state, state.candidates[0].id, {
+      supersedeFactIds: [oldFactId]
+    });
+
+    const newFact = state.facts[0];
+    const oldFact = state.facts.find((fact) => fact.id === oldFactId)!;
+    expect(newFact.supersedesFactIds).toEqual([oldFactId]);
+    expect(oldFact.status).toBe("superseded");
+    expect(oldFact.supersededByFactId).toBe(newFact.id);
+    expect(state.contextPacks[0].confirmationStatus).toBe("cancelled");
+    expect(searchFacts(state, "2026")).toEqual([]);
+    expect(searchFacts(state, "2027")[0].id).toBe(newFact.id);
+  });
+
   it("redacts secret values from source text and generated candidates", () => {
     const state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",

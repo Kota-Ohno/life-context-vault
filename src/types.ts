@@ -114,6 +114,11 @@ export type FactMetadataUpdate = {
   dueDate?: string;
 };
 
+export type CandidateApprovalOptions = {
+  editedText?: string;
+  supersedeFactIds?: string[];
+};
+
 export type RawSource = {
   id: string;
   kind: SourceKind;
@@ -210,6 +215,8 @@ export type ApprovedFact = {
   createdAt: string;
   approvedAt: string;
   updatedAt: string;
+  supersedesFactIds: string[];
+  supersededByFactId?: string;
   reviewReason?: "source_deleted" | "source_updated";
   reviewSourceId?: string;
 };
