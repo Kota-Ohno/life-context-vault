@@ -662,6 +662,12 @@ Last updated: 2026-06-13
 - UX: approval notices distinguish Vault confirmation from Relay handoff. If Relay is unavailable, the Pack remains confirmed locally and the user is told that handoff is not complete.
 - Verification: Rust coverage confirms the handoff payload is fulfilled, declares `ContextPack only`, includes approved Pack facts, and does not include source-origin internals.
 
+### Passive Capture TTL Enforcement Slice
+
+- Security/privacy: Rust Vault saves now purge expired passive-capture Source bodies before writing the encrypted snapshot and normalized tables, matching the browser fallback TTL behavior.
+- Data model: expired passive-capture Sources are marked `deletionState: purged`, body is replaced with `[PURGED_PASSIVE_CAPTURE]`, linked PassiveCaptureEvents move to `processingStatus: purged`, and a `passive_capture_purged` audit event is recorded.
+- Verification: Rust coverage seeds an expired passive-capture transcript, triggers a native settings save, and confirms both the JSON snapshot and normalized `sources` table contain only the purge marker.
+
 ## Independent Review Passes
 
 SubAgents were not used because the user did not request parallel agent work. Review was performed in-thread.

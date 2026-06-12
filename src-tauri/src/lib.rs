@@ -1581,11 +1581,76 @@ fn load_vault_json_from_connection(connection: &Connection) -> Result<Value, Str
     .unwrap_or_else(empty_vault_json))
 }
 
+fn purge_expired_passive_captures_in_vault(vault: &mut Value) -> usize {
+  let mut expired_source_ids = Vec::new();
+  if let Some(sources) = vault.get_mut("sources").and_then(Value::as_array_mut) {
+    for source in sources {
+      let is_passive_capture = str_field(source, "kind") == "passive_capture";
+      let promoted = source
+        .get("promotedToLongTerm")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+      let expired = optional_str_field(source, "retentionUntil")
+        .as_deref()
+        .map(is_expired)
+        .unwrap_or(false);
+      if is_passive_capture && !promoted && expired {
+        let source_id = str_field(source, "id");
+        source["body"] = Value::String("[PURGED_PASSIVE_CAPTURE]".to_string());
+        source["deletionState"] = Value::String("purged".to_string());
+        source["processingStatus"] = Value::String("ready".to_string());
+        if !source_id.is_empty() {
+          expired_source_ids.push(source_id);
+        }
+      }
+    }
+  }
+  if expired_source_ids.is_empty() {
+    return 0;
+  }
+
+  let expired: HashSet<String> = expired_source_ids.iter().cloned().collect();
+  if let Some(events) = vault
+    .get_mut("passiveCaptureEvents")
+    .and_then(Value::as_array_mut)
+  {
+    for event in events {
+      let source_id = optional_str_field(event, "sourceId");
+      if source_id
+        .as_deref()
+        .map(|id| expired.contains(id))
+        .unwrap_or(false)
+      {
+        event["processingStatus"] = Value::String("purged".to_string());
+      }
+    }
+  }
+
+  for source_id in &expired_source_ids {
+    push_json_array(
+      vault,
+      "auditEvents",
+      audit_event(
+        "passive_capture_purged",
+        "source",
+        source_id,
+        "personal",
+        json!({
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
+  expired_source_ids.len()
+}
+
 fn save_vault_json_with_projection(
   connection: &mut Connection,
   vault: &Value,
 ) -> Result<(String, Option<String>), String> {
-  let payload = vault.to_string();
+  let mut vault_to_save = vault.clone();
+  purge_expired_passive_captures_in_vault(&mut vault_to_save);
+  let payload = vault_to_save.to_string();
   let save_result = save_vault_state_payload(connection, &payload, None)?;
   let saved_snapshot = load_vault_state_snapshot_from_connection(connection)?;
   Ok((saved_snapshot.payload.unwrap_or(payload), save_result.updated_at))
@@ -8395,6 +8460,92 @@ mod tests {
     assert_eq!(normalized_candidate_count, result.candidate_ids.len() as i64);
     assert_eq!(normalized_fact_count, 0);
     assert_eq!(normalized_capture_count, 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_save_purges_expired_passive_capture_bodies() {
+    use_test_vault_key();
+    let path = temp_vault_path("passive-capture-ttl");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    vault["passiveCaptureSettings"]["enabled"] = json!(true);
+    push_json_array(
+      &mut vault,
+      "sources",
+      json!({
+        "id": "src_expired_capture",
+        "kind": "passive_capture",
+        "title": "Expired ChatGPT capture",
+        "origin": "passive_browser",
+        "body": "Raw transcript that must expire.",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "capturedAt": "2026-01-01T00:00:00.000Z",
+        "retentionUntil": "2026-01-02T00:00:00.000Z",
+        "promotedToLongTerm": false,
+        "defaultSensitivity": "personal",
+        "processingStatus": "ready",
+        "deletionState": "active"
+      }),
+    );
+    push_json_array(
+      &mut vault,
+      "passiveCaptureEvents",
+      json!({
+        "id": "cap_expired",
+        "sourceClient": "chatgpt",
+        "conversationId": "thread",
+        "urlHash": "hash",
+        "textFragmentRef": "src_expired_capture:body",
+        "capturedAt": "2026-01-01T00:00:00.000Z",
+        "retentionUntil": "2026-01-02T00:00:00.000Z",
+        "sensitivityGuess": "personal",
+        "processingStatus": "candidate_generated",
+        "sourceId": "src_expired_capture",
+        "candidateIds": []
+      }),
+    );
+    save_vault_state_payload(&mut connection, &vault.to_string(), None).expect("seed expired vault");
+    drop(connection);
+
+    let result = update_passive_capture_settings_at_path(&path, Some(true), None, None)
+      .expect("settings update purges expired capture");
+    let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
+    let source = find_vault_item_by_id(&saved, "sources", "src_expired_capture")
+      .expect("expired source");
+    let event = find_vault_item_by_id(&saved, "passiveCaptureEvents", "cap_expired")
+      .expect("expired capture event");
+    let audit_text = saved
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .cloned()
+      .map(Value::Array)
+      .unwrap_or_else(|| json!([]))
+      .to_string();
+
+    assert_eq!(
+      source.get("body").and_then(Value::as_str),
+      Some("[PURGED_PASSIVE_CAPTURE]")
+    );
+    assert_eq!(
+      source.get("deletionState").and_then(Value::as_str),
+      Some("purged")
+    );
+    assert_eq!(
+      event.get("processingStatus").and_then(Value::as_str),
+      Some("purged")
+    );
+    assert!(audit_text.contains("passive_capture_purged"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_body: String = connection
+      .query_row(
+        "SELECT body FROM sources WHERE id = ?1",
+        params!["src_expired_capture"],
+        |row| row.get(0),
+      )
+      .expect("normalized source body");
+    assert_eq!(normalized_body, "[PURGED_PASSIVE_CAPTURE]");
     remove_temp_vault(&path);
   }
 
