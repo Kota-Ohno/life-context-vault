@@ -12,6 +12,7 @@ import {
   makeAiContextPackPayload,
   purgeExpiredPassiveCaptures,
   searchFacts,
+  updateContextPackItemVisibility,
   updateSourceMetadata
 } from "./vault";
 
@@ -235,6 +236,44 @@ describe("vault flow", () => {
     expect(state.contextPacks[0].warnings[0].kind).toBe("stale_fact");
     expect(rebuilt.items[0].sourceTitles).toEqual([]);
     expect(rebuilt.sourceSnippets).toEqual([]);
+  });
+
+  it("lets users minimize a context pack before it leaves to AI", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Planning notes",
+      body: "Need to renew library card by 2027-01-10.\nNeed to renew apartment lease by 2027-01-15."
+    });
+    const publicCandidate = state.candidates.find((candidate) => candidate.proposedFactText.includes("library"))!;
+    const privateCandidate = state.candidates.find((candidate) => candidate.proposedFactText.includes("lease"))!;
+    state = approveCandidate(state, publicCandidate.id);
+    state = approveCandidate(state, privateCandidate.id);
+
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me plan renewals this month",
+      approvalMode: "always_review"
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    state = built.state;
+    const pack = built.pack!;
+    const privateFactId = state.facts.find((fact) => fact.factText.includes("lease"))!.id;
+
+    state = updateContextPackItemVisibility(state, pack.id, privateFactId, false);
+    const minimizedPack = state.contextPacks.find((item) => item.id === pack.id)!;
+    const payload = makeAiContextPackPayload(minimizedPack);
+
+    expect(minimizedPack.confirmationStatus).toBe("edited_by_user");
+    expect(minimizedPack.items.some((item) => item.factId === privateFactId)).toBe(false);
+    expect(minimizedPack.excludedItems).toContainEqual({
+      referencedId: privateFactId,
+      reason: "user_hidden"
+    });
+    expect(minimizedPack.maxSensitivityIncluded).toBe("public");
+    expect(minimizedPack.warnings.some((warning) => warning.kind === "sensitive_context")).toBe(false);
+    expect(JSON.stringify(payload)).not.toContain("apartment lease");
   });
 
   it("purges expired passive capture source text without deleting review history", () => {

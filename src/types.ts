@@ -382,6 +382,7 @@ export type AuditEvent = {
     | "fact_updated"
     | "context_pack_requested"
     | "context_pack_generated"
+    | "context_pack_updated"
     | "context_pack_confirmed"
     | "context_pack_denied"
     | "connector_updated"

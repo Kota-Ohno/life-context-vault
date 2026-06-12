@@ -128,6 +128,11 @@ Last updated: 2026-06-12
   - confirmed Packs can be copied as an AI-bound payload for non-MCP clients
   - copied and MCP-returned payloads are explicitly marked `ContextPack only` and omit local answer/audit internals
   - request details show client, purpose, expiry, sensitivity ceiling, and fulfillment status
+- Added Rust-owned AI-bound Context Pack minimization path:
+  - `update_native_context_pack_item_visibility` lets users remove or restore individual Fact items before a Pack is confirmed
+  - removed items stay visible as `user_hidden` exclusions while Pack items, source snippets, warnings, and max sensitivity are recalculated
+  - `confirm_native_context_pack` and `deny_native_context_pack_request` move external-AI approval decisions through Vault Core
+  - Requests shows the exact number of Fact items/snippets scheduled for sending and exposes per-item "do not send to this AI" controls
 - Added Chrome browser capture extension and Native Messaging host:
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
@@ -177,7 +182,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for Raw Source body re-extraction/editing and advanced Fact merge/versioning beyond the current native Context Pack/source ingest/source lifecycle/source metadata/fact lifecycle/fact metadata/candidate review/passive capture/policy settings/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for Raw Source body re-extraction/editing and advanced Fact merge/versioning beyond the current native Context Pack generation/minimization/confirmation/source ingest/source lifecycle/source metadata/fact lifecycle/fact metadata/candidate review/passive capture/policy settings/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -205,6 +210,7 @@ Last updated: 2026-06-12
 - Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
 - Native Context Pack tests proving only ApprovedFacts are included, unapproved candidates are ignored, Raw Source body text is not copied into snippets, and facts above the client sensitivity ceiling are excluded
+- Native Context Pack minimization tests proving user-hidden items are removed from the AI-bound Pack, retained as exclusions, and remain absent after confirmation and `get_request_status`
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Source metadata tests proving metadata edits invalidate affected Context Packs, sync normalized Source projection, and prevent `secret_never_send` Source titles/snippets from entering new Context Packs
@@ -244,6 +250,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
   - mobile `390x844`: Search mode row and filters stack without page-level horizontal overflow
+  - desktop `1280x920`: Requests Context Pack minimization removes one Fact, shows `user_hidden` restore controls, and has no page-level or internal horizontal overflow
+  - mobile `390x844`: Requests Context Pack minimization stacks send/remove/restore controls without page-level or internal horizontal overflow
   - desktop `1280x720`: Home first-run launchpad and Connections readiness panel have no page-level horizontal overflow
   - mobile `390x844`: Home first-run launchpad and Connections readiness panel stack to one column without page-level horizontal overflow
   - desktop `1440x980`: Settings storage panel displays without horizontal overflow
@@ -296,6 +304,11 @@ Last updated: 2026-06-12
 - Fact Metadata security review: accepted; changed Facts invalidate existing Context Packs, and secret-never-send is not offered as a selectable AI-bound sensitivity.
 - Fact Metadata technical review: accepted; metadata writes go through Vault Core, refresh normalized Facts/FTS, clear blank optional date fields, and audit `fact_updated`.
 - Fact Metadata UX review: accepted; the compact edit form keeps high-frequency Search scanning intact while exposing correction only when requested.
+- Context Pack Minimization review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Context Pack Minimization product review: accepted; users can now remove individual Facts from a task-specific Pack without hiding the canonical Fact globally.
+- Context Pack Minimization security review: accepted; removed items stay in `excludedItems` as `user_hidden`, source snippets and max sensitivity are recalculated, and external AI retrieves only the confirmed edited Pack.
+- Context Pack Minimization technical review: accepted; Pack item visibility, confirmation, and denial now have Rust-owned Vault Core commands with projection sync and audit events.
+- Context Pack Minimization UX review: accepted; desktop and mobile Requests screens show send counts, removed Facts, and restore controls without horizontal overflow.
 
 ### Relay State Store Slice
 

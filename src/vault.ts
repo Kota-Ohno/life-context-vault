@@ -948,13 +948,148 @@ function buildContextPackWithOptions(
     if (snippet) sourceSnippets.push(snippet);
   }
 
-  if (items.some((item) => sensitivityRank[item.sensitivity] >= 2)) {
+  warnings.push(...warningsForContextItems(state, items, excludedItems));
+  const maxSensitivityIncluded = maxSensitivityForContextItems(items);
+
+  return {
+    id: newId("pack"),
+    requestId: options.requestId,
+    taskText,
+    taskDomain,
+    riskLevel,
+    generatedAt: nowIso(),
+    expiresAt: options.expiresAt,
+    maxSensitivityIncluded,
+    items,
+    sourceSnippets,
+    excludedItems,
+    warnings,
+    confirmationStatus:
+      options.approvalMode === "always_review" ||
+      sensitivityRank[maxSensitivityIncluded] >= 2
+        ? "pending_user_confirmation"
+        : "not_required"
+  };
+}
+
+function removeFactFromPack(
+  state: VaultState,
+  pack: ContextPack,
+  factId: string,
+  sensitivityCeiling: SensitivityTier
+): ContextPack {
+  if (!pack.items.some((item) => item.factId === factId)) return pack;
+  const items = pack.items.filter((item) => item.factId !== factId);
+  const excludedItems = pack.excludedItems.some(
+    (item) => item.referencedId === factId && item.reason === "user_hidden"
+  )
+    ? pack.excludedItems
+    : [{ referencedId: factId, reason: "user_hidden" as const }, ...pack.excludedItems];
+  return refreshEditedContextPack(state, pack, items, excludedItems, sensitivityCeiling);
+}
+
+function restoreFactToPack(
+  state: VaultState,
+  pack: ContextPack,
+  factId: string,
+  sensitivityCeiling: SensitivityTier
+): ContextPack {
+  if (pack.items.some((item) => item.factId === factId)) return pack;
+  const fact = state.facts.find((item) => item.id === factId);
+  if (!fact || !factEligibleForContextPack(fact, sensitivityCeiling)) return pack;
+  const restoredItem = contextPackItemForFact(state, fact, pack.taskDomain, sensitivityCeiling);
+  const items = [...pack.items, restoredItem].sort((a, b) =>
+    contextPackFactOrder(state, pack, a.factId) - contextPackFactOrder(state, pack, b.factId)
+  );
+  const excludedItems = pack.excludedItems.filter(
+    (item) => !(item.referencedId === factId && item.reason === "user_hidden")
+  );
+  return refreshEditedContextPack(state, pack, items, excludedItems, sensitivityCeiling);
+}
+
+function refreshEditedContextPack(
+  state: VaultState,
+  pack: ContextPack,
+  items: ContextPackItem[],
+  excludedItems: ContextPack["excludedItems"],
+  sensitivityCeiling: SensitivityTier
+): ContextPack {
+  return {
+    ...pack,
+    items,
+    sourceSnippets: sourceSnippetsForContextItems(state, items, sensitivityCeiling),
+    excludedItems,
+    warnings: warningsForContextItems(state, items, excludedItems),
+    maxSensitivityIncluded: maxSensitivityForContextItems(items),
+    confirmationStatus: "edited_by_user",
+    confirmedAt: undefined,
+    localAnswer: undefined
+  };
+}
+
+function contextPackItemForFact(
+  state: VaultState,
+  fact: ApprovedFact,
+  taskDomain: ContextPack["taskDomain"],
+  sensitivityCeiling: SensitivityTier
+): ContextPackItem {
+  return {
+    id: newId("ctxitem"),
+    factId: fact.id,
+    itemText: fact.factText,
+    reasonIncluded:
+      fact.domain === taskDomain
+        ? "質問の領域と一致しています。"
+        : "本人の背景情報として回答を調整できます。",
+    sensitivity: fact.sensitivity,
+    sourceTitles: sourceTitlesForFact(state, fact, sensitivityCeiling),
+    validFrom: fact.validFrom,
+    validUntil: fact.validUntil,
+    confidence: fact.confidence
+  };
+}
+
+function factEligibleForContextPack(fact: ApprovedFact, sensitivityCeiling: SensitivityTier): boolean {
+  return (
+    fact.status === "active" &&
+    fact.sensitivity !== "secret_never_send" &&
+    sensitivityRank[fact.sensitivity] <= sensitivityRank[sensitivityCeiling] &&
+    !(fact.validUntil && isExpired(fact.validUntil))
+  );
+}
+
+function sourceSnippetsForContextItems(
+  state: VaultState,
+  items: ContextPackItem[],
+  sensitivityCeiling: SensitivityTier
+): NonNullable<ContextPack["sourceSnippets"]> {
+  const snippets: NonNullable<ContextPack["sourceSnippets"]> = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const fact = state.facts.find((fact) => fact.id === item.factId);
+    if (!fact) continue;
+    const snippet = sourceSnippetForFact(state, fact, sensitivityCeiling);
+    if (!snippet || seen.has(snippet.id)) continue;
+    snippets.push(snippet);
+    seen.add(snippet.id);
+  }
+  return snippets;
+}
+
+function warningsForContextItems(
+  state: VaultState,
+  items: ContextPackItem[],
+  excludedItems: ContextPack["excludedItems"]
+): ContextPack["warnings"] {
+  const warnings: ContextPack["warnings"] = [];
+  const sensitiveIds = items
+    .filter((item) => sensitivityRank[item.sensitivity] >= 2)
+    .map((item) => item.factId);
+  if (sensitiveIds.length > 0) {
     warnings.push({
       kind: "sensitive_context",
       message: "このContext Packには私的またはセンシティブな背景情報が含まれます。",
-      relatedIds: items
-        .filter((item) => sensitivityRank[item.sensitivity] >= 2)
-        .map((item) => item.factId)
+      relatedIds: sensitiveIds
     });
   }
   const lowConfidenceIds = items
@@ -977,6 +1112,26 @@ function buildContextPackWithOptions(
       relatedIds: staleIds
     });
   }
+  const excludedExpiredIds = excludedItems
+    .filter((item) => item.reason === "expired")
+    .map((item) => item.referencedId);
+  if (excludedExpiredIds.length > 0) {
+    warnings.push({
+      kind: "stale_fact",
+      message: "期限切れまたは古い可能性がある背景情報は除外されました。",
+      relatedIds: excludedExpiredIds
+    });
+  }
+  const policyLimitedIds = excludedItems
+    .filter((item) => item.reason === "sensitivity_policy")
+    .map((item) => item.referencedId);
+  if (policyLimitedIds.length > 0) {
+    warnings.push({
+      kind: "policy_limited",
+      message: "一部の背景情報はAI接続の感度ポリシーにより除外されました。",
+      relatedIds: policyLimitedIds
+    });
+  }
   const sourceDeletedIds = items
     .filter((item) =>
       state.facts
@@ -991,32 +1146,23 @@ function buildContextPackWithOptions(
       relatedIds: sourceDeletedIds
     });
   }
+  return warnings;
+}
 
-  const maxSensitivityIncluded = items.reduce<SensitivityTier>(
+function maxSensitivityForContextItems(items: ContextPackItem[]): SensitivityTier {
+  return items.reduce<SensitivityTier>(
     (max, item) =>
       sensitivityRank[item.sensitivity] > sensitivityRank[max] ? item.sensitivity : max,
     "public"
   );
+}
 
-  return {
-    id: newId("pack"),
-    requestId: options.requestId,
-    taskText,
-    taskDomain,
-    riskLevel,
-    generatedAt: nowIso(),
-    expiresAt: options.expiresAt,
-    maxSensitivityIncluded,
-    items,
-    sourceSnippets,
-    excludedItems,
-    warnings,
-    confirmationStatus:
-      options.approvalMode === "always_review" ||
-      sensitivityRank[maxSensitivityIncluded] >= 2
-        ? "pending_user_confirmation"
-        : "not_required"
-  };
+function contextPackFactOrder(state: VaultState, pack: ContextPack, factId: string): number {
+  const currentIndex = pack.items.findIndex((item) => item.factId === factId);
+  if (currentIndex >= 0) return currentIndex;
+  const fact = state.facts.find((item) => item.id === factId);
+  if (!fact) return Number.MAX_SAFE_INTEGER;
+  return state.facts.findIndex((item) => item.id === fact.id) + pack.items.length;
 }
 
 export function saveContextPack(state: VaultState, pack: ContextPack): VaultState {
@@ -1050,6 +1196,48 @@ export function confirmContextPack(state: VaultState, packId: string): VaultStat
     auditEvents: [
       audit("context_pack_confirmed", "context_pack", packId, pack.maxSensitivityIncluded, {
         requestId: pack.requestId
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+export function updateContextPackItemVisibility(
+  state: VaultState,
+  packId: string,
+  factId: string,
+  included: boolean
+): VaultState {
+  const pack = state.contextPacks.find((item) => item.id === packId);
+  if (!pack || pack.confirmationStatus === "cancelled" || pack.confirmationStatus === "confirmed") {
+    return state;
+  }
+  const request = pack.requestId
+    ? state.contextPackRequests.find((item) => item.id === pack.requestId)
+    : null;
+  if (request && ["denied", "expired", "fulfilled"].includes(request.status)) {
+    return state;
+  }
+
+  const ceiling = request?.sensitivityCeiling ?? pack.maxSensitivityIncluded;
+  const nextPack = included
+    ? restoreFactToPack(state, pack, factId, ceiling)
+    : removeFactFromPack(state, pack, factId, ceiling);
+  if (nextPack === pack) return state;
+
+  return {
+    ...state,
+    contextPacks: state.contextPacks.map((item) => (item.id === packId ? nextPack : item)),
+    contextPackRequests: state.contextPackRequests.map((item) =>
+      pack.requestId && item.id === pack.requestId ? { ...item, status: "pending_user_confirmation" as const } : item
+    ),
+    auditEvents: [
+      audit("context_pack_updated", "context_pack", packId, nextPack.maxSensitivityIncluded, {
+        requestId: pack.requestId,
+        factId,
+        action: included ? "restored_item" : "excluded_item",
+        itemCount: nextPack.items.length,
+        excludedCount: nextPack.excludedItems.length
       }),
       ...state.auditEvents
     ]

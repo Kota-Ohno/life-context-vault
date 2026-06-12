@@ -504,6 +504,8 @@ Required behavior:
 - Context Packs with Tier 2 or Tier 3 items require user confirmation before LLM send.
 - Context Packs may be edited by the user before sending.
 - If edited, only the edited pack is sent.
+- User-removed items must remain visible as `excluded_items` with reason `user_hidden`.
+- Editing a Context Pack must recalculate `items`, `source_snippets`, `warnings`, and `max_sensitivity_included`, clear any previous confirmation timestamp, and write a `context_pack_updated` audit event.
 
 ### AuditEvent
 
@@ -522,7 +524,9 @@ type AuditEvent = {
     | "fact_deleted"
     | "policy_changed"
     | "context_pack_generated"
+    | "context_pack_updated"
     | "context_pack_confirmed"
+    | "context_pack_denied"
     | "llm_payload_sent"
     | "backup_created"
     | "restore_completed";

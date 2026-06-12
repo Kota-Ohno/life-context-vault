@@ -970,10 +970,9 @@ button:focus-visible {
 
 .request-row small {
   grid-column: 1 / -1;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: #667267;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .request-detail {
@@ -1148,6 +1147,24 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.pack-scope-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d9e1d6;
+  border-radius: 8px;
+  background: #f7faf4;
+  color: #405046;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.pack-scope-summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .context-item {
   display: grid;
   gap: 8px;
@@ -1159,11 +1176,20 @@ button:focus-visible {
   line-height: 1.45;
 }
 
-.context-item div {
+.context-item div,
+.context-item-footer {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.context-item-footer {
+  justify-content: space-between;
+}
+
+.context-item-footer > div {
+  min-width: 0;
 }
 
 .exclusion-list {
@@ -1191,6 +1217,42 @@ button:focus-visible {
   border: 1px solid #d7ddd4;
   border-radius: 999px;
   background: #ffffff;
+}
+
+.excluded-context-items {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dfe5dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.excluded-context-items > strong {
+  color: #405046;
+  font-size: 13px;
+}
+
+.excluded-context-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.excluded-context-item span {
+  min-width: 0;
+  color: #667267;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.context-item-footer .secondary-button,
+.excluded-context-item .secondary-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .answer-box {
@@ -1346,6 +1408,17 @@ button:focus-visible {
   .fact-actions {
     justify-content: flex-start;
     min-width: 0;
+  }
+
+  .context-item-footer,
+  .excluded-context-item {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .context-item-footer .secondary-button,
+  .excluded-context-item .secondary-button {
+    justify-self: start;
   }
 
   .fact-edit-grid {

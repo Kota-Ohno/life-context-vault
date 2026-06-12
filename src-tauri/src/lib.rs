@@ -143,6 +143,16 @@ struct NativeContextPackBuildResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NativeContextPackMutationResult {
+  payload: String,
+  updated_at: Option<String>,
+  request_id: Option<String>,
+  pack_id: Option<String>,
+  generated_by: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NativeSourceIngestResult {
   payload: String,
   updated_at: Option<String>,
@@ -242,6 +252,13 @@ pub struct VaultCoreContextPackResult {
   pub max_sensitivity_included: String,
   pub confirmation_status: String,
   pub context_pack: Option<Value>,
+}
+
+pub struct VaultCoreContextPackMutationResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub request_id: Option<String>,
+  pub pack_id: Option<String>,
 }
 
 pub struct VaultCoreMemoryProposalResult {
@@ -1291,6 +1308,159 @@ pub fn create_context_pack_request_at_path(
     max_sensitivity_included,
     confirmation_status,
     context_pack,
+  })
+}
+
+pub fn update_context_pack_item_visibility_at_path(
+  path: &Path,
+  pack_id: &str,
+  fact_id: &str,
+  included: bool,
+) -> Result<VaultCoreContextPackMutationResult, String> {
+  let pack_id = pack_id.trim();
+  let fact_id = fact_id.trim();
+  if pack_id.is_empty() {
+    return Err("packId is required.".to_string());
+  }
+  if fact_id.is_empty() {
+    return Err("factId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let pack = find_vault_item_by_id(&vault, "contextPacks", pack_id)
+    .ok_or_else(|| format!("ContextPack was not found: {pack_id}"))?;
+  ensure_pack_can_be_edited(&mut vault, &pack)?;
+  let request_id = optional_str_field(&pack, "requestId");
+  let ceiling = request_id
+    .as_deref()
+    .and_then(|id| find_vault_item_by_id(&vault, "contextPackRequests", id))
+    .map(|request| str_field(&request, "sensitivityCeiling"))
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| str_field(&pack, "maxSensitivityIncluded"));
+  let ceiling = sensitivity_tier(&ceiling)?;
+
+  let next_pack = if included {
+    restore_fact_to_context_pack(&connection, &pack, fact_id, ceiling)?
+  } else {
+    remove_fact_from_context_pack(&connection, &pack, fact_id, ceiling)?
+  };
+  let changed = next_pack != pack;
+  if changed {
+    replace_vault_item_by_id(&mut vault, "contextPacks", pack_id, next_pack.clone())?;
+    if let Some(request_id) = request_id.as_deref() {
+      set_context_request_status(&mut vault, request_id, "pending_user_confirmation");
+    }
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "context_pack_updated",
+        "context_pack",
+        pack_id,
+        &str_field(&next_pack, "maxSensitivityIncluded"),
+        json!({
+          "requestId": request_id,
+          "factId": fact_id,
+          "action": if included { "restored_item" } else { "excluded_item" },
+          "itemCount": next_pack.get("items").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+          "excludedCount": next_pack.get("excludedItems").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+          "generatedBy": "native_vault_core"
+        }),
+      ),
+    );
+  }
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreContextPackMutationResult {
+    payload,
+    updated_at,
+    request_id,
+    pack_id: Some(pack_id.to_string()),
+  })
+}
+
+pub fn confirm_context_pack_at_path(
+  path: &Path,
+  pack_id: &str,
+) -> Result<VaultCoreContextPackMutationResult, String> {
+  let pack_id = pack_id.trim();
+  if pack_id.is_empty() {
+    return Err("packId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let pack = find_vault_item_by_id(&vault, "contextPacks", pack_id)
+    .ok_or_else(|| format!("ContextPack was not found: {pack_id}"))?;
+  if str_field(&pack, "confirmationStatus") == "cancelled" {
+    return Err("cancelled ContextPacks cannot be confirmed.".to_string());
+  }
+  ensure_pack_not_expired(&mut vault, &pack)?;
+  let request_id = optional_str_field(&pack, "requestId");
+  let now = now_iso();
+  mutate_vault_item_by_id(&mut vault, "contextPacks", pack_id, |pack| {
+    pack["confirmationStatus"] = Value::String("confirmed".to_string());
+    pack["confirmedAt"] = Value::String(now.clone());
+  })?;
+  if let Some(request_id) = request_id.as_deref() {
+    set_context_request_status(&mut vault, request_id, "fulfilled");
+  }
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "context_pack_confirmed",
+      "context_pack",
+      pack_id,
+      &str_field(&pack, "maxSensitivityIncluded"),
+      json!({
+        "requestId": request_id,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreContextPackMutationResult {
+    payload,
+    updated_at,
+    request_id,
+    pack_id: Some(pack_id.to_string()),
+  })
+}
+
+pub fn deny_context_pack_request_at_path(
+  path: &Path,
+  request_id: &str,
+) -> Result<VaultCoreContextPackMutationResult, String> {
+  let request_id = request_id.trim();
+  if request_id.is_empty() {
+    return Err("requestId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let request = find_vault_item_by_id(&vault, "contextPackRequests", request_id)
+    .ok_or_else(|| format!("ContextPackRequest was not found: {request_id}"))?;
+  set_context_request_status(&mut vault, request_id, "denied");
+  let pack_id = cancel_context_packs_for_request(&mut vault, request_id);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "context_pack_denied",
+      "context_pack_request",
+      request_id,
+      &str_field(&request, "sensitivityCeiling"),
+      json!({
+        "clientName": str_field(&request, "clientName"),
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreContextPackMutationResult {
+    payload,
+    updated_at,
+    request_id: Some(request_id.to_string()),
+    pack_id,
   })
 }
 
@@ -2381,6 +2551,296 @@ fn safe_context_pack_for_client(pack: &Value) -> Value {
     "excludedItems": pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
     "confirmationStatus": str_field(pack, "confirmationStatus")
   })
+}
+
+fn ensure_pack_can_be_edited(vault: &mut Value, pack: &Value) -> Result<(), String> {
+  let status = str_field(pack, "confirmationStatus");
+  if status == "cancelled" {
+    return Err("cancelled ContextPacks cannot be edited.".to_string());
+  }
+  if status == "confirmed" {
+    return Err("confirmed ContextPacks cannot be edited. Create a new request instead.".to_string());
+  }
+  ensure_pack_not_expired(vault, pack)?;
+  if let Some(request_id) = optional_str_field(pack, "requestId") {
+    if let Some(request) = find_vault_item_by_id(vault, "contextPackRequests", &request_id) {
+      let request_status = str_field(&request, "status");
+      if matches!(request_status.as_str(), "denied" | "expired" | "fulfilled") {
+        return Err(format!("ContextPackRequest is already {request_status}."));
+      }
+    }
+  }
+  Ok(())
+}
+
+fn ensure_pack_not_expired(vault: &mut Value, pack: &Value) -> Result<(), String> {
+  let expires_at = optional_str_field(pack, "expiresAt")
+    .or_else(|| {
+      optional_str_field(pack, "requestId")
+        .and_then(|request_id| find_vault_item_by_id(vault, "contextPackRequests", &request_id))
+        .and_then(|request| optional_str_field(&request, "expiresAt"))
+    })
+    .unwrap_or_default();
+  if !expires_at.is_empty() && is_expired(&expires_at) {
+    if let Some(request_id) = optional_str_field(pack, "requestId") {
+      set_context_request_status(vault, &request_id, "expired");
+    }
+    return Err("ContextPack has expired. Create a new request.".to_string());
+  }
+  Ok(())
+}
+
+fn remove_fact_from_context_pack(
+  connection: &Connection,
+  pack: &Value,
+  fact_id: &str,
+  ceiling: &str,
+) -> Result<Value, String> {
+  let items = pack
+    .get("items")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  if !items
+    .iter()
+    .any(|item| item.get("factId").and_then(Value::as_str) == Some(fact_id))
+  {
+    return Ok(pack.clone());
+  }
+  let next_items = items
+    .into_iter()
+    .filter(|item| item.get("factId").and_then(Value::as_str) != Some(fact_id))
+    .collect::<Vec<_>>();
+  let mut excluded_items = pack
+    .get("excludedItems")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  let already_excluded = excluded_items.iter().any(|item| {
+    item.get("referencedId").and_then(Value::as_str) == Some(fact_id)
+      && item.get("reason").and_then(Value::as_str) == Some("user_hidden")
+  });
+  if !already_excluded {
+    excluded_items.insert(0, json!({ "referencedId": fact_id, "reason": "user_hidden" }));
+  }
+  refresh_user_edited_context_pack(connection, pack, next_items, excluded_items, ceiling)
+}
+
+fn restore_fact_to_context_pack(
+  connection: &Connection,
+  pack: &Value,
+  fact_id: &str,
+  ceiling: &str,
+) -> Result<Value, String> {
+  let mut items = pack
+    .get("items")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  if items
+    .iter()
+    .any(|item| item.get("factId").and_then(Value::as_str) == Some(fact_id))
+  {
+    return Ok(pack.clone());
+  }
+  let fact = fact_by_id_in_connection(connection, fact_id)?
+    .ok_or_else(|| format!("ApprovedFact was not found: {fact_id}"))?;
+  if !fact_eligible_for_context_pack(&fact, ceiling) {
+    return Err("Fact is not eligible for this Context Pack.".to_string());
+  }
+  let task_domain = str_field(pack, "taskDomain");
+  items.push(context_pack_item_from_fact(connection, &fact, &task_domain, ceiling)?);
+  let excluded_items = pack
+    .get("excludedItems")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|item| {
+      !(item.get("referencedId").and_then(Value::as_str) == Some(fact_id)
+        && item.get("reason").and_then(Value::as_str) == Some("user_hidden"))
+    })
+    .collect::<Vec<_>>();
+  refresh_user_edited_context_pack(connection, pack, items, excluded_items, ceiling)
+}
+
+fn refresh_user_edited_context_pack(
+  connection: &Connection,
+  pack: &Value,
+  items: Vec<Value>,
+  excluded_items: Vec<Value>,
+  ceiling: &str,
+) -> Result<Value, String> {
+  let mut next_pack = pack.clone();
+  let snippets = source_snippets_for_context_items(connection, &items, ceiling)?;
+  next_pack["items"] = Value::Array(items.clone());
+  next_pack["sourceSnippets"] = Value::Array(snippets);
+  next_pack["excludedItems"] = Value::Array(excluded_items.clone());
+  next_pack["warnings"] = Value::Array(context_pack_warnings(connection, &items, &excluded_items)?);
+  next_pack["maxSensitivityIncluded"] = Value::String(max_sensitivity_for_items(&items).to_string());
+  next_pack["confirmationStatus"] = Value::String("edited_by_user".to_string());
+  if let Some(object) = next_pack.as_object_mut() {
+    object.remove("confirmedAt");
+    object.remove("localAnswer");
+  }
+  Ok(next_pack)
+}
+
+fn context_pack_item_from_fact(
+  connection: &Connection,
+  fact: &NativeFactSearchResult,
+  task_domain: &str,
+  ceiling: &str,
+) -> Result<Value, String> {
+  Ok(json!({
+    "id": new_id("ctxitem"),
+    "factId": fact.id,
+    "itemText": fact.fact_text,
+    "reasonIncluded": if fact.domain == task_domain {
+      "質問の領域と一致しています。"
+    } else {
+      "本人の背景情報として回答を調整できます。"
+    },
+    "sensitivity": fact.sensitivity,
+    "sourceTitles": source_titles_in_connection(connection, &fact.source_ids, ceiling)?,
+    "validFrom": fact.valid_from,
+    "validUntil": fact.valid_until,
+    "confidence": fact.confidence
+  }))
+}
+
+fn fact_eligible_for_context_pack(fact: &NativeFactSearchResult, ceiling: &str) -> bool {
+  fact.status == "active"
+    && fact.sensitivity != "secret_never_send"
+    && sensitivity_rank(&fact.sensitivity) <= sensitivity_rank(ceiling)
+    && fact
+      .valid_until
+      .as_deref()
+      .map(is_expired)
+      .unwrap_or(false)
+      == false
+}
+
+fn source_snippets_for_context_items(
+  connection: &Connection,
+  items: &[Value],
+  ceiling: &str,
+) -> Result<Vec<Value>, String> {
+  let mut snippets = Vec::new();
+  let mut seen_source_ids = HashSet::new();
+  for fact_id in items
+    .iter()
+    .filter_map(|item| item.get("factId").and_then(Value::as_str))
+  {
+    let Some(fact) = fact_by_id_in_connection(connection, fact_id)? else {
+      continue;
+    };
+    let Some(snippet) = source_snippet_for_fact(connection, &fact, ceiling)? else {
+      continue;
+    };
+    let source_id = str_field(&snippet, "sourceId");
+    if seen_source_ids.insert(source_id) {
+      snippets.push(snippet);
+    }
+  }
+  Ok(snippets)
+}
+
+fn max_sensitivity_for_items(items: &[Value]) -> &'static str {
+  let mut max = "public";
+  for sensitivity in items
+    .iter()
+    .filter_map(|item| item.get("sensitivity").and_then(Value::as_str))
+  {
+    if sensitivity_rank(sensitivity) > sensitivity_rank(max) {
+      max = sensitivity_tier(sensitivity).unwrap_or("secret_never_send");
+    }
+  }
+  max
+}
+
+fn fact_by_id_in_connection(
+  connection: &Connection,
+  fact_id: &str,
+) -> Result<Option<NativeFactSearchResult>, String> {
+  connection
+    .query_row(
+      "SELECT
+         id,
+         fact_text,
+         domain,
+         fact_type,
+         source_ids,
+         sensitivity,
+         confidence,
+         status,
+         valid_from,
+         valid_until,
+         due_date,
+         created_at,
+         approved_at,
+         updated_at,
+         0.0 AS rank
+       FROM facts
+       WHERE id = ?1",
+      params![fact_id],
+      row_to_native_fact_search_result,
+    )
+    .optional()
+    .map_err(|error| format!("failed to read fact {fact_id}: {error}"))
+}
+
+fn replace_vault_item_by_id(
+  vault: &mut Value,
+  key: &str,
+  id: &str,
+  next_value: Value,
+) -> Result<(), String> {
+  mutate_vault_item_by_id(vault, key, id, |item| {
+    *item = next_value.clone();
+  })
+}
+
+fn mutate_vault_item_by_id<F>(vault: &mut Value, key: &str, id: &str, mut mutate: F) -> Result<(), String>
+where
+  F: FnMut(&mut Value),
+{
+  let Some(items) = vault.get_mut(key).and_then(Value::as_array_mut) else {
+    return Err(format!("Vault has no {key} array."));
+  };
+  let Some(item) = items.iter_mut().find(|item| str_field(item, "id") == id) else {
+    return Err(format!("{key} item was not found: {id}"));
+  };
+  mutate(item);
+  Ok(())
+}
+
+fn set_context_request_status(vault: &mut Value, request_id: &str, status: &str) {
+  if let Some(requests) = vault
+    .get_mut("contextPackRequests")
+    .and_then(Value::as_array_mut)
+  {
+    for request in requests {
+      if str_field(request, "id") == request_id {
+        request["status"] = Value::String(status.to_string());
+      }
+    }
+  }
+}
+
+fn cancel_context_packs_for_request(vault: &mut Value, request_id: &str) -> Option<String> {
+  let mut first_pack_id = None;
+  if let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) {
+    for pack in packs {
+      if str_field(pack, "requestId") == request_id {
+        if first_pack_id.is_none() {
+          first_pack_id = optional_str_field(pack, "id");
+        }
+        pack["confirmationStatus"] = Value::String("cancelled".to_string());
+      }
+    }
+  }
+  first_pack_id
 }
 
 fn rank_context_facts_in_connection(
@@ -4589,6 +5049,56 @@ fn create_native_context_pack_request(
 }
 
 #[tauri::command]
+fn update_native_context_pack_item_visibility(
+  app: AppHandle,
+  pack_id: String,
+  fact_id: String,
+  included: bool,
+) -> Result<NativeContextPackMutationResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_context_pack_item_visibility_at_path(&path, &pack_id, &fact_id, included)?;
+  Ok(NativeContextPackMutationResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    request_id: result.request_id,
+    pack_id: result.pack_id,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
+fn confirm_native_context_pack(
+  app: AppHandle,
+  pack_id: String,
+) -> Result<NativeContextPackMutationResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = confirm_context_pack_at_path(&path, &pack_id)?;
+  Ok(NativeContextPackMutationResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    request_id: result.request_id,
+    pack_id: result.pack_id,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
+fn deny_native_context_pack_request(
+  app: AppHandle,
+  request_id: String,
+) -> Result<NativeContextPackMutationResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = deny_context_pack_request_at_path(&path, &request_id)?;
+  Ok(NativeContextPackMutationResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    request_id: result.request_id,
+    pack_id: result.pack_id,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn add_native_source_with_candidates(
   app: AppHandle,
   kind: String,
@@ -4934,6 +5444,9 @@ pub fn run() {
       vault_storage_path,
       search_vault_facts,
       create_native_context_pack_request,
+      update_native_context_pack_item_visibility,
+      confirm_native_context_pack,
+      deny_native_context_pack_request,
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
@@ -6351,6 +6864,118 @@ mod tests {
         .unwrap_or_default()
         .contains("RAW_POLICY_BODY")
     );
+  }
+
+  #[test]
+  fn native_context_pack_item_visibility_minimizes_ai_bound_pack() {
+    use_test_vault_key();
+    let path = temp_vault_path("context-pack-minimize");
+    let public_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Library note",
+      "Need to renew library card by 2027-01-10.",
+    )
+    .expect("public source");
+    let private_source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Rent contract note",
+      "Need to renew apartment rent contract by 2027-01-15.",
+    )
+    .expect("private source");
+    approve_candidate_at_path(
+      &path,
+      public_source.candidate_ids.first().expect("public candidate"),
+      None,
+    )
+    .expect("approve public candidate");
+    let private_approval = approve_candidate_at_path(
+      &path,
+      private_source.candidate_ids.first().expect("private candidate"),
+      None,
+    )
+    .expect("approve private candidate");
+    let private_fact_id = private_approval.fact_id.expect("private fact id");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me plan the library card and apartment rent contract renewal",
+      Some("普段使うAIへの回答文脈"),
+      Some("sensitive"),
+      Some("always_review"),
+    )
+    .expect("context pack");
+    let built_vault: Value = serde_json::from_str(&built.payload).expect("built vault");
+    let built_pack = find_vault_item_by_id(&built_vault, "contextPacks", &built.pack_id)
+      .expect("built pack");
+    assert!(built_pack
+      .get("items")
+      .and_then(Value::as_array)
+      .map(|items| {
+        items.iter().any(|item| {
+          item.get("factId").and_then(Value::as_str) == Some(private_fact_id.as_str())
+        })
+      })
+      .unwrap_or(false));
+
+    let edited = update_context_pack_item_visibility_at_path(
+      &path,
+      &built.pack_id,
+      &private_fact_id,
+      false,
+    )
+    .expect("minimize pack");
+    let edited_vault: Value = serde_json::from_str(&edited.payload).expect("edited vault");
+    let edited_pack = find_vault_item_by_id(&edited_vault, "contextPacks", &built.pack_id)
+      .expect("edited pack");
+    assert_eq!(
+      edited_pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("edited_by_user")
+    );
+    assert!(edited_pack
+      .get("items")
+      .and_then(Value::as_array)
+      .map(|items| {
+        items.iter().all(|item| {
+          item.get("factId").and_then(Value::as_str) != Some(private_fact_id.as_str())
+        })
+      })
+      .unwrap_or(false));
+    assert!(edited_pack
+      .get("excludedItems")
+      .and_then(Value::as_array)
+      .map(|items| {
+        items.iter().any(|item| {
+          item.get("referencedId").and_then(Value::as_str) == Some(private_fact_id.as_str())
+            && item.get("reason").and_then(Value::as_str) == Some("user_hidden")
+        })
+      })
+      .unwrap_or(false));
+    assert_eq!(
+      edited_pack
+        .get("maxSensitivityIncluded")
+        .and_then(Value::as_str),
+      Some("public")
+    );
+
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm minimized pack");
+    let status = get_context_request_status_at_path(&path, &built.request_id).expect("request status");
+    let client_pack = status.context_pack.expect("client context pack");
+    let client_items = client_pack
+      .get("items")
+      .and_then(Value::as_array)
+      .cloned()
+      .unwrap_or_default();
+    let client_items_payload = Value::Array(client_items).to_string();
+
+    assert_eq!(status.status, "fulfilled");
+    assert!(!client_items_payload.contains("apartment rent contract"));
+    assert!(client_pack.to_string().contains("user_hidden"));
+    remove_temp_vault(&path);
   }
 
   #[test]

@@ -38,7 +38,9 @@ import {
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   approveNativeCandidate,
+  confirmNativeContextPack,
   createNativeContextPackRequest,
+  denyNativeContextPackRequest,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
@@ -53,6 +55,7 @@ import {
   stopAiAccessServices,
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
+  updateNativeContextPackItemVisibility,
   updateNativeFactLifecycle,
   updateNativeFactMetadata,
   updateNativePassiveCaptureSettings,
@@ -94,6 +97,7 @@ import {
   updateFactMetadata,
   updatePassiveCaptureSettings,
   updateCandidateStatus,
+  updateContextPackItemVisibility,
   updateSourceMetadata,
   updateSourceLifecycle
 } from "./vault";
@@ -876,13 +880,56 @@ export function App() {
     );
   }
 
-  function approvePackForAi(pack: ContextPack) {
+  async function changePackItemVisibility(pack: ContextPack, factId: string, included: boolean) {
+    const verb = included ? "Context Packへ戻しました。" : "このAIには渡さないようContext Packから外しました。";
+    if (nativePath) {
+      try {
+        const updated = await updateNativeContextPackItemVisibility({
+          packId: pack.id,
+          factId,
+          included
+        });
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setActivePackId(updated.packId ?? pack.id);
+          if (updated.requestId) setActiveRequestId(updated.requestId);
+          setNotice(verb);
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを更新できませんでした。");
+        return;
+      }
+    }
+    apply(updateContextPackItemVisibility(state, pack.id, factId, included), verb);
+  }
+
+  async function approvePackForAi(pack: ContextPack) {
     const request = pack.requestId
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
       : null;
     if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
       setNotice("このContext PackはすでにAIへ返せる状態です。");
       return;
+    }
+    if (nativePath) {
+      try {
+        const updated = await confirmNativeContextPack(pack.id);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setActivePackId(updated.packId ?? pack.id);
+          if (updated.requestId) setActiveRequestId(updated.requestId);
+          setNotice("Context Packを承認しました。外部AIはget_request_statusで取得できます。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを承認できませんでした。");
+        return;
+      }
     }
     apply(
       confirmContextPack(state, pack.id),
@@ -895,11 +942,28 @@ export function App() {
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
       : null;
     const shouldConfirm = pack.confirmationStatus !== "confirmed" || request?.status !== "fulfilled";
-    const payloadPack = shouldConfirm
+    let payloadPack = shouldConfirm
       ? { ...pack, confirmationStatus: "confirmed" as const, confirmedAt: new Date().toISOString() }
       : pack;
     if (shouldConfirm) {
-      setState(confirmContextPack(state, pack.id));
+      if (nativePath) {
+        try {
+          const updated = await confirmNativeContextPack(pack.id);
+          if (updated) {
+            nativeRevisionRef.current = updated.updatedAt;
+            setNativeRevision(updated.updatedAt);
+            setState(updated.state);
+            setActivePackId(updated.packId ?? pack.id);
+            if (updated.requestId) setActiveRequestId(updated.requestId);
+            payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
+          }
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを承認できませんでした。");
+          return;
+        }
+      } else {
+        setState(confirmContextPack(state, pack.id));
+      }
     }
     await copyText(
       JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2),
@@ -909,8 +973,25 @@ export function App() {
     );
   }
 
-  function denyActiveRequest() {
+  async function denyActiveRequest() {
     if (!activeRequestId) return;
+    if (nativePath) {
+      try {
+        const updated = await denyNativeContextPackRequest(activeRequestId);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setActivePackId(updated.packId);
+          setActiveRequestId(updated.requestId ?? activeRequestId);
+          setNotice("このContext Requestを拒否しました。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Requestを拒否できませんでした。");
+        return;
+      }
+    }
     apply(denyContextPackRequest(state, activeRequestId), "このContext Requestを拒否しました。");
   }
 
@@ -1385,10 +1466,12 @@ export function App() {
             }}
             currentRequest={currentRequest}
             currentPack={currentPack}
+            facts={state.facts}
             approvePackForAi={approvePackForAi}
             copyPackForAi={copyPackForAi}
             generateAnswer={generateAnswer}
             denyActiveRequest={denyActiveRequest}
+            changePackItemVisibility={changePackItemVisibility}
           />
         )}
         {view === "search" && (
@@ -2664,10 +2747,12 @@ function ContextRequestsView({
   setActiveRequest,
   currentRequest,
   currentPack,
+  facts,
   approvePackForAi,
   copyPackForAi,
   generateAnswer,
-  denyActiveRequest
+  denyActiveRequest,
+  changePackItemVisibility
 }: {
   question: string;
   setQuestion: (value: string) => void;
@@ -2679,10 +2764,12 @@ function ContextRequestsView({
   setActiveRequest: (request: ContextPackRequest) => void;
   currentRequest: ContextPackRequest | null;
   currentPack: ContextPack | null;
+  facts: ApprovedFact[];
   approvePackForAi: (pack: ContextPack) => void;
   copyPackForAi: (pack: ContextPack) => void;
   generateAnswer: (pack: ContextPack) => void;
   denyActiveRequest: () => void;
+  changePackItemVisibility: (pack: ContextPack, factId: string, included: boolean) => void;
 }) {
   const aiReady =
     currentPack?.confirmationStatus === "confirmed" ||
@@ -2691,6 +2778,14 @@ function ContextRequestsView({
     currentRequest?.status === "denied" ||
     currentRequest?.status === "expired" ||
     currentPack?.confirmationStatus === "cancelled";
+  const hiddenExcludedFacts = currentPack
+    ? currentPack.excludedItems
+        .filter((item) => item.reason === "user_hidden")
+        .map((item) => ({
+          exclusion: item,
+          fact: facts.find((fact) => fact.id === item.referencedId)
+        }))
+    : [];
 
   return (
     <section className="ask-layout">
@@ -2772,6 +2867,12 @@ function ContextRequestsView({
               <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
               <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
             </div>
+            <div className="pack-scope-summary">
+              <ShieldCheck size={16} />
+              <span>
+                {currentPack.items.length}件のFactと{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
+              </span>
+            </div>
             {currentPack.warnings.map((warning) => (
               <div className="warning-line" key={warning.message}>
                 <ShieldAlert size={16} />
@@ -2782,9 +2883,20 @@ function ContextRequestsView({
               {currentPack.items.map((item) => (
                 <div className="context-item" key={item.id}>
                   <p>{item.itemText}</p>
-                  <div>
-                    <SensitivityBadge sensitivity={item.sensitivity} />
-                    <span>{item.sourceTitles.join(", ")}</span>
+                  <div className="context-item-footer">
+                    <div>
+                      <SensitivityBadge sensitivity={item.sensitivity} />
+                      <span>{item.sourceTitles.join(", ")}</span>
+                    </div>
+                    <button
+                      className="secondary-button"
+                      disabled={requestClosed || aiReady}
+                      onClick={() => changePackItemVisibility(currentPack, item.factId, false)}
+                      type="button"
+                    >
+                      <EyeOff size={16} />
+                      このAIには渡さない
+                    </button>
                   </div>
                 </div>
               ))}
@@ -2797,6 +2909,25 @@ function ContextRequestsView({
                   <span key={`${item.referencedId}-${item.reason}`}>
                     {exclusionReasonLabel(item.reason)}
                   </span>
+                ))}
+              </div>
+            )}
+            {hiddenExcludedFacts.length > 0 && (
+              <div className="excluded-context-items">
+                <strong>あなたがこのAIから外したFact</strong>
+                {hiddenExcludedFacts.map(({ exclusion, fact }) => (
+                  <div className="excluded-context-item" key={`${exclusion.referencedId}-${exclusion.reason}`}>
+                    <span>{fact?.factText ?? exclusion.referencedId}</span>
+                    <button
+                      className="secondary-button"
+                      disabled={requestClosed || aiReady}
+                      onClick={() => changePackItemVisibility(currentPack, exclusion.referencedId, true)}
+                      type="button"
+                    >
+                      <RefreshCw size={16} />
+                      戻す
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

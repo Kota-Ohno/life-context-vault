@@ -244,6 +244,8 @@ It includes:
 
 The LLM provider receives the Context Pack, not the Vault.
 
+Context Pack confirmation is also a Vault Core operation. Before confirmation, the user may remove individual Fact items from the Pack for the current AI/client/task. Removed items stay visible as `excludedItems` with `user_hidden`, Pack warnings and source snippets are recalculated, and the Pack returns to a confirmation-required state. External AI clients can retrieve only the final confirmed Pack through `get_request_status`.
+
 ### AI Access Layer
 
 AI Access Layer is the only external-facing surface for everyday AI clients.

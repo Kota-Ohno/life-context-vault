@@ -139,6 +139,14 @@ interface NativeContextPackBuildPayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeContextPackMutationPayload {
+  payload: string;
+  updatedAt: string | null;
+  requestId: string | null;
+  packId: string | null;
+  generatedBy: "native_vault_core";
+}
+
 interface NativeSourceIngestPayload {
   payload: string;
   updatedAt: string | null;
@@ -218,6 +226,14 @@ export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
   requestId: string;
+  packId: string | null;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeContextPackMutationResult {
+  state: VaultState;
+  updatedAt: string | null;
+  requestId: string | null;
   packId: string | null;
   generatedBy: "native_vault_core";
 }
@@ -392,6 +408,62 @@ export async function createNativeContextPackRequest(input: {
       approvalMode: input.approvalMode ?? null
     }
   );
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    requestId: result.requestId,
+    packId: result.packId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeContextPackItemVisibility(input: {
+  packId: string;
+  factId: string;
+  included: boolean;
+}): Promise<NativeContextPackMutationResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeContextPackMutationPayload>(
+    "update_native_context_pack_item_visibility",
+    {
+      packId: input.packId,
+      factId: input.factId,
+      included: input.included
+    }
+  );
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    requestId: result.requestId,
+    packId: result.packId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function confirmNativeContextPack(packId: string): Promise<NativeContextPackMutationResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeContextPackMutationPayload>("confirm_native_context_pack", {
+    packId
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    requestId: result.requestId,
+    packId: result.packId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function denyNativeContextPackRequest(
+  requestId: string
+): Promise<NativeContextPackMutationResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeContextPackMutationPayload>("deny_native_context_pack_request", {
+    requestId
+  });
   return {
     state: normalizeVaultState(JSON.parse(result.payload)),
     updatedAt: result.updatedAt,
