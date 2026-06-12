@@ -151,6 +151,17 @@ struct NativeSourceIngestResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeCandidateReviewResult {
+  payload: String,
+  updated_at: Option<String>,
+  candidate_id: String,
+  status: String,
+  fact_id: Option<String>,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -178,6 +189,14 @@ pub struct VaultCoreSourceIngestResult {
   pub source_id: String,
   pub candidate_ids: Vec<String>,
   pub detected_sensitivity: String,
+}
+
+pub struct VaultCoreCandidateReviewResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub candidate_id: String,
+  pub status: String,
+  pub fact_id: Option<String>,
 }
 
 pub struct VaultCoreRequestStatusResult {
@@ -1356,6 +1375,163 @@ pub fn add_source_with_candidates_at_path(
   })
 }
 
+pub fn approve_candidate_at_path(
+  path: &Path,
+  candidate_id: &str,
+  edited_text: Option<&str>,
+) -> Result<VaultCoreCandidateReviewResult, String> {
+  let candidate_id = candidate_id.trim();
+  if candidate_id.is_empty() {
+    return Err("candidateId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let candidate = find_vault_item_by_id(&vault, "candidates", candidate_id)
+    .ok_or_else(|| format!("MemoryCandidate was not found: {candidate_id}"))?;
+  let detected_sensitivity = str_field(&candidate, "detectedSensitivity");
+  if detected_sensitivity == "secret_never_send" {
+    return Err("secret_never_send candidates cannot be approved as Facts.".to_string());
+  }
+  let current_status = str_field(&candidate, "status");
+  if current_status == "approved" || current_status == "edited_and_approved" {
+    return Err("candidate is already approved.".to_string());
+  }
+  let proposed_text = str_field(&candidate, "proposedFactText");
+  let fact_text = edited_text
+    .unwrap_or(&proposed_text)
+    .trim()
+    .to_string();
+  if fact_text.is_empty() {
+    return Err("approved fact text is required.".to_string());
+  }
+
+  let now = now_iso();
+  let fact_id = new_id("fact");
+  let source_ids = candidate
+    .get("sourceIds")
+    .cloned()
+    .unwrap_or_else(|| json!([]));
+  let source_backed = source_ids
+    .as_array()
+    .map(|ids| !ids.is_empty())
+    .unwrap_or(false);
+  let mut fact = json!({
+    "id": fact_id.clone(),
+    "factText": fact_text,
+    "domain": str_field(&candidate, "domain"),
+    "factType": candidate_type_to_fact_type(&str_field(&candidate, "candidateType")),
+    "sourceIds": source_ids,
+    "sensitivity": detected_sensitivity.clone(),
+    "confidence": if source_backed { "source_backed" } else { "inferred_and_confirmed" },
+    "status": "active",
+    "createdAt": now.clone(),
+    "approvedAt": now.clone(),
+    "updatedAt": now.clone()
+  });
+  copy_optional_candidate_field(&candidate, &mut fact, "validFrom");
+  copy_optional_candidate_field(&candidate, &mut fact, "validUntil");
+  copy_optional_candidate_field(&candidate, &mut fact, "dueDate");
+
+  let approved_status = if edited_text
+    .map(str::trim)
+    .filter(|text| *text != proposed_text)
+    .is_some()
+  {
+    "edited_and_approved"
+  } else {
+    "approved"
+  };
+  update_candidate_in_vault(&mut vault, candidate_id, |candidate| {
+    candidate["status"] = Value::String(approved_status.to_string());
+    candidate["reviewedAt"] = Value::String(now.clone());
+    candidate["createsFactIds"] = json!([fact_id.clone()]);
+  })?;
+  push_json_array(&mut vault, "facts", fact);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "candidate_reviewed",
+      "candidate",
+      candidate_id,
+      &detected_sensitivity,
+      json!({
+        "action": "approved",
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "fact_created",
+      "fact",
+      &fact_id,
+      &detected_sensitivity,
+      json!({
+        "candidateId": candidate_id,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreCandidateReviewResult {
+    payload,
+    updated_at,
+    candidate_id: candidate_id.to_string(),
+    status: approved_status.to_string(),
+    fact_id: Some(fact_id),
+  })
+}
+
+pub fn update_candidate_status_at_path(
+  path: &Path,
+  candidate_id: &str,
+  status: &str,
+) -> Result<VaultCoreCandidateReviewResult, String> {
+  let candidate_id = candidate_id.trim();
+  if candidate_id.is_empty() {
+    return Err("candidateId is required.".to_string());
+  }
+  let status = candidate_review_status(status)?;
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let candidate = find_vault_item_by_id(&vault, "candidates", candidate_id)
+    .ok_or_else(|| format!("MemoryCandidate was not found: {candidate_id}"))?;
+  let detected_sensitivity = str_field(&candidate, "detectedSensitivity");
+  let now = now_iso();
+
+  update_candidate_in_vault(&mut vault, candidate_id, |candidate| {
+    candidate["status"] = Value::String(status.to_string());
+    candidate["reviewedAt"] = Value::String(now.clone());
+  })?;
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "candidate_reviewed",
+      "candidate",
+      candidate_id,
+      &detected_sensitivity,
+      json!({
+        "action": status,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreCandidateReviewResult {
+    payload,
+    updated_at,
+    candidate_id: candidate_id.to_string(),
+    status: status.to_string(),
+    fact_id: None,
+  })
+}
+
 pub fn get_context_request_status_at_path(
   path: &Path,
   request_id: &str,
@@ -2221,6 +2397,65 @@ fn extract_yyyy_mm_dd(text: &str) -> Option<String> {
     }
   }
   None
+}
+
+fn candidate_type_to_fact_type(candidate_type: &str) -> &'static str {
+  match candidate_type {
+    "deadline" => "deadline",
+    "obligation" => "obligation",
+    "contact_point" => "contact_point",
+    "preference" => "preference",
+    "relationship" => "relationship",
+    "life_event" => "life_event",
+    "goal" => "goal",
+    "routine" => "routine",
+    "constraint" => "constraint",
+    "background_profile" => "background_profile",
+    _ => "note",
+  }
+}
+
+fn candidate_review_status(status: &str) -> Result<&'static str, String> {
+  match status {
+    "new" => Ok("new"),
+    "needs_user_detail" => Ok("needs_user_detail"),
+    "rejected" => Ok("rejected"),
+    "archived" => Ok("archived"),
+    "blocked_sensitive" => Ok("blocked_sensitive"),
+    "approved" | "edited_and_approved" => {
+      Err("use approve_candidate_at_path to create ApprovedFacts.".to_string())
+    }
+    _ => Err(format!("unsupported candidate status: {status}")),
+  }
+}
+
+fn copy_optional_candidate_field(candidate: &Value, fact: &mut Value, key: &str) {
+  if let Some(value) = candidate.get(key).cloned() {
+    if !value.as_str().map(str::is_empty).unwrap_or(false) {
+      fact[key] = value;
+    }
+  }
+}
+
+fn update_candidate_in_vault<F>(
+  vault: &mut Value,
+  candidate_id: &str,
+  mut update: F,
+) -> Result<(), String>
+where
+  F: FnMut(&mut Value),
+{
+  let Some(candidates) = vault.get_mut("candidates").and_then(Value::as_array_mut) else {
+    return Err("Vault has no candidates array.".to_string());
+  };
+  let Some(candidate) = candidates
+    .iter_mut()
+    .find(|candidate| str_field(candidate, "id") == candidate_id)
+  else {
+    return Err(format!("MemoryCandidate was not found: {candidate_id}"));
+  };
+  update(candidate);
+  Ok(())
 }
 
 fn is_expired(value: &str) -> bool {
@@ -3146,6 +3381,42 @@ fn add_native_source_with_candidates(
 }
 
 #[tauri::command]
+fn approve_native_candidate(
+  app: AppHandle,
+  candidate_id: String,
+  edited_text: Option<String>,
+) -> Result<NativeCandidateReviewResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = approve_candidate_at_path(&path, &candidate_id, edited_text.as_deref())?;
+  Ok(NativeCandidateReviewResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    candidate_id: result.candidate_id,
+    status: result.status,
+    fact_id: result.fact_id,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
+fn update_native_candidate_status(
+  app: AppHandle,
+  candidate_id: String,
+  status: String,
+) -> Result<NativeCandidateReviewResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_candidate_status_at_path(&path, &candidate_id, &status)?;
+  Ok(NativeCandidateReviewResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    candidate_id: result.candidate_id,
+    status: result.status,
+    fact_id: result.fact_id,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -3262,6 +3533,8 @@ pub fn run() {
       search_vault_facts,
       create_native_context_pack_request,
       add_native_source_with_candidates,
+      approve_native_candidate,
+      update_native_candidate_status,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -3721,6 +3994,159 @@ mod tests {
         .map(Vec::is_empty)
         .unwrap_or(false)
     );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_candidate_approval_creates_fact_and_syncs_fts() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-approve");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Tone",
+      "Tone preference: concise and calm",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    let reviewed = approve_candidate_at_path(
+      &path,
+      &candidate_id,
+      Some("Tone preference: concise, calm, and concrete"),
+    )
+    .expect("approve candidate");
+    let saved: Value = serde_json::from_str(&reviewed.payload).expect("saved vault json");
+    let facts = saved.get("facts").and_then(Value::as_array).expect("facts");
+    let candidate = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|candidates| {
+        candidates
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == candidate_id)
+      })
+      .expect("candidate");
+
+    assert_eq!(facts.len(), 1);
+    assert_eq!(
+      facts[0].get("factText").and_then(Value::as_str),
+      Some("Tone preference: concise, calm, and concrete")
+    );
+    assert_eq!(
+      candidate.get("status").and_then(Value::as_str),
+      Some("edited_and_approved")
+    );
+    assert_eq!(
+      candidate
+        .get("createsFactIds")
+        .and_then(Value::as_array)
+        .and_then(|ids| ids.first())
+        .and_then(Value::as_str),
+      reviewed.fact_id.as_deref()
+    );
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let fact_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("fact count");
+    let fts_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'concrete'", [], |row| row.get(0))
+      .expect("fts count");
+
+    assert_eq!(fact_count, 1);
+    assert_eq!(fts_count, 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_candidate_status_update_does_not_create_fact() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-status");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Move",
+      "Need to update address before renewal.",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    let reviewed = update_candidate_status_at_path(&path, &candidate_id, "archived")
+      .expect("archive candidate");
+    let saved: Value = serde_json::from_str(&reviewed.payload).expect("saved vault json");
+    let candidate = saved
+      .get("candidates")
+      .and_then(Value::as_array)
+      .and_then(|candidates| candidates.first())
+      .expect("candidate");
+
+    assert_eq!(reviewed.fact_id, None);
+    assert_eq!(candidate.get("status").and_then(Value::as_str), Some("archived"));
+    assert!(
+      saved
+        .get("facts")
+        .and_then(Value::as_array)
+        .map(Vec::is_empty)
+        .unwrap_or(false)
+    );
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let normalized_status: String = connection
+      .query_row(
+        "SELECT status FROM memory_candidates WHERE id = ?1",
+        params![candidate_id],
+        |row| row.get(0),
+      )
+      .expect("candidate status");
+    let normalized_fact_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("fact count");
+
+    assert_eq!(normalized_status, "archived");
+    assert_eq!(normalized_fact_count, 0);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_candidate_approval_rejects_secret_never_send() {
+    use_test_vault_key();
+    let path = temp_vault_path("candidate-secret-approval");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Secret",
+      "Password hunter2",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    let error = match approve_candidate_at_path(&path, &candidate_id, None) {
+      Ok(_) => panic!("secret candidate should not be approved"),
+      Err(error) => error,
+    };
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let fact_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("fact count");
+
+    assert!(error.contains("secret_never_send"));
+    assert_eq!(fact_count, 0);
     remove_temp_vault(&path);
   }
 

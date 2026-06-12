@@ -114,6 +114,17 @@ Vault Core owns:
 
 Vault Core is the only component allowed to create ApprovedFact records.
 
+### Candidate Review
+
+Candidate review is the point where an AI-generated or passively extracted MemoryCandidate may become durable user-approved memory.
+
+In the desktop product path, review actions enter through typed Vault Core commands:
+
+- Approve: creates exactly one ApprovedFact from one MemoryCandidate.
+- Reject, archive, request detail, or mark sensitive: updates review status only and never creates a Fact.
+- Secret-never-send candidates: cannot be approved as Facts.
+- Every review action writes an audit event and refreshes normalized Candidate/Fact/FTS projection before returning.
+
 ### Source Ingestion
 
 Source ingestion handles user-supplied background, conversations, notes, and files.

@@ -1,5 +1,6 @@
 import {
   ApprovedFact,
+  CandidateStatus,
   LifeContextDomain,
   SensitivityTier,
   SourceKind,
@@ -143,6 +144,15 @@ interface NativeSourceIngestPayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeCandidateReviewPayload {
+  payload: string;
+  updatedAt: string | null;
+  candidateId: string;
+  status: CandidateStatus;
+  factId: string | null;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -157,6 +167,15 @@ export interface NativeSourceIngestResult {
   sourceId: string;
   candidateIds: string[];
   detectedSensitivity: SensitivityTier;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeCandidateReviewResult {
+  state: VaultState;
+  updatedAt: string | null;
+  candidateId: string;
+  status: CandidateStatus;
+  factId: string | null;
   generatedBy: "native_vault_core";
 }
 
@@ -284,6 +303,46 @@ export async function addNativeSourceWithCandidates(input: {
     sourceId: result.sourceId,
     candidateIds: result.candidateIds,
     detectedSensitivity: result.detectedSensitivity,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function approveNativeCandidate(input: {
+  candidateId: string;
+  editedText?: string;
+}): Promise<NativeCandidateReviewResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeCandidateReviewPayload>("approve_native_candidate", {
+    candidateId: input.candidateId,
+    editedText: input.editedText ?? null
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    candidateId: result.candidateId,
+    status: result.status,
+    factId: result.factId,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeCandidateStatus(input: {
+  candidateId: string;
+  status: CandidateStatus;
+}): Promise<NativeCandidateReviewResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeCandidateReviewPayload>("update_native_candidate_status", {
+    candidateId: input.candidateId,
+    status: input.status
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    candidateId: result.candidateId,
+    status: result.status,
+    factId: result.factId,
     generatedBy: result.generatedBy
   };
 }

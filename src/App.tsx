@@ -34,6 +34,7 @@ import {
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
   addNativeSourceWithCandidates,
+  approveNativeCandidate,
   createNativeContextPackRequest,
   getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
@@ -47,6 +48,7 @@ import {
   searchNativeFacts,
   startAiAccessServices,
   stopAiAccessServices,
+  updateNativeCandidateStatus,
   uninstallLoginItem
 } from "./nativeStorage";
 import {
@@ -84,6 +86,7 @@ import {
 import {
   ApprovedFact,
   BackgroundSetupInput,
+  CandidateStatus,
   ConnectorKind,
   ConnectorSession,
   ContextPack,
@@ -605,10 +608,59 @@ export function App() {
     }
   }
 
-  function approve(candidate: MemoryCandidate) {
+  async function approve(candidate: MemoryCandidate) {
     const edited = candidateEdits[candidate.id];
+    if (nativePath) {
+      try {
+        const reviewed = await approveNativeCandidate({
+          candidateId: candidate.id,
+          editedText: edited
+        });
+        if (reviewed) {
+          nativeRevisionRef.current = reviewed.updatedAt;
+          setNativeRevision(reviewed.updatedAt);
+          setState(reviewed.state);
+          setCandidateEdits((current) => {
+            const next = { ...current };
+            delete next[candidate.id];
+            return next;
+          });
+          setNotice("承認済みFactとして保存しました。AIへ渡るのはContext Pack確認後だけです。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault Coreで候補を承認できませんでした。");
+        return;
+      }
+    }
     const next = approveCandidate(state, candidate.id, edited);
     apply(next, "承認済みFactとして保存しました。");
+  }
+
+  async function reviewCandidateStatus(
+    candidate: MemoryCandidate,
+    status: CandidateStatus,
+    message: string
+  ) {
+    if (nativePath) {
+      try {
+        const reviewed = await updateNativeCandidateStatus({
+          candidateId: candidate.id,
+          status
+        });
+        if (reviewed) {
+          nativeRevisionRef.current = reviewed.updatedAt;
+          setNativeRevision(reviewed.updatedAt);
+          setState(reviewed.state);
+          setNotice(message);
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault Coreで候補を更新できませんでした。");
+        return;
+      }
+    }
+    apply(updateCandidateStatus(state, candidate.id, status), message);
   }
 
   async function buildPack() {
@@ -996,9 +1048,11 @@ export function App() {
             edits={candidateEdits}
             setEdit={(id, value) => setCandidateEdits((prev) => ({ ...prev, [id]: value }))}
             approve={approve}
-            reject={(candidate) => apply(updateCandidateStatus(state, candidate.id, "rejected"), "候補を却下しました。")}
-            archive={(candidate) => apply(updateCandidateStatus(state, candidate.id, "archived"), "候補をLaterに移しました。")}
-            markSensitive={(candidate) => apply(updateCandidateStatus(state, candidate.id, "blocked_sensitive"), "候補をセンシティブ扱いにしました。")}
+            reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "候補を却下しました。")}
+            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "候補をLaterに移しました。")}
+            markSensitive={(candidate) =>
+              void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
+            }
           />
         )}
         {view === "sources" && (
