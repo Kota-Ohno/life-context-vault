@@ -84,6 +84,10 @@ Last updated: 2026-06-12
   - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
   - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
+- Added Claude Desktop setup installer:
+  - Connections can install the `life-context-vault` stdio MCP server into Claude Desktop config from the desktop app
+  - existing `mcpServers` are preserved, existing config is backed up, and invalid JSON is refused without overwrite
+  - manual copy remains as a fallback and uses the native app's resolved sidecar path when available
 - Added live native Vault sync for external AI writes:
   - native vault state now exposes `updatedAt` metadata to the frontend
   - the Control Center polls the encrypted native Vault and imports changes written by MCP sidecars, Remote Relay Agent calls, or browser capture
@@ -116,6 +120,7 @@ Last updated: 2026-06-12
 - `cargo test` in `src-tauri`
 - `cargo build` in `src-tauri`
 - `npm run mcp:build`
+- Claude Desktop config merge unit test preserving existing MCP servers
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run relay:build`
 - `npm run agent:build`
@@ -181,6 +186,14 @@ Last updated: 2026-06-12
 - UX: Connections now explains readiness in natural language and separates service state from Vault usefulness signals such as Approved Facts, Inbox, Requests, and Capture.
 - Safety: readiness copy reinforces that external AI receives only Context Packs, not Raw Sources, unapproved candidates, or the full Vault.
 - Verification: Browser DOM layout checks covered desktop `1280x720` and mobile `390x844`; screenshot capture timed out in the Browser runtime, so visual QA relied on rendered layout metrics and DOM state for this slice.
+
+### Claude Desktop Setup Slice
+
+- Product fit: first-time Local MCP setup no longer depends on hand-editing `claude_desktop_config.json`.
+- Technical design: the Tauri app resolves the bundled `lcv-mcp` sidecar and native Vault path, then merges only the `life-context-vault` server entry.
+- UX: Connections now offers a primary install button plus copy fallback, and reports config/backup paths after installation.
+- Safety: existing Claude config is backed up before writing, other MCP servers are preserved, and invalid JSON stops the installer without overwrite.
+- Verification: Rust unit tests cover preserving existing MCP servers during merge.
 
 ### External Vault Sync Slice
 

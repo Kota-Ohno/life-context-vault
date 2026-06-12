@@ -30,8 +30,11 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AiAccessServiceStatus,
+  ClaudeDesktopConfigInstallResult,
   getAiAccessServiceStatus,
+  getClaudeDesktopConfigTemplate,
   getNativeVaultPath,
+  installClaudeDesktopConfig,
   loadNativeVaultSnapshot,
   saveNativeVault,
   startAiAccessServices,
@@ -160,6 +163,10 @@ export function App() {
   const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
   const [aiServiceBusy, setAiServiceBusy] = useState(false);
   const [nativeRevision, setNativeRevision] = useState<string | null>(null);
+  const [claudeInstallBusy, setClaudeInstallBusy] = useState(false);
+  const [claudeInstallResult, setClaudeInstallResult] =
+    useState<ClaudeDesktopConfigInstallResult | null>(null);
+  const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -170,12 +177,17 @@ export function App() {
     let cancelled = false;
     async function hydrateNativeStorage() {
       try {
-        const [nativeSnapshot, path] = await Promise.all([loadNativeVaultSnapshot(), getNativeVaultPath()]);
+        const [nativeSnapshot, path, configTemplate] = await Promise.all([
+          loadNativeVaultSnapshot(),
+          getNativeVaultPath(),
+          getClaudeDesktopConfigTemplate()
+        ]);
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
         nativeRevisionRef.current = nativeSnapshot?.updatedAt ?? null;
         setNativeRevision(nativeSnapshot?.updatedAt ?? null);
         setNativePath(path);
+        if (configTemplate) setClaudeConfig(configTemplate);
       } catch (error) {
         console.warn("Native storage unavailable", error);
       } finally {
@@ -525,6 +537,26 @@ export function App() {
     }
   }
 
+  async function installClaudeConfig() {
+    setClaudeInstallBusy(true);
+    setClaudeInstallResult(null);
+    try {
+      const result = await installClaudeDesktopConfig();
+      setClaudeInstallResult(result);
+      if (!result) {
+        setNotice("Desktop appでのみClaude Desktop設定をインストールできます。");
+      } else if (result.alreadyConfigured) {
+        setNotice("Claude Desktop設定はすでに最新です。");
+      } else {
+        setNotice("Claude Desktop設定へLife Context Vaultを追加しました。Claude Desktopを再起動してください。");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Claude Desktop設定のインストールに失敗しました。");
+    } finally {
+      setClaudeInstallBusy(false);
+    }
+  }
+
   function clearVault() {
     apply(createEmptyVault(), "Vaultをクリアしました。");
     setActivePackId(null);
@@ -639,9 +671,13 @@ export function App() {
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
+            claudeInstallBusy={claudeInstallBusy}
+            claudeInstallResult={claudeInstallResult}
+            claudeConfig={claudeConfig}
             startAiAccess={startAiAccess}
             stopAiAccess={stopAiAccess}
             refreshAiAccess={refreshAiAccess}
+            installClaudeConfig={installClaudeConfig}
             copyText={copyText}
             captureClient={captureClient}
             setCaptureClient={setCaptureClient}
@@ -1142,9 +1178,13 @@ function ConnectionsView({
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
+  claudeInstallBusy,
+  claudeInstallResult,
+  claudeConfig,
   startAiAccess,
   stopAiAccess,
   refreshAiAccess,
+  installClaudeConfig,
   copyText,
   captureClient,
   setCaptureClient,
@@ -1164,9 +1204,13 @@ function ConnectionsView({
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
+  claudeInstallBusy: boolean;
+  claudeInstallResult: ClaudeDesktopConfigInstallResult | null;
+  claudeConfig: string;
   startAiAccess: () => void;
   stopAiAccess: () => void;
   refreshAiAccess: () => void;
+  installClaudeConfig: () => void;
   copyText: (value: string, message: string) => void;
   captureClient: ConnectorKind;
   setCaptureClient: (value: ConnectorKind) => void;
@@ -1176,7 +1220,6 @@ function ConnectionsView({
   setCaptureText: (value: string) => void;
   simulatePassiveCapture: () => void;
 }) {
-  const claudeConfig = makeClaudeDesktopConfig(nativePath);
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
 
   return (
@@ -1299,15 +1342,51 @@ function ConnectionsView({
           </div>
           <Plug size={18} />
         </div>
+        <div className="service-brief">
+          <strong>Claude Desktopへ追加</strong>
+          <span>
+            既存のClaude設定を保持し、life-context-vaultのMCP serverだけを追加します。既存ファイルがある場合はバックアップを作成します。
+          </span>
+          <div className="service-actions">
+            <button
+              className="primary-button"
+              disabled={!nativePath || claudeInstallBusy}
+              onClick={installClaudeConfig}
+              type="button"
+            >
+              <Plug size={16} />
+              Install Claude config
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => copyText(claudeConfig, "Claude Desktop用MCP設定をコピーしました。")}
+              type="button"
+            >
+              <Clipboard size={16} />
+              Copy config
+            </button>
+          </div>
+          {claudeInstallResult && (
+            <span>
+              {claudeInstallResult.alreadyConfigured ? "設定済み" : "追加済み"}: {claudeInstallResult.configPath}
+              {claudeInstallResult.backupPath ? ` / Backup: ${claudeInstallResult.backupPath}` : ""}
+            </span>
+          )}
+          {!nativePath && <span>Desktop appで開くと、ここからClaude Desktop設定へ追加できます。</span>}
+        </div>
         <div className="setup-grid">
           <div className="setup-step">
             <Badge>1</Badge>
-            <strong>MCP serverをビルド</strong>
-            <pre className="code-box">npm run mcp:build</pre>
+            <strong>Local stdio MCP</strong>
+            <div className="scope-row">
+              <Badge>same device</Badge>
+              <Badge>encrypted Vault</Badge>
+              <Badge>Context Pack only</Badge>
+            </div>
           </div>
           <div className="setup-step">
             <Badge>2</Badge>
-            <strong>Claude Desktop設定へ追加</strong>
+            <strong>手動設定が必要な場合</strong>
             <pre className="code-box">{claudeConfig}</pre>
             <button
               className="secondary-button"
@@ -1983,6 +2062,7 @@ function makeClaudeDesktopConfig(nativePath: string | null): string {
     {
       mcpServers: {
         "life-context-vault": {
+          type: "stdio",
           command: localMcpBinaryPath,
           env: {
             LCV_VAULT_DB_PATH:

@@ -20,12 +20,21 @@ src-tauri/target/release/lcv-mcp
 
 ## Claude Desktop Config
 
-Use the **Connections** screen in the app to copy the current config. A development config looks like:
+Use the **Connections** screen in the Tauri desktop app and click **Install Claude config**. The app:
+
+- resolves the bundled `lcv-mcp` sidecar path,
+- writes the current encrypted Vault path into the MCP environment,
+- preserves existing `mcpServers`,
+- backs up `claude_desktop_config.json` before writing, and
+- refuses to overwrite invalid JSON.
+
+Manual copy remains available in **Connections**. A development config looks like:
 
 ```json
 {
   "mcpServers": {
     "life-context-vault": {
+      "type": "stdio",
       "command": "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp",
       "env": {
         "LCV_VAULT_DB_PATH": "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3"
@@ -59,7 +68,7 @@ The sidecar exposes:
 
 ## App Sync
 
-If the app is already open while an MCP client writes a request or memory proposal, use the top-bar **Sync** button in the Tauri app to reload the latest native Vault state.
+If the app is already open while an MCP client writes a request or memory proposal, the Tauri app polls the native Vault and imports external updates automatically. The top-bar **Sync** button is still available as a manual refresh.
 
 The browser-only development app uses `localStorage`, so it cannot observe the native SQLite file used by the MCP sidecar.
 

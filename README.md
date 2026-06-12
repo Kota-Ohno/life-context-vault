@@ -73,7 +73,7 @@ The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault s
 npm run mcp:build
 ```
 
-Then open **Connections** in the app and copy the Claude Desktop config.
+Then open **Connections** in the Tauri desktop app and use **Install Claude config**. The app merges the `life-context-vault` MCP server into Claude Desktop's config and backs up an existing config first. Manual copy remains available as a fallback.
 
 The MCP sidecar exposes controlled tools only:
 

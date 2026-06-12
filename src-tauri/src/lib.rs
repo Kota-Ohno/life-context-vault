@@ -1,9 +1,10 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+  env,
   fs,
   io::{Read, Write},
   net::TcpStream,
@@ -71,6 +72,15 @@ struct SaveVaultStateResult {
   conflict: bool,
   current_updated_at: Option<String>,
   current_payload: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeDesktopConfigInstallResult {
+  config_path: String,
+  backup_path: Option<String>,
+  server_name: String,
+  already_configured: bool,
 }
 
 fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -601,6 +611,13 @@ fn random_local_token() -> String {
   format!("lcv_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
+fn system_time_seconds(time: SystemTime) -> u64 {
+  time
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_secs())
+    .unwrap_or_default()
+}
+
 fn refresh_child(child: &mut Option<Child>) -> bool {
   let Some(process) = child.as_mut() else {
     return false;
@@ -747,6 +764,152 @@ fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<Child, Stri
     .stderr(Stdio::null())
     .spawn()
     .map_err(|error| format!("failed to start local agent at {}: {error}", agent_command.display()))
+}
+
+fn claude_desktop_config_path() -> Result<PathBuf, String> {
+  #[cfg(target_os = "macos")]
+  {
+    let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    return Ok(PathBuf::from(home)
+      .join("Library")
+      .join("Application Support")
+      .join("Claude")
+      .join("claude_desktop_config.json"));
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    let appdata = env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
+    return Ok(PathBuf::from(appdata)
+      .join("Claude")
+      .join("claude_desktop_config.json"));
+  }
+
+  #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+  {
+    let base = env::var("XDG_CONFIG_HOME")
+      .map(PathBuf::from)
+      .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
+      .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
+    Ok(base.join("Claude").join("claude_desktop_config.json"))
+  }
+}
+
+fn life_context_claude_server_config(app: &AppHandle) -> Result<Value, String> {
+  let command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
+  if !command.exists() {
+    return Err(format!(
+      "lcv-mcp was not found at {}. Build or bundle the sidecars before installing Claude Desktop config.",
+      command.display()
+    ));
+  }
+  Ok(life_context_claude_server_config_for_paths(
+    command,
+    vault_db_path(app)?,
+  ))
+}
+
+fn life_context_claude_server_config_for_paths(command: PathBuf, vault_path: PathBuf) -> Value {
+  json!({
+    "type": "stdio",
+    "command": command.display().to_string(),
+    "env": {
+      "LCV_VAULT_DB_PATH": vault_path.display().to_string()
+    }
+  })
+}
+
+fn merge_claude_desktop_config(
+  mut existing: Value,
+  server_config: Value,
+) -> Result<(Value, bool), String> {
+  let root = existing
+    .as_object_mut()
+    .ok_or_else(|| "Claude Desktop config must be a JSON object".to_string())?;
+  let servers = root.entry("mcpServers").or_insert_with(|| json!({}));
+  let server_map = servers
+    .as_object_mut()
+    .ok_or_else(|| "Claude Desktop config field mcpServers must be a JSON object".to_string())?;
+  let changed = server_map.get("life-context-vault") != Some(&server_config);
+  server_map.insert("life-context-vault".to_string(), server_config);
+  Ok((existing, changed))
+}
+
+#[tauri::command]
+fn install_claude_desktop_config(
+  app: AppHandle,
+) -> Result<ClaudeDesktopConfigInstallResult, String> {
+  let config_path = claude_desktop_config_path()?;
+  let server_config = life_context_claude_server_config(&app)?;
+  let existing = if config_path.exists() {
+    let raw = fs::read_to_string(&config_path)
+      .map_err(|error| format!("failed to read Claude Desktop config: {error}"))?;
+    serde_json::from_str::<Value>(&raw).map_err(|error| {
+      format!("Claude Desktop config is not valid JSON; no changes were made: {error}")
+    })?
+  } else {
+    json!({})
+  };
+  let (next_config, changed) = merge_claude_desktop_config(existing, server_config)?;
+
+  if !changed {
+    return Ok(ClaudeDesktopConfigInstallResult {
+      config_path: config_path.display().to_string(),
+      backup_path: None,
+      server_name: "life-context-vault".to_string(),
+      already_configured: true,
+    });
+  }
+
+  if let Some(parent) = config_path.parent() {
+    fs::create_dir_all(parent)
+      .map_err(|error| format!("failed to create Claude config directory: {error}"))?;
+  }
+
+  let backup_path = if config_path.exists() {
+    let backup = config_path.with_file_name(format!(
+      "claude_desktop_config.json.lcv-backup-{}.json",
+      system_time_seconds(SystemTime::now())
+    ));
+    fs::copy(&config_path, &backup)
+      .map_err(|error| format!("failed to back up Claude Desktop config: {error}"))?;
+    Some(backup)
+  } else {
+    None
+  };
+
+  let payload = serde_json::to_string_pretty(&next_config)
+    .map_err(|error| format!("failed to serialize Claude Desktop config: {error}"))?;
+  let temp_path = config_path.with_file_name("claude_desktop_config.json.lcv.tmp");
+  fs::write(&temp_path, payload)
+    .map_err(|error| format!("failed to write Claude Desktop config temp file: {error}"))?;
+  #[cfg(target_os = "windows")]
+  {
+    if config_path.exists() {
+      fs::remove_file(&config_path)
+        .map_err(|error| format!("failed to replace Claude Desktop config: {error}"))?;
+    }
+  }
+  fs::rename(&temp_path, &config_path)
+    .map_err(|error| format!("failed to install Claude Desktop config: {error}"))?;
+
+  Ok(ClaudeDesktopConfigInstallResult {
+    config_path: config_path.display().to_string(),
+    backup_path: backup_path.map(|path| path.display().to_string()),
+    server_name: "life-context-vault".to_string(),
+    already_configured: false,
+  })
+}
+
+#[tauri::command]
+fn claude_desktop_config_template(app: AppHandle) -> Result<String, String> {
+  let config = json!({
+    "mcpServers": {
+      "life-context-vault": life_context_claude_server_config(&app)?
+    }
+  });
+  serde_json::to_string_pretty(&config)
+    .map_err(|error| format!("failed to serialize Claude Desktop config: {error}"))
 }
 
 #[tauri::command]
@@ -966,7 +1129,9 @@ pub fn run() {
       vault_storage_path,
       ai_access_service_status,
       start_ai_access_services,
-      stop_ai_access_services
+      stop_ai_access_services,
+      install_claude_desktop_config,
+      claude_desktop_config_template
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -1176,5 +1341,38 @@ mod tests {
     assert_eq!(result.current_updated_at.as_deref(), Some("external-revision"));
     assert_eq!(result.current_payload.as_deref(), Some("{\"external\":true}"));
     assert_eq!(stored_payload, "{\"external\":true}");
+  }
+
+  #[test]
+  fn claude_config_merge_preserves_existing_servers() {
+    let existing = json!({
+      "mcpServers": {
+        "other-server": {
+          "command": "/usr/bin/other"
+        }
+      },
+      "theme": "system"
+    });
+    let server = life_context_claude_server_config_for_paths(
+      PathBuf::from("/Applications/Life Context Vault.app/Contents/MacOS/lcv-mcp"),
+      PathBuf::from(
+        "/Users/example/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      ),
+    );
+
+    let (merged, changed) = merge_claude_desktop_config(existing, server).expect("merge");
+
+    assert!(changed);
+    assert!(merged
+      .get("mcpServers")
+      .and_then(Value::as_object)
+      .and_then(|servers| servers.get("other-server"))
+      .is_some());
+    assert!(merged
+      .get("mcpServers")
+      .and_then(Value::as_object)
+      .and_then(|servers| servers.get("life-context-vault"))
+      .is_some());
+    assert_eq!(merged.get("theme").and_then(Value::as_str), Some("system"));
   }
 }

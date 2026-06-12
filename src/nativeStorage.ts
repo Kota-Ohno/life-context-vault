@@ -89,6 +89,13 @@ export interface AiAccessServiceStatus {
   lastError: string | null;
 }
 
+export interface ClaudeDesktopConfigInstallResult {
+  configPath: string;
+  backupPath: string | null;
+  serverName: string;
+  alreadyConfigured: boolean;
+}
+
 export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -105,4 +112,16 @@ export async function stopAiAccessServices(): Promise<AiAccessServiceStatus | nu
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<AiAccessServiceStatus>("stop_ai_access_services");
+}
+
+export async function installClaudeDesktopConfig(): Promise<ClaudeDesktopConfigInstallResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ClaudeDesktopConfigInstallResult>("install_claude_desktop_config");
+}
+
+export async function getClaudeDesktopConfigTemplate(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("claude_desktop_config_template");
 }
