@@ -3304,14 +3304,15 @@ function ConnectionsView({
         </div>
       </div>
 
-      <div className="panel wide">
-        <div className="panel-heading">
+      <details className="panel wide setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">AI Connections</p>
             <h3>どのAIが、どの境界でVaultを使えるか</h3>
+            <span>接続ごとの感度上限、確認条件、渡してよい生活領域を編集します。</span>
           </div>
-          <ShieldCheck size={18} />
-        </div>
+          <Badge>詳細設定</Badge>
+        </summary>
         <div className="connection-list">
           {connectors.map((connector) => {
             const policy = policies.find((item) => item.clientId === connector.id);
@@ -3425,16 +3426,17 @@ function ConnectionsView({
             );
           })}
         </div>
-      </div>
+      </details>
 
-      <div className="panel wide">
-        <div className="panel-heading">
+      <details className="panel wide setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">AI Access Service</p>
             <h3>普段使うAIへVaultを開く</h3>
+            <span>Relay/Agentの状態、ログイン起動、常駐動作を管理します。</span>
           </div>
-          <Activity size={18} />
-        </div>
+          <Badge>運用設定</Badge>
+        </summary>
         <div className="service-console">
           <div className={`service-brief ${accessReadiness.tone}`}>
             <strong>{accessReadiness.title}</strong>
@@ -3571,16 +3573,17 @@ function ConnectionsView({
           {aiServiceStatus?.lastError && <p className="warning-text">{aiServiceStatus.lastError}</p>}
           {!nativePath && <p className="muted">Desktop appで起動すると、ここからRelayとAgentを管理できます。</p>}
         </div>
-      </div>
+      </details>
 
-      <div className="panel wide">
-        <div className="panel-heading">
+      <details className="panel wide setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">Local MCP setup</p>
             <h3>Claude Desktop / Codex系からVaultを呼び出す</h3>
+            <span>Claude Desktop設定、手動config、公開tool一覧を確認します。</span>
           </div>
-          <Plug size={18} />
-        </div>
+          <Badge>ローカルAI</Badge>
+        </summary>
         <div className="service-brief">
           <strong>Claude Desktopへ追加</strong>
           <span>
@@ -3648,16 +3651,17 @@ function ConnectionsView({
           </div>
         </div>
         <p className="muted">Local MCPはVault全体を読ませません。重要な私的Context Packはアプリ側の確認待ちになり、未承認候補はFactとして使われません。</p>
-      </div>
+      </details>
 
-      <div className="panel wide">
-        <div className="panel-heading">
+      <details className="panel wide setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">Advanced Remote Relay</p>
             <h3>Remote MCPの診断とself-host設定</h3>
+            <span>Relay/Agentのコマンド、OAuth診断、保持しないデータ境界を確認します。</span>
           </div>
-          <Radio size={18} />
-        </div>
+          <Badge>HTTP/MCP診断</Badge>
+        </summary>
         <div className="trust-note">
           <ShieldCheck size={16} />
           <span>通常は上の接続ガイドだけで十分です。ここはHosted Relayの運用確認、ローカル検証、HTTP/MCP診断が必要なときに開きます。</span>
@@ -3777,7 +3781,7 @@ function ConnectionsView({
           </div>
         </details>
         <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。RelayはOAuth client登録とリクエストの監査メタデータだけを永続化し、Vault本文・MCP本文・Context Pack本文は置きません。</p>
-      </div>
+      </details>
 
       <div className="panel">
         <div className="panel-heading">
@@ -3895,14 +3899,15 @@ function ConnectionsView({
         </div>
       </div>
 
-      <div className="panel">
-        <div className="panel-heading">
+      <details className="panel setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">Browser extension</p>
             <h3>AIチャット画面から直接Inboxへ送る</h3>
+            <span>Chrome Native Messaging hostと拡張IDを設定します。</span>
           </div>
-          <Clipboard size={18} />
-        </div>
+          <Badge>拡張設定</Badge>
+        </summary>
         <div className="form-stack">
           <div className="service-brief">
             <strong>Chrome Native Hostを追加</strong>
@@ -3966,16 +3971,17 @@ function ConnectionsView({
             Copy setup
           </button>
         </div>
-      </div>
+      </details>
 
-      <div className="panel">
-        <div className="panel-heading">
+      <details className="panel setup-disclosure">
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">Manual capture</p>
             <h3>拡張が使えない時の入力</h3>
+            <span>会話断片を手動でInbox候補にします。自動Fact化はしません。</span>
           </div>
-          <Clipboard size={18} />
-        </div>
+          <Badge>手動入力</Badge>
+        </summary>
         <div className="form-stack">
           <label className="field">
             <span>AIクライアント</span>
@@ -3993,7 +3999,7 @@ function ConnectionsView({
             Capture候補を作成
           </button>
         </div>
-      </div>
+      </details>
     </section>
   );
 }
