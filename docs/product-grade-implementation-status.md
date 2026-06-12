@@ -239,6 +239,10 @@ Last updated: 2026-06-12
   - `npm run product:check` runs frontend tests/build, Rust tests, Rust release binary build, format check when rustfmt is installed, and `git diff --check`
   - `npm run product:check:full` additionally runs the Tauri sidecar integration build and large retrieval benchmark
   - `product:check` can run smaller benchmark profiles through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`
+- Added GitHub Actions product qualification workflow:
+  - `.github/workflows/product-check.yml` runs `npm run product:check` on pull requests and pushes to `main`/`master`
+  - scheduled weekly runs and manual `workflow_dispatch` can include a bounded retrieval benchmark profile
+  - workflow summaries and an uploaded `product-check.log` preserve release-check and benchmark output for review
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -247,7 +251,7 @@ Last updated: 2026-06-12
 - Hosted relay operations for the metadata-only state store: deployment-specific rotation/incident runbooks beyond the new retention, tenant, backup, and short-lived handoff controls.
 - Packaged OCR onboarding and legacy Office conversion beyond the explicit local OCR command provider and local PDF/modern Office extractor.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
-- CI-hosted or scheduled retrieval performance tracking; local release qualification now has an explicit product check wrapper, while the 100k Fact / 500k SourceChunk benchmark remains opt-in because of dataset size.
+- Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 
 ## Verification
 
@@ -299,6 +303,7 @@ Last updated: 2026-06-12
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
 - Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
 - Product release check wrapper covering standard app/Rust/release-binary checks and optional full Tauri + retrieval benchmark qualification
+- GitHub Actions product check workflow for PR/push checks plus weekly/manual bounded retrieval benchmark runs
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
@@ -454,6 +459,15 @@ Last updated: 2026-06-12
 - Developer experience: accepted; `product:check` keeps the default loop bounded, while `product:check:full` adds Tauri sidecar integration and the large retrieval benchmark for release candidates.
 - Performance risk: accepted; full checks keep the 100k Fact / 500k SourceChunk benchmark opt-in, and smaller benchmark profiles can be run through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`.
 - Verification: `npm run product:check` and `npm run product:check -- --include-bench --bench-facts 100 --bench-chunks-per-fact 1` passed. Both explicitly skipped `cargo fmt` because rustfmt is not installed for the local stable toolchain.
+
+### CI Product Check Slice
+
+- Review fallback: SubAgents were not used for this slice because final completion review has not started yet; the main thread ran separate operations, security/privacy, performance-cost, and maintainability passes.
+- Product fit: accepted; product-grade checks now run outside the developer machine, and retrieval performance has a scheduled lightweight profile rather than relying only on manual local runs.
+- Security/privacy: accepted; the workflow uses synthetic benchmark data and does not require Vault secrets, Relay tokens, OCR provider commands, or user data.
+- Performance-cost: accepted; PR/push checks run the standard bounded `product:check`, while scheduled/manual runs can add a smaller retrieval benchmark profile with configurable size.
+- Maintainability: accepted; logs are uploaded as an artifact and a job summary records event and benchmark parameters for later trend review.
+- Verification: workflow YAML was added and local `npm run product:check` passed after the workflow was created.
 
 ### Relay State Store Slice
 

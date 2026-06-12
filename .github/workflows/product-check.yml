@@ -1,0 +1,93 @@
+name: Product Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      include_bench:
+        description: "Run the retrieval benchmark profile after standard checks"
+        required: false
+        type: boolean
+        default: false
+      bench_facts:
+        description: "Synthetic ApprovedFact count for the benchmark profile"
+        required: false
+        type: string
+        default: "10000"
+      bench_chunks_per_fact:
+        description: "Synthetic SourceChunk count per Fact for the benchmark profile"
+        required: false
+        type: string
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-check:
+    name: Product Release Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI_INCLUDE_BENCH: ${{ github.event.inputs.include_bench || 'false' }}
+      CI_BENCH_FACTS: ${{ github.event.inputs.bench_facts || '10000' }}
+      CI_BENCH_CHUNKS_PER_FACT: ${{ github.event.inputs.bench_chunks_per_fact || '5' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run product checks
+        shell: bash
+        run: |
+          set -o pipefail
+          if [[ "${{ github.event_name }}" == "schedule" || "$CI_INCLUDE_BENCH" == "true" ]]; then
+            npm run product:check -- --include-bench --bench-facts "$CI_BENCH_FACTS" --bench-chunks-per-fact "$CI_BENCH_CHUNKS_PER_FACT" 2>&1 | tee product-check.log
+          else
+            npm run product:check 2>&1 | tee product-check.log
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Product Check"
+            echo
+            echo "- Event: ${{ github.event_name }}"
+            echo "- Benchmark facts: $CI_BENCH_FACTS"
+            echo "- Benchmark chunks per fact: $CI_BENCH_CHUNKS_PER_FACT"
+            echo "- Log artifact: product-check-log"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload product check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-check-log
+          path: product-check.log
+          if-no-files-found: ignore
