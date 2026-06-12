@@ -2,6 +2,7 @@ import {
   ApprovedFact,
   CandidateStatus,
   FactLifecycleAction,
+  FactMetadataUpdate,
   LifeContextDomain,
   SensitivityTier,
   SourceLifecycleAction,
@@ -196,6 +197,14 @@ interface NativeFactLifecyclePayload {
   generatedBy: "native_vault_core";
 }
 
+interface NativeFactMetadataPayload {
+  payload: string;
+  updatedAt: string | null;
+  factId: string;
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
 export interface NativeContextPackBuildResult {
   state: VaultState;
   updatedAt: string | null;
@@ -259,6 +268,14 @@ export interface NativeFactLifecycleResult {
   factId: string;
   action: FactLifecycleAction;
   status: ApprovedFact["status"];
+  invalidatedPackCount: number;
+  generatedBy: "native_vault_core";
+}
+
+export interface NativeFactMetadataResult {
+  state: VaultState;
+  updatedAt: string | null;
+  factId: string;
   invalidatedPackCount: number;
   generatedBy: "native_vault_core";
 }
@@ -545,6 +562,30 @@ export async function updateNativeFactLifecycle(input: {
     factId: result.factId,
     action: result.action,
     status: result.status,
+    invalidatedPackCount: result.invalidatedPackCount,
+    generatedBy: result.generatedBy
+  };
+}
+
+export async function updateNativeFactMetadata(
+  factId: string,
+  input: FactMetadataUpdate
+): Promise<NativeFactMetadataResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeFactMetadataPayload>("update_native_fact_metadata", {
+    factId,
+    factText: input.factText,
+    domain: input.domain,
+    sensitivity: input.sensitivity,
+    validFrom: input.validFrom ?? null,
+    validUntil: input.validUntil ?? null,
+    dueDate: input.dueDate ?? null
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    factId: result.factId,
     invalidatedPackCount: result.invalidatedPackCount,
     generatedBy: result.generatedBy
   };

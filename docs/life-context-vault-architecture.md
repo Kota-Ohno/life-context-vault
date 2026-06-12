@@ -129,6 +129,8 @@ In the desktop product path, review actions enter through typed Vault Core comma
 
 Fact lifecycle actions are also typed Vault Core commands in the desktop path. Keeping a review-needed Fact makes it `active` again and removes Source-deletion review metadata. Hiding, deleting, or moving a Fact back to review removes it from active retrieval and cancels existing Context Packs that included it, so external AI clients cannot reuse stale Pack contents after the user changes memory visibility.
 
+Fact metadata edits are typed Vault Core commands as well. Editing canonical Fact text, domain, sensitivity, or date metadata refreshes normalized Facts and FTS projection, writes a `fact_updated` audit event, and cancels existing Context Packs that included the Fact before any external AI client can retrieve stale context.
+
 ### Source Ingestion
 
 Source ingestion handles user-supplied background, conversations, notes, and files.

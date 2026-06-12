@@ -160,6 +160,10 @@ Last updated: 2026-06-12
   - hiding, deleting, or moving a Fact to review cancels existing Context Packs that included that Fact
   - Search now surfaces a review queue for `needs_review` Facts with keep, hide, and delete actions
   - active search results expose hide/delete actions so users can control what remains eligible for Context Packs
+- Added Rust-owned Fact metadata editing path for the Tauri Control Center:
+  - `update_native_fact_metadata` updates canonical Fact text, domain, sensitivity, and date metadata through Vault Core
+  - editing a Fact refreshes normalized Facts/FTS projection and cancels existing Context Packs that included that Fact
+  - Search active and review Fact rows now expose a compact edit form so users can correct life context without recreating Sources
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -168,7 +172,7 @@ Last updated: 2026-06-12
 - Windows/Linux startup helpers and true headless/menu-bar background mode.
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and PDF/OCR ingestion.
-- Rust-owned Vault Core write-side CRUD for broader Source/Fact metadata editing beyond the current native Context Pack/source ingest/source lifecycle/fact lifecycle/candidate review/passive capture/policy settings/MCP proposal/status commands.
+- Rust-owned Vault Core write-side CRUD for broader Source metadata editing and advanced Fact merge/versioning beyond the current native Context Pack/source ingest/source lifecycle/fact lifecycle/fact metadata/candidate review/passive capture/policy settings/MCP proposal/status commands.
 - Large-scale retrieval benchmark against 100k facts and 500k chunks.
 
 ## Verification
@@ -199,6 +203,7 @@ Last updated: 2026-06-12
 - Native Source ingestion tests proving Source upload/manual/background-style writes create Candidates but not Facts, sync normalized Source/Candidate tables, and redact secret values before persistence
 - Native Source lifecycle tests proving Source soft delete marks linked Facts as `needs_review`, invalidates affected Context Packs, removes Fact search results, and body purge blocks later candidate approval
 - Native Fact lifecycle tests proving hidden Facts invalidate affected Context Packs and disappear from search, while kept review Facts become active again
+- Native Fact metadata tests proving edits sync FTS, clear blank date fields, reject `secret_never_send`, and invalidate affected Context Packs
 - Native Candidate review tests proving candidate approval creates one ApprovedFact and FTS row, status updates do not create Facts, and `secret_never_send` candidates are not approvable
 - Native Passive Capture tests proving paused/site-blocked captures do not write events, accepted captures create Sources/Events/Candidates but not Facts, redact secret values, and sync normalized capture tables
 - Native Policy/settings tests proving Capture settings normalize allowed sites and audit changes, and AccessPolicy updates sync normalized policy tables
@@ -225,6 +230,8 @@ Last updated: 2026-06-12
   - mobile `390x844`: Sources lifecycle row stacks badges and actions without page-level horizontal overflow
   - desktop `1280x920`: Search review queue shows `needs_review` Facts with keep/hide/delete actions, and keep moves the Fact back into active results without page-level horizontal overflow
   - mobile `390x844`: Search review queue and active Fact lifecycle actions stack without page-level horizontal overflow
+  - desktop `1280x920`: Search Fact edit form keeps the form open on empty text, updates text/domain/sensitivity/date metadata, and returns to the result row without page-level horizontal overflow
+  - mobile `390x844`: Search Fact edit form stacks fields and actions without page-level horizontal overflow
   - desktop `1280x720`: AI Access operations controls for login launch and auto-start fit without page-level horizontal overflow
   - mobile `390x844`: AI Access operations controls stack to one column without page-level horizontal overflow
   - desktop `1280x720`: Search mode row and filters display without page-level horizontal overflow
@@ -246,7 +253,7 @@ Last updated: 2026-06-12
 
 - Product fit: the app now centers on using life context from everyday AI, not only in-app asking.
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
-- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while Source metadata editing and some Fact lifecycle operations still use the JSON snapshot projected into tables.
+- Technical design: normalized SQLite tables, native FTS search, shared Rust-owned Source ingestion, Source lifecycle, Fact lifecycle, Fact metadata editing, Candidate review, Passive Capture, Policy settings, Context Pack generation, MCP memory proposal, and MCP request status are present, while broader Source metadata editing and advanced Fact merge/versioning remain future work.
 - Context Pack Core: Tauri Requests and local MCP `request_context_pack` both use the same Vault Core generation path from normalized SQLite.
 - External sync: native FTS is protected against stale projection after MCP/Relay-style writes by comparing `vault_state.updated_at` with `projection_state`.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
@@ -271,6 +278,11 @@ Last updated: 2026-06-12
 - Fact Lifecycle security review: accepted; hide/delete/review actions invalidate existing Context Packs and active-only search keeps non-active Facts out of retrieval.
 - Fact Lifecycle technical review: accepted; Fact lifecycle writes go through Vault Core, sync normalized Facts/FTS/Context Pack projections, and reuse the same Pack invalidation guard as Source lifecycle.
 - Fact Lifecycle UX review: accepted; desktop and mobile Search surfaces show review-needed Facts and active Fact actions without page-level horizontal overflow, with action copy that separates keeping context from hiding/deleting it.
+- Fact Metadata review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and UX passes.
+- Fact Metadata product review: accepted; users can now correct canonical life context directly from Search instead of deleting and recreating memory.
+- Fact Metadata security review: accepted; changed Facts invalidate existing Context Packs, and secret-never-send is not offered as a selectable AI-bound sensitivity.
+- Fact Metadata technical review: accepted; metadata writes go through Vault Core, refresh normalized Facts/FTS, clear blank optional date fields, and audit `fact_updated`.
+- Fact Metadata UX review: accepted; the compact edit form keeps high-frequency Search scanning intact while exposing correction only when requested.
 
 ### Relay State Store Slice
 
@@ -344,6 +356,14 @@ Last updated: 2026-06-12
 - Security/privacy: `secret_never_send` candidates are blocked from approval in Vault Core, and reject/archive/sensitive status changes cannot create ApprovedFacts.
 - Technical design: `approve_candidate_at_path` and `update_candidate_status_at_path` are path-based Vault Core APIs behind Tauri review commands.
 - Review disposition: status update and approval were split into separate Core functions to avoid treating `approved` as a generic status mutation.
+
+### Native Fact Metadata Slice
+
+- Product fit: everyday AI context becomes correctable after approval; users can revise fact text, domain, sensitivity, and date metadata without losing provenance.
+- UX: Search result rows expose editing progressively so the normal scan-and-retrieve surface remains quiet until correction is needed.
+- Security/privacy: edits invalidate Context Packs that included the changed Fact, preventing external clients from reusing stale AI-bound payloads.
+- Technical design: `update_fact_metadata_at_path` is the path-based Vault Core API behind the Tauri `update_native_fact_metadata` command and browser fallback mirrors the same state transition.
+- Review disposition: the material risk was stale FTS or stale Pack contents after edits; fixed with projection sync and Context Pack invalidation coverage.
 
 ### Native Source Ingestion Slice
 

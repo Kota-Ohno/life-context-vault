@@ -525,6 +525,22 @@ button:focus-visible {
   min-width: min(100%, 360px);
 }
 
+.fact-main {
+  min-width: 0;
+}
+
+.fact-edit-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fact-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .memory-review-panel {
   display: grid;
   gap: 12px;
@@ -1297,6 +1313,10 @@ button:focus-visible {
   .fact-actions {
     justify-content: flex-start;
     min-width: 0;
+  }
+
+  .fact-edit-grid {
+    grid-template-columns: 1fr;
   }
 
   .request-detail {

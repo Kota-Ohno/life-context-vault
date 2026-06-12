@@ -10,6 +10,7 @@ import {
   ContextPackItem,
   ContextPackRequest,
   FactLifecycleAction,
+  FactMetadataUpdate,
   LifeContextDomain,
   MemoryCandidate,
   PassiveCaptureEvent,
@@ -603,6 +604,59 @@ export function updateFactLifecycle(
       ...state.auditEvents
     ]
   };
+}
+
+export function updateFactMetadata(
+  state: VaultState,
+  factId: string,
+  input: FactMetadataUpdate
+): VaultState {
+  const fact = state.facts.find((item) => item.id === factId);
+  const factText = input.factText.trim();
+  if (!fact || !factText || input.sensitivity === "secret_never_send") return state;
+
+  const now = nowIso();
+  const affectedFactIds = new Set([factId]);
+  const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds);
+  const invalidatedPacks = nextPacks.filter(
+    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
+  );
+  const invalidatedRequestIds = new Set(
+    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  );
+  return {
+    ...state,
+    facts: state.facts.map((item) =>
+      item.id === factId
+        ? {
+            ...item,
+            factText,
+            domain: input.domain,
+            sensitivity: input.sensitivity,
+            validFrom: blankToUndefined(input.validFrom),
+            validUntil: blankToUndefined(input.validUntil),
+            dueDate: blankToUndefined(input.dueDate),
+            updatedAt: now
+          }
+        : item
+    ),
+    contextPacks: nextPacks,
+    contextPackRequests: state.contextPackRequests.map((request) =>
+      invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
+    ),
+    auditEvents: [
+      audit("fact_updated", "fact", factId, input.sensitivity, {
+        action: "metadata_updated",
+        invalidatedPackCount: invalidatedPacks.length
+      }),
+      ...state.auditEvents
+    ]
+  };
+}
+
+function blankToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function factStatusForAction(action: FactLifecycleAction): ApprovedFact["status"] {

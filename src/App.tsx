@@ -54,6 +54,7 @@ import {
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
   updateNativeFactLifecycle,
+  updateNativeFactMetadata,
   updateNativePassiveCaptureSettings,
   updateNativeSourceLifecycle,
   uninstallLoginItem
@@ -89,6 +90,7 @@ import {
   sensitivityLabel,
   updateAccessPolicy,
   updateFactLifecycle,
+  updateFactMetadata,
   updatePassiveCaptureSettings,
   updateCandidateStatus,
   updateSourceLifecycle
@@ -103,6 +105,7 @@ import {
   ContextPack,
   ContextPackRequest,
   FactLifecycleAction,
+  FactMetadataUpdate,
   LifeContextDomain,
   MemoryCandidate,
   PassiveCaptureSettings,
@@ -684,6 +687,42 @@ export function App() {
       updateFactLifecycle(state, factId, action),
       factLifecycleNotice(action, activeFactPackCount(state, factId))
     );
+  }
+
+  async function editFactMetadata(factId: string, input: FactMetadataUpdate): Promise<boolean> {
+    const fact = state.facts.find((item) => item.id === factId);
+    if (!fact) {
+      setNotice("Factが見つかりませんでした。");
+      return false;
+    }
+    if (!input.factText.trim()) {
+      setNotice("Fact本文を入力してください。");
+      return false;
+    }
+    if (input.sensitivity === "secret_never_send") {
+      setNotice("SecretはApprovedFactとして保存できません。Sourceまたは候補を削除してください。");
+      return false;
+    }
+    if (nativePath) {
+      try {
+        const updated = await updateNativeFactMetadata(factId, input);
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(factMetadataNotice(updated.invalidatedPackCount));
+          return true;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Vault CoreでFactを保存できませんでした。");
+        return false;
+      }
+    }
+    apply(
+      updateFactMetadata(state, factId, input),
+      factMetadataNotice(activeFactPackCount(state, factId))
+    );
+    return true;
   }
 
   async function approve(candidate: MemoryCandidate) {
@@ -1328,6 +1367,7 @@ export function App() {
             reviewFacts={reviewFacts}
             sources={state.sources}
             changeFactLifecycle={changeFactLifecycle}
+            editFactMetadata={editFactMetadata}
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
@@ -2665,6 +2705,7 @@ function SearchView({
   reviewFacts,
   sources,
   changeFactLifecycle,
+  editFactMetadata,
   searchMode,
   searchError,
   nativePath
@@ -2679,6 +2720,7 @@ function SearchView({
   reviewFacts: ApprovedFact[];
   sources: VaultState["sources"];
   changeFactLifecycle: (factId: string, action: FactLifecycleAction) => void;
+  editFactMetadata: (factId: string, input: FactMetadataUpdate) => Promise<boolean>;
   searchMode: SearchMode;
   searchError: string | null;
   nativePath: string | null;
@@ -2707,6 +2749,7 @@ function SearchView({
                 sources={sources}
                 variant="review"
                 changeFactLifecycle={changeFactLifecycle}
+                editFactMetadata={editFactMetadata}
               />
             ))}
           </div>
@@ -2751,6 +2794,7 @@ function SearchView({
             sources={sources}
             variant="active"
             changeFactLifecycle={changeFactLifecycle}
+            editFactMetadata={editFactMetadata}
           />
         ))}
         {results.length === 0 && <p className="muted">一致するApprovedFactがありません。</p>}
@@ -2886,26 +2930,121 @@ function FactRow({
   fact,
   sources = [],
   variant = "readonly",
-  changeFactLifecycle
+  changeFactLifecycle,
+  editFactMetadata
 }: {
   fact: ApprovedFact;
   sources?: VaultState["sources"];
   variant?: "readonly" | "active" | "review";
   changeFactLifecycle?: (factId: string, action: FactLifecycleAction) => void;
+  editFactMetadata?: (factId: string, input: FactMetadataUpdate) => Promise<boolean>;
 }) {
+  const [draft, setDraft] = useState<FactMetadataUpdate | null>(null);
   const sourceNames = fact.sourceIds
     .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Unknown source")
     .slice(0, 2)
     .join(", ");
   return (
     <div className="fact-row">
-      <div>
-        <strong>{fact.factText}</strong>
-        <span>{domainLabel(fact.domain)} / {fact.confidence} / {factStatusLabel(fact.status)}</span>
-        {sourceNames && <span>{sourceNames}</span>}
+      <div className="fact-main">
+        {draft ? (
+          <div className="fact-edit-form">
+            <Textarea
+              label="Fact本文"
+              value={draft.factText}
+              onChange={(value) => setDraft({ ...draft, factText: value })}
+              placeholder="AIに渡す正本の文脈"
+            />
+            <div className="fact-edit-grid">
+              <label className="field">
+                <span>Domain</span>
+                <select
+                  value={draft.domain}
+                  onChange={(event) => setDraft({ ...draft, domain: event.target.value as LifeContextDomain })}
+                >
+                  {domainOptions.filter((domain) => domain !== "all").map((domain) => (
+                    <option key={domain} value={domain}>
+                      {domainLabel(domain as LifeContextDomain)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Sensitivity</span>
+                <select
+                  value={draft.sensitivity}
+                  onChange={(event) => setDraft({ ...draft, sensitivity: event.target.value as SensitivityTier })}
+                >
+                  {policySensitivityOptions.map((sensitivity) => (
+                    <option key={sensitivity} value={sensitivity}>
+                      {sensitivityLabel(sensitivity)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Input
+                label="有効期限"
+                value={draft.validUntil ?? ""}
+                onChange={(value) => setDraft({ ...draft, validUntil: value })}
+                placeholder="YYYY-MM-DD"
+              />
+              <Input
+                label="期限日"
+                value={draft.dueDate ?? ""}
+                onChange={(value) => setDraft({ ...draft, dueDate: value })}
+                placeholder="YYYY-MM-DD"
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            <strong>{fact.factText}</strong>
+            <span>{domainLabel(fact.domain)} / {fact.confidence} / {factStatusLabel(fact.status)}</span>
+            {sourceNames && <span>{sourceNames}</span>}
+          </>
+        )}
       </div>
       <div className="fact-actions">
         <SensitivityBadge sensitivity={fact.sensitivity} />
+        {editFactMetadata && (
+          draft ? (
+            <>
+              <button
+                className="primary-button"
+                onClick={async () => {
+                  const saved = await editFactMetadata(fact.id, draft);
+                  if (saved) setDraft(null);
+                }}
+                type="button"
+              >
+                <Check size={16} />
+                保存
+              </button>
+              <button className="secondary-button" onClick={() => setDraft(null)} type="button">
+                <X size={16} />
+                取消
+              </button>
+            </>
+          ) : (
+            <button
+              className="secondary-button"
+              onClick={() =>
+                setDraft({
+                  factText: fact.factText,
+                  domain: fact.domain,
+                  sensitivity: fact.sensitivity,
+                  validFrom: fact.validFrom,
+                  validUntil: fact.validUntil,
+                  dueDate: fact.dueDate
+                })
+              }
+              type="button"
+            >
+              <Settings size={16} />
+              編集
+            </button>
+          )
+        )}
         {variant === "review" && changeFactLifecycle && (
           <>
             <button className="primary-button" onClick={() => changeFactLifecycle(fact.id, "keep_active")} type="button">
@@ -3073,6 +3212,10 @@ function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: 
     return `Factを削除済みにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
   }
   return `Factを再確認待ちにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+}
+
+function factMetadataNotice(invalidatedPackCount: number): string {
+  return `Factを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
 }
 
 function activeFactPackCount(state: VaultState, factId: string): number {

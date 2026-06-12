@@ -95,6 +95,15 @@ export type FactLifecycleAction =
   | "delete"
   | "restore";
 
+export type FactMetadataUpdate = {
+  factText: string;
+  domain: LifeContextDomain;
+  sensitivity: SensitivityTier;
+  validFrom?: string;
+  validUntil?: string;
+  dueDate?: string;
+};
+
 export type RawSource = {
   id: string;
   kind: SourceKind;

@@ -1,6 +1,6 @@
 # Life Context Vault Data Model
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 ## Data Model Goals
 
@@ -269,6 +269,7 @@ Required behavior:
 - Expired facts may be shown as historical context only when relevant and clearly labeled.
 - `user_hidden` facts are not retrieved unless the user explicitly includes them.
 - Deleting a fact does not require deleting the source, but retrieval must exclude deleted facts.
+- Material updates to fact text, domain, sensitivity, or date metadata require a user action, a `fact_updated` audit event, `updated_at` refresh, search-index refresh, and invalidation of existing Context Packs that include the fact.
 
 ### Entity
 
@@ -616,6 +617,7 @@ Retrieval defaults:
 - Exclude unless explicitly requested: `needs_review`, `expired`, `superseded`, `user_hidden`
 - Always exclude: `deleted`
 - Hiding, deleting, or moving an active Fact to `needs_review` must invalidate existing ContextPacks that include that Fact.
+- Editing active Fact text, domain, sensitivity, validity, or due-date metadata must also invalidate existing ContextPacks that include that Fact.
 - Keeping a `needs_review` Fact returns it to `active`, but does not resurrect previously invalidated ContextPacks.
 
 ## Conflict Model

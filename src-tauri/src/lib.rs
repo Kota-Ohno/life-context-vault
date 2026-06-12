@@ -212,6 +212,16 @@ struct NativeFactLifecycleResult {
   generated_by: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeFactMetadataResult {
+  payload: String,
+  updated_at: Option<String>,
+  fact_id: String,
+  invalidated_pack_count: usize,
+  generated_by: String,
+}
+
 pub struct VaultCoreContextPackResult {
   pub payload: String,
   pub updated_at: Option<String>,
@@ -283,6 +293,13 @@ pub struct VaultCoreFactLifecycleResult {
   pub fact_id: String,
   pub action: String,
   pub status: String,
+  pub invalidated_pack_count: usize,
+}
+
+pub struct VaultCoreFactMetadataResult {
+  pub payload: String,
+  pub updated_at: Option<String>,
+  pub fact_id: String,
   pub invalidated_pack_count: usize,
 }
 
@@ -1947,6 +1964,78 @@ pub fn update_fact_lifecycle_at_path(
   })
 }
 
+pub fn update_fact_metadata_at_path(
+  path: &Path,
+  fact_id: &str,
+  fact_text: &str,
+  domain: &str,
+  sensitivity: &str,
+  valid_from: Option<&str>,
+  valid_until: Option<&str>,
+  due_date: Option<&str>,
+) -> Result<VaultCoreFactMetadataResult, String> {
+  let fact_id = fact_id.trim();
+  if fact_id.is_empty() {
+    return Err("factId is required.".to_string());
+  }
+  let fact_text = normalized_text(fact_text);
+  if fact_text.is_empty() {
+    return Err("factText is required.".to_string());
+  }
+  let domain = life_domain(domain)?;
+  let sensitivity = sensitivity_tier(sensitivity)?;
+  if sensitivity == "secret_never_send" {
+    return Err("secret_never_send cannot be saved as an ApprovedFact.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  {
+    let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) else {
+      return Err("Vault has no facts array.".to_string());
+    };
+    let Some(fact) = facts
+      .iter_mut()
+      .find(|fact| str_field(fact, "id") == fact_id)
+    else {
+      return Err(format!("ApprovedFact was not found: {fact_id}"));
+    };
+    fact["factText"] = Value::String(fact_text);
+    fact["domain"] = Value::String(domain.to_string());
+    fact["sensitivity"] = Value::String(sensitivity.to_string());
+    fact["updatedAt"] = Value::String(now);
+    set_optional_fact_string(fact, "validFrom", valid_from);
+    set_optional_fact_string(fact, "validUntil", valid_until);
+    set_optional_fact_string(fact, "dueDate", due_date);
+  }
+  let invalidated_pack_count =
+    invalidate_context_packs_for_facts(&mut vault, &[fact_id.to_string()]);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "fact_updated",
+      "fact",
+      fact_id,
+      sensitivity,
+      json!({
+        "action": "metadata_updated",
+        "domain": domain,
+        "invalidatedPackCount": invalidated_pack_count,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreFactMetadataResult {
+    payload,
+    updated_at,
+    fact_id: fact_id.to_string(),
+    invalidated_pack_count,
+  })
+}
+
 pub fn approve_candidate_at_path(
   path: &Path,
   candidate_id: &str,
@@ -3229,6 +3318,36 @@ fn fact_status_for_action(action: &str) -> &'static str {
   }
 }
 
+fn life_domain(value: &str) -> Result<&'static str, String> {
+  match value {
+    "identity_and_profile" => Ok("identity_and_profile"),
+    "values_goals_and_preferences" => Ok("values_goals_and_preferences"),
+    "life_events_and_plans" => Ok("life_events_and_plans"),
+    "routines_and_logistics" => Ok("routines_and_logistics"),
+    "home_and_places" => Ok("home_and_places"),
+    "documents_and_evidence" => Ok("documents_and_evidence"),
+    "contracts_and_policies" => Ok("contracts_and_policies"),
+    "procedures_and_obligations" => Ok("procedures_and_obligations"),
+    "health_and_care" => Ok("health_and_care"),
+    "finance_and_benefits" => Ok("finance_and_benefits"),
+    "work_and_education" => Ok("work_and_education"),
+    "relationships_and_household" => Ok("relationships_and_household"),
+    "constraints_and_accessibility" => Ok("constraints_and_accessibility"),
+    _ => Err(format!("unsupported life context domain: {value}")),
+  }
+}
+
+fn set_optional_fact_string(fact: &mut Value, key: &str, value: Option<&str>) {
+  let normalized = value.map(normalized_text).unwrap_or_default();
+  if normalized.is_empty() {
+    if let Some(object) = fact.as_object_mut() {
+      object.remove(key);
+    }
+  } else {
+    fact[key] = Value::String(normalized);
+  }
+}
+
 fn json_array_contains_string(value: &Value, needle: &str) -> bool {
   value
     .as_array()
@@ -4498,6 +4617,37 @@ fn update_native_fact_lifecycle(
 }
 
 #[tauri::command]
+fn update_native_fact_metadata(
+  app: AppHandle,
+  fact_id: String,
+  fact_text: String,
+  domain: String,
+  sensitivity: String,
+  valid_from: Option<String>,
+  valid_until: Option<String>,
+  due_date: Option<String>,
+) -> Result<NativeFactMetadataResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = update_fact_metadata_at_path(
+    &path,
+    &fact_id,
+    &fact_text,
+    &domain,
+    &sensitivity,
+    valid_from.as_deref(),
+    valid_until.as_deref(),
+    due_date.as_deref(),
+  )?;
+  Ok(NativeFactMetadataResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    fact_id: result.fact_id,
+    invalidated_pack_count: result.invalidated_pack_count,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn ai_access_service_status(
   supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
 ) -> Result<AiAccessServiceStatus, String> {
@@ -4621,6 +4771,7 @@ pub fn run() {
       update_native_access_policy,
       update_native_source_lifecycle,
       update_native_fact_lifecycle,
+      update_native_fact_metadata,
       ai_access_service_status,
       start_ai_access_services,
       stop_ai_access_services,
@@ -5142,7 +5293,10 @@ mod tests {
     assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_deleted"));
     assert_eq!(result.affected_fact_count, 1);
     assert_eq!(result.invalidated_pack_count, 1);
-    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
     assert_eq!(request.get("status").and_then(Value::as_str), Some("expired"));
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
@@ -5302,6 +5456,93 @@ mod tests {
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
     let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
     assert_eq!(search.len(), 1);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn native_fact_metadata_update_syncs_fts_and_invalidates_pack() {
+    use_test_vault_key();
+    let path = temp_vault_path("fact-metadata");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Lease note",
+      "Need to renew lease by 2027-01-15.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result
+      .candidate_ids
+      .first()
+      .cloned()
+      .expect("candidate id");
+    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let fact_id = reviewed.fact_id.expect("fact id");
+    create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What should I remember about lease renewal?",
+      Some("test"),
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+
+    let result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Need to renew apartment lease by 2027-03-20.",
+      "contracts_and_policies",
+      "private_consequential",
+      Some(""),
+      Some("2027-03-20"),
+      Some("2027-03-20"),
+    )
+    .expect("metadata update");
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|fact| str_field(fact, "id") == fact_id))
+      .expect("fact");
+    let pack = saved
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+
+    assert_eq!(result.invalidated_pack_count, 1);
+    assert_eq!(
+      fact.get("factText").and_then(Value::as_str),
+      Some("Need to renew apartment lease by 2027-03-20.")
+    );
+    assert_eq!(
+      fact.get("domain").and_then(Value::as_str),
+      Some("contracts_and_policies")
+    );
+    assert!(fact.get("validFrom").is_none());
+    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
+    let old_search = search_facts_in_connection(&connection, "2027-01-15", None, None, 20)
+      .expect("old search");
+    let new_search = search_facts_in_connection(&connection, "apartment", None, None, 20)
+      .expect("new search");
+    assert!(old_search.is_empty());
+    assert_eq!(new_search.len(), 1);
+
+    let secret_result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Secret value should not become an ApprovedFact.",
+      "contracts_and_policies",
+      "secret_never_send",
+      None,
+      None,
+      None,
+    );
+    assert!(secret_result.is_err());
     remove_temp_vault(&path);
   }
 
