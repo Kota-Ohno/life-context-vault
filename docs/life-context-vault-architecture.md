@@ -368,6 +368,28 @@ Relevant context may require:
 
 Hard filters must run after retrieval and before LLM exposure.
 
+### Retrieval Performance Gate
+
+Vault Core retrieval must remain usable as the user's life context grows over years.
+
+The product-grade performance gate is an explicit opt-in benchmark rather than a normal unit test:
+
+```bash
+npm run retrieval:bench
+```
+
+The benchmark defaults to an encrypted local SQLite Vault with 100,000 ApprovedFacts and 500,000 SourceChunks. It measures:
+
+- FTS search over AI-eligible ApprovedFacts.
+- Context Pack generation through the same Vault Core path used by the Control Center and local MCP sidecar.
+
+Initial targets:
+
+- FTS P95 <= 300ms.
+- Context Pack generation P95 <= 1000ms.
+
+The 2026-06-12 baseline run measured FTS P95 at 160.9ms and Context Pack generation P95 at 63.6ms. `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT` can be set when profiling smaller local runs or larger stress runs.
+
 ### Source Snippets
 
 Source snippets may be included only when:

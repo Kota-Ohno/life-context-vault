@@ -194,6 +194,11 @@ Last updated: 2026-06-12
   - Sources upload now accepts only text-like formats within the local extraction size ceiling
   - PDFs, images, office documents, unreadable binary content, and oversized files are rejected before RawSource or MemoryCandidate creation
   - the Upload card explains the safe fallback to Manual source text until OCR/document extraction is available
+- Added explicit large-scale retrieval benchmark coverage:
+  - ignored Rust benchmark seeds an encrypted SQLite Vault with 100,000 ApprovedFacts and 500,000 SourceChunks by default
+  - benchmark measures Vault Core FTS search and Context Pack generation on the same normalized schema used by the app and MCP sidecars
+  - `npm run retrieval:bench` runs the benchmark without adding cost to normal test runs
+  - `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT` can reduce or expand the synthetic dataset for local profiling
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
@@ -203,7 +208,7 @@ Last updated: 2026-06-12
 - Hosted relay operations for the metadata-only state store: rotation, tenant isolation, retention controls, and backup policy.
 - Provider-backed LLM extraction and full PDF/OCR/office-document ingestion beyond the current safe text-upload guard.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current conservative Candidate conflict annotation and explicit supersede flow.
-- Large-scale retrieval benchmark against 100k facts and 500k chunks.
+- Ongoing retrieval performance tracking in CI/release qualification; the explicit 100k Fact / 500k SourceChunk benchmark now exists, but is intentionally opt-in because of dataset size.
 
 ## Verification
 
@@ -246,6 +251,7 @@ Last updated: 2026-06-12
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts and `get_request_status` strips internal Pack fields
 - Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
+- Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
 - `npm run tauri:build`
 - `npm run tauri:bundle`
 - Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
@@ -357,6 +363,15 @@ Last updated: 2026-06-12
 - Context Pack Minimization security review: accepted; removed items stay in `excludedItems` as `user_hidden`, source snippets and max sensitivity are recalculated, and external AI retrieves only the confirmed edited Pack.
 - Context Pack Minimization technical review: accepted; Pack item visibility, confirmation, and denial now have Rust-owned Vault Core commands with projection sync and audit events.
 - Context Pack Minimization UX review: accepted; desktop and mobile Requests screens show send counts, removed Facts, and restore controls without horizontal overflow.
+
+### Large Retrieval Benchmark Slice
+
+- Review fallback: SubAgents were not used for this slice because parallel SubAgent work was not explicitly requested; the main thread ran separate product, security/privacy, technical, and operations passes.
+- Product fit: accepted; multi-year life context growth now has an executable 100k Fact / 500k SourceChunk retrieval gate instead of only an architectural target.
+- Security/privacy: accepted; the benchmark uses synthetic data, opens the same encrypted SQLite path with the test Vault key, and exercises ApprovedFact-only search plus Context Pack generation without Raw Source export.
+- Technical design: accepted; the benchmark is ignored by default, exposed through `npm run retrieval:bench`, configurable through `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT`, and measures the shared Vault Core path used by the Control Center and MCP sidecar.
+- Operations: accepted; normal `npm test`/`cargo test` remain fast while release qualification has a repeatable command and documented P95 targets.
+- Verification: `npm test`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run retrieval:bench`, `git diff --check`, and `npm run tauri:build` passed. `cargo fmt` could not run because `rustfmt` is not installed for the local stable toolchain.
 
 ### Relay State Store Slice
 

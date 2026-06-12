@@ -5867,6 +5867,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::time::Instant;
 
   fn initialize_test_vault_connection(connection: &Connection) {
     connection
@@ -5912,6 +5913,247 @@ mod tests {
 
   fn use_test_vault_key() {
     std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+  }
+
+  fn benchmark_size_from_env(name: &str, default: usize) -> usize {
+    env::var(name)
+      .ok()
+      .and_then(|value| value.parse::<usize>().ok())
+      .filter(|value| *value > 0)
+      .unwrap_or(default)
+  }
+
+  fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+  }
+
+  fn percentile_ms(samples: &mut [Duration], percentile: usize) -> f64 {
+    samples.sort();
+    let index = samples
+      .len()
+      .saturating_mul(percentile)
+      .saturating_add(99)
+      / 100;
+    let index = index.saturating_sub(1).min(samples.len().saturating_sub(1));
+    duration_ms(samples[index])
+  }
+
+  fn seed_large_retrieval_benchmark(
+    connection: &mut Connection,
+    fact_count: usize,
+    chunks_per_fact: usize,
+  ) {
+    connection
+      .execute_batch(
+        "PRAGMA synchronous = OFF;
+         PRAGMA temp_store = MEMORY;",
+      )
+      .expect("benchmark pragmas");
+    let transaction = connection.transaction().expect("benchmark transaction");
+    {
+      let mut source_statement = transaction
+        .prepare(
+          "INSERT INTO sources (
+            id, kind, title, origin, body, created_at, captured_at, retention_until,
+            default_sensitivity, processing_status, deletion_state
+          ) VALUES (?1, 'document', ?2, 'user_upload', ?3, ?4, ?4, NULL, ?5, 'ready', 'active')",
+        )
+        .expect("prepare benchmark sources");
+      let mut chunk_statement = transaction
+        .prepare(
+          "INSERT INTO source_chunks (
+            id, source_id, chunk_index, text, detected_sensitivity, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .expect("prepare benchmark chunks");
+      let mut fact_statement = transaction
+        .prepare(
+          "INSERT INTO facts (
+            id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
+            status, valid_from, valid_until, due_date, created_at, approved_at, updated_at,
+            supersedes_fact_ids, superseded_by_fact_id
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'source_backed', 'active', NULL, NULL, ?7, ?8, ?8, ?8, '[]', NULL)",
+        )
+        .expect("prepare benchmark facts");
+      let mut fts_statement = transaction
+        .prepare("INSERT INTO facts_fts (fact_id, fact_text, domain) VALUES (?1, ?2, ?3)")
+        .expect("prepare benchmark fts");
+      let domains = [
+        "home_and_places",
+        "contracts_and_policies",
+        "procedures_and_obligations",
+        "finance_and_benefits",
+        "work_and_education",
+        "documents_and_evidence",
+        "routines_and_logistics",
+        "values_goals_and_preferences",
+      ];
+      let fact_types = [
+        "deadline",
+        "obligation",
+        "contract_term",
+        "support_need",
+        "place_context",
+        "document_reference",
+        "routine",
+        "preference",
+      ];
+      let sensitivities = ["public", "personal", "private_consequential", "sensitive"];
+
+      for index in 0..fact_count {
+        let source_id = format!("src_bench_{index:06}");
+        let fact_id = format!("fact_bench_{index:06}");
+        let domain = domains[index % domains.len()];
+        let fact_type = fact_types[index % fact_types.len()];
+        let sensitivity = sensitivities[index % sensitivities.len()];
+        let month = (index % 12) + 1;
+        let day = (index % 28) + 1;
+        let due_date = format!("2027-{month:02}-{day:02}");
+        let updated_at = format!(
+          "2026-06-12T{:02}:{:02}:{:02}.000Z",
+          index % 24,
+          index % 60,
+          index % 60
+        );
+        let fact_text = format!(
+          "Benchmark fact {index}: insurance policy renewal, address moving checklist, employer job change, pension benefit paperwork, lease contract obligation, document evidence, due date {due_date}."
+        );
+        let body = format!(
+          "{fact_text} Source paragraph for retrieval benchmark. Chunk text repeats address insurance moving employer pension benefit terms."
+        );
+        let source_ids_json = format!("[\"{source_id}\"]");
+
+        source_statement
+          .execute(params![
+            source_id,
+            format!("Benchmark source {index}"),
+            body,
+            updated_at,
+            sensitivity
+          ])
+          .expect("insert benchmark source");
+        for chunk_index in 0..chunks_per_fact {
+          chunk_statement
+            .execute(params![
+              format!("chunk_bench_{index:06}_{chunk_index}"),
+              source_id,
+              chunk_index as i64,
+              format!("{fact_text} supporting source chunk {chunk_index}."),
+              sensitivity,
+              updated_at
+            ])
+            .expect("insert benchmark source chunk");
+        }
+        fact_statement
+          .execute(params![
+            fact_id,
+            fact_text,
+            domain,
+            fact_type,
+            source_ids_json,
+            sensitivity,
+            due_date,
+            updated_at
+          ])
+          .expect("insert benchmark fact");
+        fts_statement
+          .execute(params![fact_id, fact_text, domain])
+          .expect("insert benchmark fts");
+      }
+    }
+    transaction.commit().expect("commit benchmark seed");
+  }
+
+  #[test]
+  #[ignore = "large benchmark: run explicitly with --ignored; defaults to 100k Facts and 500k source chunks"]
+  fn large_scale_retrieval_benchmark_100k_facts_500k_chunks() {
+    use_test_vault_key();
+    let fact_count = benchmark_size_from_env("LCV_BENCH_FACTS", 100_000);
+    let chunks_per_fact = benchmark_size_from_env("LCV_BENCH_CHUNKS_PER_FACT", 5);
+    let expected_chunk_count = fact_count * chunks_per_fact;
+    let path = temp_vault_path("retrieval-benchmark");
+    let mut connection = open_vault_db_at_path(&path).expect("open benchmark vault");
+
+    let seed_start = Instant::now();
+    seed_large_retrieval_benchmark(&mut connection, fact_count, chunks_per_fact);
+    let seed_elapsed = seed_start.elapsed();
+
+    let fact_total: i64 = connection
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("benchmark fact count");
+    let chunk_total: i64 = connection
+      .query_row("SELECT COUNT(*) FROM source_chunks", [], |row| row.get(0))
+      .expect("benchmark chunk count");
+    assert_eq!(fact_total as usize, fact_count);
+    assert_eq!(chunk_total as usize, expected_chunk_count);
+
+    let search_queries = [
+      "insurance address",
+      "moving checklist",
+      "employer pension",
+      "benefit paperwork",
+      "lease contract",
+      "document evidence",
+    ];
+    let mut search_samples = Vec::new();
+    for _ in 0..4 {
+      for query in search_queries {
+        let started = Instant::now();
+        let results = search_facts_in_connection(&connection, query, None, None, 40)
+          .expect("benchmark FTS search");
+        assert!(!results.is_empty());
+        search_samples.push(started.elapsed());
+      }
+    }
+
+    let pack_tasks = [
+      "What should I update before moving address with my insurance policy?",
+      "What should I remember before changing employer for pension benefit paperwork?",
+      "Which lease contract obligations and document evidence matter this month?",
+      "Help me plan the renewal checklist for insurance, address, and benefits.",
+    ];
+    let mut pack_samples = Vec::new();
+    let mut vault = empty_vault_json();
+    for _ in 0..3 {
+      for task in pack_tasks {
+        let started = Instant::now();
+        let (_request_id, pack_id) = create_native_context_pack_request_in_connection(
+          &connection,
+          &mut vault,
+          "conn_benchmark",
+          "Benchmark Client",
+          task,
+          Some("large retrieval benchmark"),
+          Some("sensitive"),
+          Some("always_review"),
+        )
+        .expect("benchmark context pack");
+        let pack = find_vault_item_by_id(&vault, "contextPacks", &pack_id).expect("benchmark pack");
+        assert!(pack
+          .get("items")
+          .and_then(Value::as_array)
+          .map(|items| !items.is_empty())
+          .unwrap_or(false));
+        pack_samples.push(started.elapsed());
+      }
+    }
+
+    let search_p95_ms = percentile_ms(&mut search_samples, 95);
+    let pack_p95_ms = percentile_ms(&mut pack_samples, 95);
+    eprintln!(
+      "LCV retrieval benchmark: facts={fact_count}, chunks={expected_chunk_count}, seed_ms={:.1}, fts_p95_ms={search_p95_ms:.1}, context_pack_p95_ms={pack_p95_ms:.1}",
+      duration_ms(seed_elapsed)
+    );
+
+    assert!(
+      search_p95_ms <= 300.0,
+      "FTS P95 exceeded target: {search_p95_ms:.1}ms > 300ms"
+    );
+    assert!(
+      pack_p95_ms <= 1000.0,
+      "Context Pack P95 exceeded target: {pack_p95_ms:.1}ms > 1000ms"
+    );
+    remove_temp_vault(&path);
   }
 
   #[test]
