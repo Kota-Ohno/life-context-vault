@@ -1863,6 +1863,7 @@ dependencies = [
 name = "life-context-vault"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "log",
  "rusqlite",
  "serde",

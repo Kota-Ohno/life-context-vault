@@ -439,26 +439,28 @@ The app keeps local operation unaffected and shows backup status.
 
 Backup failure must not block local Vault access.
 
-## Future MCP Adapter
+## MCP Adapter
 
-MCP is a later integration surface, not the first product.
+Local MCP is now an integration surface for same-device AI clients.
 
-When added, MCP should expose only controlled tools:
+The local stdio sidecar exposes only controlled tools:
 
-- `search_context`
-- `build_context_pack`
-- `list_context_pack_items`
-- `propose_memory_candidate`
-- `get_audit_summary`
+- `life_context.request_context_pack`
+- `life_context.propose_memory`
+- `life_context.get_policy_summary`
+- `life_context.get_request_status`
 
 Do not expose:
 
 - Raw Vault dump.
 - Direct ApprovedFact writes.
-- Tier 3 sensitive reads without first-party app confirmation.
+- Unapproved MemoryCandidate records as trusted context.
+- Private consequential or sensitive Context Packs without first-party app confirmation.
 - Tier 4 material.
 
-MCP clients should receive Context Packs, not unrestricted database access.
+MCP clients receive Context Packs, not unrestricted database access.
+
+Remote MCP relay remains a later network surface. It must preserve the same tool and Context Pack boundary.
 
 ## Implementation Milestones
 

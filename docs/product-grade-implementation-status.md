@@ -42,11 +42,18 @@ Last updated: 2026-06-12
   - `passive_capture_events`
   - `audit_events`
   - `facts_fts`
+- Added real local MCP stdio sidecar:
+  - `life_context.request_context_pack`
+  - `life_context.propose_memory`
+  - `life_context.get_policy_summary`
+  - `life_context.get_request_status`
+  - private consequential and sensitive packs are queued for confirmation instead of returned directly
+- Added Connections UI setup guidance for Claude Desktop-style MCP configuration.
+- Added top-bar native Vault Sync action so the app can reload MCP-written requests or memory proposals while open.
 - Kept encrypted JSON backup compatibility through the existing backup flow.
 
 ## Still Remaining For Full Product Grade
 
-- Real local MCP sidecar process.
 - Real remote MCP relay with HTTPS `/mcp`, OAuth, pairing, and local Agent websocket.
 - Browser extension and Native Messaging capture bridge.
 - SQLCipher or equivalent local database encryption with OS keychain-managed keys.
@@ -60,8 +67,13 @@ Last updated: 2026-06-12
 - `npm run build`
 - `cargo test` in `src-tauri`
 - `cargo build` in `src-tauri`
+- `npm run mcp:build`
+- stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
 - `npm run tauri:build`
 - `npm run tauri:bundle`
+- Browser UI checks:
+  - desktop `1440x980`: Connections MCP setup card displays without horizontal overflow
+  - mobile `390x844`: Connections MCP setup card and code blocks fit without page-level horizontal overflow
 
 `cargo fmt --check` could not run because `cargo-fmt` is not installed for the active stable Apple Silicon toolchain.
 
@@ -71,6 +83,7 @@ Last updated: 2026-06-12
 - Security/privacy: external AI receives Context Packs only; passive capture creates candidates only; TTL purge is implemented for raw capture text.
 - Technical design: normalized SQLite tables and FTS are present, but the frontend still persists a JSON snapshot that is projected into tables.
 - UX: users can see connections, pending requests, capture status, and audit events in first-party UI.
+- Packaging: adding the MCP sidecar introduced a multi-binary Cargo package issue where Tauri initially built the wrong binary; `default-run` and explicit `[[bin]]` entries now keep the app and sidecar separate.
 
 ## Independent Review Passes
 

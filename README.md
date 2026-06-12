@@ -36,6 +36,7 @@ npm run tauri:bundle
 ```bash
 npm test
 npm run build
+npm run mcp:build
 npm run tauri:build
 npm run tauri:bundle
 ```
@@ -55,8 +56,26 @@ npm run tauri:bundle
 - Encrypted JSON backup export and restore
 - Tauri desktop wrapper with SQLite-backed native persistence
 - Normalized SQLite projection tables plus FTS foundation for product-grade retrieval
+- Local MCP stdio sidecar for same-device AI clients
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to SQLite in the app data directory and projected into normalized tables.
+
+## Run Local MCP Sidecar
+
+```bash
+npm run mcp:build
+```
+
+Then open **Connections** in the app and copy the Claude Desktop config.
+
+The MCP sidecar exposes controlled tools only:
+
+- `life_context.request_context_pack`
+- `life_context.propose_memory`
+- `life_context.get_policy_summary`
+- `life_context.get_request_status`
+
+See `docs/local-mcp-sidecar.md` for setup, safety boundaries, and a stdio smoke test.
 
 ## Try The Product-Grade Slice
 

@@ -14,6 +14,7 @@ import {
   PlayCircle,
   Plug,
   Radio,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -107,6 +108,8 @@ const blankSetup: BackgroundSetupInput = {
   recurringConstraints: "",
   confirmationTopics: ""
 };
+
+const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
 
 export function App() {
   const [state, setState] = useState<VaultState>(() => loadVault());
@@ -297,6 +300,15 @@ export function App() {
     }
   }
 
+  async function copyText(value: string, message: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setNotice(message);
+    } catch {
+      setNotice("Clipboardに書き込めませんでした。表示された内容を手動でコピーしてください。");
+    }
+  }
+
   async function exportBackup() {
     try {
       const payload = await exportEncryptedBackup(state, backupPassphrase);
@@ -320,6 +332,20 @@ export function App() {
       apply(restored, "バックアップを復元しました。");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "復元に失敗しました。");
+    }
+  }
+
+  async function refreshFromNative() {
+    try {
+      const nativeVault = await loadNativeVault();
+      if (!nativeVault) {
+        setNotice("Native Vaultはまだ見つかりません。");
+        return;
+      }
+      setState(nativeVault);
+      setNotice("Native Vaultから最新状態を読み込みました。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Native Vaultの再読み込みに失敗しました。");
     }
   }
 
@@ -366,11 +392,19 @@ export function App() {
             <p className="eyebrow">User-owned life context</p>
             <h2>{titleForView(view)}</h2>
           </div>
-          {notice && (
-            <button className="notice" onClick={() => setNotice("")} type="button">
-              {notice}
-            </button>
-          )}
+          <div className="topbar-actions">
+            {nativePath && (
+              <button className="secondary-button" onClick={refreshFromNative} type="button">
+                <RefreshCw size={16} />
+                Sync
+              </button>
+            )}
+            {notice && (
+              <button className="notice" onClick={() => setNotice("")} type="button">
+                {notice}
+              </button>
+            )}
+          </div>
         </header>
 
         {view === "home" && (
@@ -416,6 +450,8 @@ export function App() {
             policies={state.accessPolicies}
             captureSettings={state.passiveCaptureSettings}
             updateCapture={updateCapture}
+            nativePath={nativePath}
+            copyText={copyText}
             captureClient={captureClient}
             setCaptureClient={setCaptureClient}
             captureConversationId={captureConversationId}
@@ -818,6 +854,8 @@ function ConnectionsView({
   policies,
   captureSettings,
   updateCapture,
+  nativePath,
+  copyText,
   captureClient,
   setCaptureClient,
   captureConversationId,
@@ -830,6 +868,8 @@ function ConnectionsView({
   policies: VaultState["accessPolicies"];
   captureSettings: PassiveCaptureSettings;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
+  nativePath: string | null;
+  copyText: (value: string, message: string) => void;
   captureClient: ConnectorKind;
   setCaptureClient: (value: ConnectorKind) => void;
   captureConversationId: string;
@@ -838,6 +878,8 @@ function ConnectionsView({
   setCaptureText: (value: string) => void;
   simulatePassiveCapture: () => void;
 }) {
+  const claudeConfig = makeClaudeDesktopConfig(nativePath);
+
   return (
     <section className="view-grid connections-grid">
       <div className="panel wide">
@@ -876,6 +918,47 @@ function ConnectionsView({
             );
           })}
         </div>
+      </div>
+
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Local MCP setup</p>
+            <h3>Claude Desktop / Codex系からVaultを呼び出す</h3>
+          </div>
+          <Plug size={18} />
+        </div>
+        <div className="setup-grid">
+          <div className="setup-step">
+            <Badge>1</Badge>
+            <strong>MCP serverをビルド</strong>
+            <pre className="code-box">npm run mcp:build</pre>
+          </div>
+          <div className="setup-step">
+            <Badge>2</Badge>
+            <strong>Claude Desktop設定へ追加</strong>
+            <pre className="code-box">{claudeConfig}</pre>
+            <button
+              className="secondary-button"
+              onClick={() => copyText(claudeConfig, "Claude Desktop用MCP設定をコピーしました。")}
+              type="button"
+            >
+              <Clipboard size={16} />
+              Copy config
+            </button>
+          </div>
+          <div className="setup-step">
+            <Badge>3</Badge>
+            <strong>公開されるtool</strong>
+            <div className="scope-row">
+              <Badge>request_context_pack</Badge>
+              <Badge>propose_memory</Badge>
+              <Badge>get_policy_summary</Badge>
+              <Badge>get_request_status</Badge>
+            </div>
+          </div>
+        </div>
+        <p className="muted">Local MCPはVault全体を読ませません。重要な私的Context Packはアプリ側の確認待ちになり、未承認候補はFactとして使われません。</p>
       </div>
 
       <div className="panel">
@@ -1337,6 +1420,24 @@ function connectionCopy(connector: ConnectorSession): string {
     return "AIチャット画面の会話断片をローカルに取り込み、未承認候補だけをInboxへ出します。";
   }
   return "MCPが使えないAI向けに、確認済みContext Packを手動で渡します。";
+}
+
+function makeClaudeDesktopConfig(nativePath: string | null): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        "life-context-vault": {
+          command: localMcpBinaryPath,
+          env: {
+            LCV_VAULT_DB_PATH:
+              nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3"
+          }
+        }
+      }
+    },
+    null,
+    2
+  );
 }
 
 function groupByDomain(facts: ApprovedFact[]): Partial<Record<LifeContextDomain, ApprovedFact[]>> {

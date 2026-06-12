@@ -154,6 +154,13 @@ button {
   gap: 16px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .topbar h2 {
   margin-top: 4px;
   font-size: 28px;
@@ -449,6 +456,46 @@ button:focus-visible {
   gap: 8px;
 }
 
+.setup-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.25fr) minmax(220px, 0.85fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.setup-step {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.setup-step strong {
+  line-height: 1.35;
+}
+
+.code-box {
+  overflow: auto;
+  max-width: 100%;
+  max-height: 240px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #d8dfd5;
+  border-radius: 8px;
+  background: #f2f5f0;
+  color: #16211b;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
 .policy-grid div {
   display: grid;
   gap: 2px;
@@ -725,6 +772,7 @@ button:focus-visible {
   .home-grid,
   .ask-layout,
   .policy-grid,
+  .setup-grid,
   .search-controls {
     grid-template-columns: 1fr;
   }
@@ -736,6 +784,7 @@ button:focus-visible {
 
 @media (max-width: 620px) {
   .topbar,
+  .topbar-actions,
   .panel-heading,
   .fact-row,
   .table-row,

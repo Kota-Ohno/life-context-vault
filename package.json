@@ -11,7 +11,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --no-bundle",
-    "tauri:bundle": "tauri build --bundles app"
+    "tauri:bundle": "tauri build --bundles app",
+    "mcp:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-mcp",
+    "mcp:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-mcp"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
