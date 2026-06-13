@@ -255,6 +255,7 @@ async function main() {
       "SSE GET must return text/event-stream"
     );
     assert(sseWithSession.body.includes("event: ready"), "SSE GET must emit a ready event");
+    assert(/(^|\n)id: mcp_sse_/m.test(sseWithSession.body), "SSE GET must emit a stable event id");
     assert(sseWithSession.body.includes("\"resumeSupported\":false"), "SSE GET must explicitly mark replay unsupported");
     assert(sseWithSession.body.includes("\"lastEventIdReceived\":true"), "SSE GET must acknowledge Last-Event-ID presence");
 
@@ -303,6 +304,16 @@ async function main() {
     const stateBody = state.json();
     assert(stateBody.tenantId === "smoke", "relay state must expose configured tenant");
     assert(typeof stateBody.mcpSessionCount === "number", "relay state must expose session count metadata");
+    assert(stateBody.sseResumeSupported === false, "relay state must expose SSE resume support status");
+    assert(stateBody.sseEventCount >= 1, "relay state must expose metadata-only SSE event count");
+    assert(
+      stateBody.recentSseEvents?.[0]?.id?.startsWith("mcp_sse_"),
+      "relay state must expose metadata-only SSE event ids"
+    );
+    assert(
+      stateBody.recentSseEvents?.[0]?.resumeRequested === true,
+      "relay state must expose Last-Event-ID presence without storing the value"
+    );
     assert(!state.body.includes("life_context.request_context_pack"), "relay state must not store MCP response bodies");
     assert(!state.body.includes("protocolVersion"), "relay state must not store initialize response bodies");
     assert(!state.body.includes("mcp_sse_previous"), "relay state must not store Last-Event-ID values");

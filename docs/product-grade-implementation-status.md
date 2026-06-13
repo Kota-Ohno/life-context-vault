@@ -276,6 +276,7 @@ Last updated: 2026-06-13
   - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
   - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`
   - relay state and persisted metadata remain body-free and exclude SSE cursor values
+  - ready SSE events now carry a generated `mcp_sse_*` event id and the Relay exposes metadata-only recent SSE event diagnostics without storing Last-Event-ID values
 - Added Universal AI Access readiness UX:
   - Connections now shows the MCP endpoint, Remote/Local/Copy access routes, Context Pack boundary, and readiness checklist in one first-screen panel
   - Remote Relay diagnostics include an SSE ready check alongside health and POST header checks
@@ -859,6 +860,14 @@ Last updated: 2026-06-13
 - Technical design: the Relay emits a short `ready` SSE event with `retry: 5000`, `resumeSupported: false`, and `lastEventIdReceived` so clients get a clear non-replayable receive-channel contract. Unsupported `/mcp` methods now advertise `Allow: GET, POST, DELETE, OPTIONS`.
 - Verification: Relay unit coverage was added for missing SSE Accept, unauthorized SSE GET, authorized ready events, Last-Event-ID non-persistence, and unsupported method boundaries. The release HTTP smoke now checks real-binary SSE behavior.
 - Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran separate protocol compatibility, security/privacy, operations, and maintainability passes.
+
+### Remote MCP SSE Metadata Slice
+
+- Product fit: Relay operators can now see whether hosted MCP clients are opening the SSE receive channel and whether resume was requested, without needing packet logs or MCP body inspection. This makes connector setup failures easier to diagnose before a hosted beta.
+- Security/privacy: Relay state exposes only generated SSE event ids, client id, optional session id, event type, timestamps, and a boolean `resumeRequested`. It still does not persist MCP bodies, Context Pack bodies, Raw Sources, tool responses, `MCP-Session-Id` values in the state file, or the actual `Last-Event-ID` cursor value.
+- Technical design: `GET /mcp` now records a memory-only `RelaySseEvent` when it emits the `ready` SSE event. `/relay/state` reports `sseResumeSupported: false`, bounded `recentSseEvents`, and `sseEventCount`; persisted relay state remains limited to OAuth client registrations and request metadata.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture` and `npm run relay:smoke` passed. The smoke now asserts real release-binary SSE event ids, metadata-only SSE diagnostics, `resumeRequested`, and non-persistence of raw `Last-Event-ID` values.
+- Review fallback: SubAgents were not used for this incremental protocol-hardening slice; the main thread ran protocol compatibility, security/privacy, operations, and maintainability passes.
 
 ### Universal AI Access UX Slice
 

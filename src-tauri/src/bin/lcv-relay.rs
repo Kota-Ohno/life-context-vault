@@ -30,6 +30,7 @@ const OAUTH_TOKEN_TTL_SECONDS: u64 = 3600;
 const AUTH_CODE_TTL_SECONDS: u64 = 300;
 const PAIRING_TTL_SECONDS: u64 = 600;
 const MAX_RELAY_REQUEST_EVENTS: usize = 500;
+const MAX_RELAY_SSE_EVENTS: usize = 200;
 const DEFAULT_RELAY_REQUEST_EVENT_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_RELAY_STATE_BACKUP_COUNT: usize = 3;
 const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
@@ -380,6 +381,7 @@ struct RelayState {
 struct RelayStateInner {
   registered_clients: HashMap<String, RegisteredClient>,
   request_events: Vec<RelayRequestEvent>,
+  sse_events: Vec<RelaySseEvent>,
   handoffs: HashMap<String, RelayHandoff>,
   pending_authorizations: HashMap<String, PendingAuthorization>,
   auth_codes: HashMap<String, AuthCode>,
@@ -445,6 +447,16 @@ struct RelayRequestEvent {
   tool_name: Option<String>,
   status: String,
   transport: String,
+  occurred_at: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RelaySseEvent {
+  id: String,
+  client_id: String,
+  session_id: Option<String>,
+  event_type: String,
+  resume_requested: bool,
   occurred_at: u64,
 }
 
@@ -663,6 +675,7 @@ impl RelayState {
       inner: Arc::new(Mutex::new(RelayStateInner {
         registered_clients,
         request_events: persisted.request_events,
+        sse_events: Vec::new(),
         handoffs: HashMap::new(),
         pending_authorizations: HashMap::new(),
         auth_codes: HashMap::new(),
@@ -762,6 +775,28 @@ impl RelayState {
       );
     }
     self.persist()
+  }
+
+  fn record_sse_event(
+    &self,
+    event_id: String,
+    client_id: String,
+    session_id: Option<String>,
+    event_type: &str,
+    resume_requested: bool,
+  ) {
+    let mut inner = self.inner.lock().expect("relay state");
+    inner.sse_events.insert(0, RelaySseEvent {
+      id: event_id,
+      client_id,
+      session_id,
+      event_type: event_type.to_string(),
+      resume_requested,
+      occurred_at: system_time_seconds(SystemTime::now()),
+    });
+    if inner.sse_events.len() > MAX_RELAY_SSE_EVENTS {
+      inner.sse_events.truncate(MAX_RELAY_SSE_EVENTS);
+    }
   }
 
   fn store_handoff(
@@ -908,6 +943,21 @@ impl RelayState {
         })
       })
       .collect();
+    let recent_sse_events: Vec<Value> = inner
+      .sse_events
+      .iter()
+      .take(20)
+      .map(|event| {
+        json!({
+          "id": event.id,
+          "clientId": event.client_id,
+          "sessionId": event.session_id,
+          "eventType": event.event_type,
+          "resumeRequested": event.resume_requested,
+          "occurredAt": event.occurred_at
+        })
+      })
+      .collect();
     json!({
       "tenantId": self.tenant_id,
       "storePath": self.store_path.as_ref().map(|path| path.display().to_string()),
@@ -915,17 +965,21 @@ impl RelayState {
       "requestEventCount": inner.request_events.len(),
       "handoffCount": inner.handoffs.len(),
       "mcpSessionCount": inner.mcp_sessions.len(),
+      "sseEventCount": inner.sse_events.len(),
+      "sseResumeSupported": false,
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
         "stateBackupCount": self.retention.state_backup_count,
         "handoffTtlSeconds": self.retention.handoff_ttl_seconds,
         "mcpSessionTtlSeconds": DEFAULT_MCP_SESSION_TTL_SECONDS,
+        "maxSseEvents": MAX_RELAY_SSE_EVENTS,
         "maxRequestEvents": MAX_RELAY_REQUEST_EVENTS
       },
       "recentRequestEvents": recent_events,
       "recentHandoffs": recent_handoffs,
-      "recentMcpSessions": recent_mcp_sessions
+      "recentMcpSessions": recent_mcp_sessions,
+      "recentSseEvents": recent_sse_events
     })
   }
 
@@ -1983,6 +2037,16 @@ fn handle_mcp_sse_get(
     return response;
   }
 
+  let event_id = random_token("mcp_sse");
+  let session_id = mcp_session_id_header(request);
+  let resume_requested = last_event_id_present(request);
+  state.record_sse_event(
+    event_id.clone(),
+    client_id.clone(),
+    session_id,
+    "ready",
+    resume_requested,
+  );
   record_relay_event(
     state,
     Some(client_id.clone()),
@@ -1992,7 +2056,7 @@ fn handle_mcp_sse_get(
     "sse_ready",
     "http_sse",
   );
-  mcp_sse_ready_response(request, config, &protocol_version, &client_id)
+  mcp_sse_ready_response(request, config, &protocol_version, &client_id, &event_id)
 }
 
 fn handle_mcp_session_delete(
@@ -2233,13 +2297,9 @@ fn mcp_sse_ready_response(
   config: &RelayConfig,
   protocol_version: &str,
   client_id: &str,
+  event_id: &str,
 ) -> HttpResponse {
-  let event_id = random_token("mcp_sse");
-  let last_event_id_received = request
-    .header("Last-Event-ID")
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .is_some();
+  let last_event_id_received = last_event_id_present(request);
   let data = json!({
     "status": "ready",
     "transport": "mcp_streamable_http_sse",
@@ -2259,6 +2319,14 @@ fn mcp_sse_ready_response(
     .with_header("Connection", "close")
     .with_header("X-Accel-Buffering", "no")
     .with_cors_for_request(request, config)
+}
+
+fn last_event_id_present(request: &HttpRequest) -> bool {
+  request
+    .header("Last-Event-ID")
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .is_some()
 }
 
 fn required_scope_for_mcp_body(body: &str) -> &'static str {
@@ -3323,11 +3391,44 @@ mod tests {
       Some("2025-11-25")
     );
     let body = String::from_utf8(response.body).expect("sse body");
+    let event_id = body
+      .lines()
+      .find_map(|line| line.strip_prefix("id: "))
+      .expect("sse id");
+    assert!(event_id.starts_with("mcp_sse_"));
     assert!(body.contains("event: ready"));
     assert!(body.contains("retry: 5000"));
     assert!(body.contains("\"resumeSupported\":false"));
     assert!(body.contains("\"lastEventIdReceived\":false"));
     let status = state.store_status();
+    assert_eq!(status.get("sseEventCount").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("id"))
+        .and_then(Value::as_str),
+      Some(event_id)
+    );
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("eventType"))
+        .and_then(Value::as_str),
+      Some("ready")
+    );
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("resumeRequested"))
+        .and_then(Value::as_bool),
+      Some(false)
+    );
     assert_eq!(
       status
         .get("recentRequestEvents")
@@ -3359,7 +3460,26 @@ mod tests {
 
     assert_eq!(response.status, 200);
     assert!(body.contains("\"lastEventIdReceived\":true"));
-    assert!(!state.store_status().to_string().contains("mcp_sse_previous"));
+    let status = state.store_status();
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("sessionId"))
+        .and_then(Value::as_str),
+      Some(session.id.as_str())
+    );
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("resumeRequested"))
+        .and_then(Value::as_bool),
+      Some(true)
+    );
+    assert!(!status.to_string().contains("mcp_sse_previous"));
   }
 
   #[test]
