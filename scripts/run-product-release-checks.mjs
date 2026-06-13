@@ -77,11 +77,21 @@ run("hosted Relay env template", "npm", [
   "--",
   "--env-file",
   "deploy/relay/relay.env.example",
+  "--compose-env-file",
+  "deploy/relay/compose.env.example",
   "--allow-placeholders",
   "--name",
-  "deploy/relay/relay.env.example"
+  "deploy/relay templates"
 ]);
 run("hosted Relay smoke syntax", "node", ["--check", "scripts/hosted-relay-smoke.mjs"]);
+run("Web AI connector packet syntax", "node", ["--check", "scripts/web-ai-connector-packet.mjs"]);
+run("Web AI connector packet sample", "node", [
+  "scripts/web-ai-connector-packet.mjs",
+  "--mcp-url",
+  "https://relay.example.com/mcp",
+  "--format",
+  "json"
+]);
 
 if (includeSseSoak) {
   run("HTTP relay SSE soak", "npm", ["run", "relay:sse-soak"]);

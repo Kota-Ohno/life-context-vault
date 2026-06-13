@@ -4,3 +4,5 @@ dist/
 npm-debug.log*
 browser-extension/native-host.dev.json
 src-tauri/binaries/
+deploy/relay/relay.env
+deploy/relay/compose.env

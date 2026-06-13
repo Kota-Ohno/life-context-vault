@@ -24,13 +24,25 @@ Edit both copied files before starting the Relay:
 - `deploy/relay/relay.env` is passed only to `lcv-relay`. Replace `LCV_RELAY_BASE_URL`, `LCV_RELAY_PUBLIC_HOST`, `LCV_RELAY_ADMIN_TOKEN`, `LCV_RELAY_HANDOFF_SECRET`, tenant id, and allowed origins.
 - `deploy/relay/compose.env` is passed only to Caddy. Set the same `LCV_RELAY_PUBLIC_HOST` and an ACME email address.
 
+Both copied files are ignored by git. Keep real secrets out of the `.example` templates.
+
 Validate the real Relay environment before boot:
 
 ```bash
-npm run hosted-relay:check -- --env-file deploy/relay/relay.env --name staging
+npm run hosted-relay:check -- \
+  --env-file deploy/relay/relay.env \
+  --compose-env-file deploy/relay/compose.env \
+  --name staging
 ```
 
-The checked environment rejects placeholder domains/secrets, localhost base URLs, public static bearer fallback, direct sidecar fallback, wildcard CORS, missing tenant id, and hosted Vault variables.
+The checked environment rejects placeholder domains/secrets, mismatched public hosts, localhost base URLs, public static bearer fallback, direct sidecar fallback, wildcard CORS, missing tenant id, hosted Vault variables, and Relay secrets accidentally placed in Caddy's `compose.env`.
+
+Inspect the resolved Compose configuration after the env files exist:
+
+```bash
+cd deploy/relay
+docker compose --env-file compose.env -f compose.yaml config
+```
 
 Start the HTTPS Relay:
 
@@ -70,7 +82,10 @@ npm run hosted-relay:check
 When deploying from an env file, prefer:
 
 ```bash
-npm run hosted-relay:check -- --env-file deploy/relay/relay.env --name production
+npm run hosted-relay:check -- \
+  --env-file deploy/relay/relay.env \
+  --compose-env-file deploy/relay/compose.env \
+  --name production
 ```
 
 The same checker is part of `npm run product:check` in documented-example mode, so release checks catch drift in the required hosted boundary even when a real public Relay URL is not available in CI.
@@ -144,6 +159,12 @@ npm run hosted-relay:smoke
 `LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also runs a staging OAuth path against the deployed HTTPS Relay: dynamic client registration, public owner-approval page, admin-authenticated approval, Authorization Code + S256 PKCE token exchange, authenticated MCP readiness, and metadata-only `/relay/state` checks.
 
 If the local Agent is not paired yet, the same admin smoke still verifies the hosted OAuth path through token exchange and accepts the expected `pending_agent_offline` MCP response. Set `LCV_HOSTED_RELAY_REQUIRE_AGENT=1` when validating a full end-to-end connector rehearsal; in that mode the smoke requires the paired Agent to answer MCP `initialize` and `tools/list`.
+
+After the deployed smoke passes and Control Center confirms Agent pairing, generate provider-facing registration material with [Web AI Connector Registration](./web-ai-connector-registration.md):
+
+```bash
+npm run web-ai:packet -- --mcp-url https://relay.example.com/mcp --format markdown
+```
 
 ```bash
 curl -fsS https://relay.example.com/health

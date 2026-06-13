@@ -21,6 +21,7 @@
     "relay:sse-soak": "node scripts/run-relay-sse-soak.mjs",
     "hosted-relay:check": "node scripts/check-hosted-relay-config.mjs",
     "hosted-relay:smoke": "node scripts/hosted-relay-smoke.mjs",
+    "web-ai:packet": "node scripts/web-ai-connector-packet.mjs",
     "agent:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-agent",
     "agent:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-agent",
     "capture:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin lcv-capture-host",

@@ -70,6 +70,75 @@ function looksLikePlaceholder(value) {
   return /<|>|change[-_ ]?me|replace[-_ ]?me|example\.com|your[-_ ]/i.test(String(value ?? ""));
 }
 
+function validateHostName(value, name) {
+  if (!value) fail(`${name} is required`);
+  if (String(value).includes("://") || String(value).includes("/") || String(value).includes(":")) {
+    fail(`${name} must be a hostname without scheme, path, or port`);
+  }
+  if (!/^[a-zA-Z0-9.-]+$/.test(String(value)) || !String(value).includes(".")) {
+    fail(`${name} must be a public DNS hostname`);
+  }
+}
+
+function validateComposeEnv(config, relayConfig) {
+  const errors = [];
+  const warnings = [];
+  const allowedKeys = new Set(["LCV_RELAY_PUBLIC_HOST", "LCV_RELAY_ACME_EMAIL"]);
+  const forbiddenKeys = [
+    "LCV_RELAY_ADMIN_TOKEN",
+    "LCV_RELAY_HANDOFF_SECRET",
+    "LCV_RELAY_TOKEN",
+    "LCV_RELAY_AUTO_APPROVE",
+    "LCV_RELAY_ENABLE_STATIC_TOKEN",
+    "LCV_MCP_COMMAND",
+    "LCV_VAULT_DB_PATH",
+    "LCV_VAULT_DB_KEY"
+  ];
+
+  function check(fn) {
+    try {
+      fn();
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  check(() => {
+    validateHostName(config.LCV_RELAY_PUBLIC_HOST, "compose LCV_RELAY_PUBLIC_HOST");
+    if (placeholderCheckEnabled && looksLikePlaceholder(config.LCV_RELAY_PUBLIC_HOST)) {
+      fail("compose LCV_RELAY_PUBLIC_HOST must be replaced with the real hosted Relay host");
+    }
+    const relayHost = relayConfig.LCV_RELAY_PUBLIC_HOST ?? (relayConfig.LCV_RELAY_BASE_URL ? new URL(relayConfig.LCV_RELAY_BASE_URL).hostname : null);
+    if (relayHost && config.LCV_RELAY_PUBLIC_HOST !== relayHost) {
+      fail("compose LCV_RELAY_PUBLIC_HOST must match the Relay environment host");
+    }
+  });
+
+  check(() => {
+    const email = String(config.LCV_RELAY_ACME_EMAIL ?? "");
+    if (!email || !email.includes("@")) {
+      fail("LCV_RELAY_ACME_EMAIL is required for Caddy certificate issuance");
+    }
+    if (placeholderCheckEnabled && looksLikePlaceholder(email)) {
+      fail("LCV_RELAY_ACME_EMAIL must be replaced with the real certificate contact email");
+    }
+  });
+
+  for (const key of forbiddenKeys) {
+    check(() => {
+      if (config[key]) fail(`${key} must not be present in compose.env; keep Relay secrets in relay.env only`);
+    });
+  }
+
+  for (const key of Object.keys(config)) {
+    if (!allowedKeys.has(key) && !forbiddenKeys.includes(key)) {
+      warnings.push(`${key} is not used by the compose/Caddy bundle; confirm it is not a misplaced Relay secret.`);
+    }
+  }
+
+  return { errors, warnings };
+}
+
 function validate(config) {
   const errors = [];
   const warnings = [];
@@ -207,6 +276,12 @@ const config = hasFlag("--example")
   ? parseEnvFile(valueFor("--env-file"))
   : Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("LCV_")));
 const { errors, warnings } = validate(config);
+const composeEnvFile = valueFor("--compose-env-file");
+if (composeEnvFile) {
+  const composeResult = validateComposeEnv(parseEnvFile(composeEnvFile), config);
+  errors.push(...composeResult.errors);
+  warnings.push(...composeResult.warnings);
+}
 
 if (warnings.length) {
   console.warn("Hosted Relay config warnings:");
