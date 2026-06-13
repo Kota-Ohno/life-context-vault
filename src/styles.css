@@ -1652,6 +1652,100 @@ button:focus-visible {
   font-size: 0.9rem;
 }
 
+.web-ai-registration-guide {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  min-width: 0;
+}
+
+.web-ai-guide-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.web-ai-guide-card.ready {
+  border-color: #b8d6c2;
+  background: #f5fbf6;
+}
+
+.web-ai-guide-card.pending {
+  border-color: #e8d4a3;
+  background: #fffaf0;
+}
+
+.web-ai-guide-card.blocked {
+  border-color: #e5b7b7;
+  background: #fff6f6;
+}
+
+.web-ai-guide-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.web-ai-guide-heading div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.web-ai-guide-heading span {
+  color: #596255;
+  font-size: 0.78rem;
+}
+
+.web-ai-guide-heading strong {
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+}
+
+.web-ai-guide-card.ready svg {
+  color: #2f7f4f;
+}
+
+.web-ai-guide-card.pending svg {
+  color: #9a6b16;
+}
+
+.web-ai-guide-card.blocked svg {
+  color: #b83232;
+}
+
+.web-ai-guide-card ol {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: #3f4c44;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.web-ai-guide-card p {
+  margin: 0;
+  color: #56645c;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.web-ai-guide-card button {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+}
+
 .relay-preview {
   padding: 12px;
   border: 1px solid #e0e5dd;
@@ -2838,6 +2932,7 @@ button:focus-visible {
   .hosted-relay-status,
   .hosted-relay-steps,
   .hosted-relay-boundary,
+  .web-ai-registration-guide,
   .ai-access-quickstart,
   .ai-access-map-grid,
   .ai-access-checklist,

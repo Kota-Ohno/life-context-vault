@@ -201,6 +201,15 @@ interface HostedRelayRegistrationReadiness {
   items: ConnectionDiagnosticItem[];
 }
 
+interface WebAiRegistrationGuide {
+  provider: string;
+  status: ConnectionDiagnosticState;
+  statusLabel: string;
+  steps: string[];
+  actionLabel: string;
+  boundary: string;
+}
+
 interface HomeCaptureSafetySummary {
   tone: "ready" | "attention";
   title: string;
@@ -3193,6 +3202,7 @@ function ConnectionsView({
     hostedAgentWebsocketUrl,
     webMcpEndpoint
   );
+  const webAiGuides = webAiRegistrationGuides(hostedRelayReadiness, webConnectorInfo);
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
   const recentCaptures = [...passiveCaptureEvents]
     .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
@@ -3653,6 +3663,47 @@ function ConnectionsView({
                 <span>次にやること</span>
                 <strong>{hostedRelayReadiness.nextStep}</strong>
               </div>
+            </div>
+            <div className="web-ai-registration-guide" aria-label="Web AI registration guide">
+              {webAiGuides.map((guide) => (
+                <article className={`web-ai-guide-card ${guide.status}`} key={guide.provider}>
+                  <div className="web-ai-guide-heading">
+                    <div>
+                      <span>{guide.provider}</span>
+                      <strong>{guide.statusLabel}</strong>
+                    </div>
+                    {guide.status === "ready" ? (
+                      <CheckCircle2 size={17} />
+                    ) : guide.status === "blocked" ? (
+                      <ShieldAlert size={17} />
+                    ) : (
+                      <Clock size={17} />
+                    )}
+                  </div>
+                  <ol>
+                    {guide.steps.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                  <p>{guide.boundary}</p>
+                  <button
+                    className={guide.status === "ready" ? "primary-button" : "secondary-button"}
+                    disabled={guide.provider !== "MCPなしのAI" && !webConnectorInfo}
+                    onClick={() => {
+                      if (guide.provider === "MCPなしのAI") {
+                        goRequests();
+                        return;
+                      }
+                      if (!webConnectorInfo) return;
+                      copyText(JSON.stringify(webConnectorInfo, null, 2), `${guide.provider}用のRemote MCP connector情報をコピーしました。`);
+                    }}
+                    type="button"
+                  >
+                    {guide.provider === "MCPなしのAI" ? <MessageSquare size={16} /> : <Clipboard size={16} />}
+                    {guide.actionLabel}
+                  </button>
+                </article>
+              ))}
             </div>
           </div>
         </div>
@@ -7190,6 +7241,51 @@ export function hostedRelayRegistrationReadiness(
     nextStep: "self-hostのpairingコマンド、または運用中のHosted Relayから短命URLを発行します。",
     items
   };
+}
+
+export function webAiRegistrationGuides(
+  readiness: HostedRelayRegistrationReadiness,
+  webConnectorInfo: Record<string, unknown> | null
+): WebAiRegistrationGuide[] {
+  const ready = readiness.tone === "ready" && Boolean(webConnectorInfo);
+  const status: ConnectionDiagnosticState = readiness.tone === "blocked" ? "blocked" : ready ? "ready" : "pending";
+  const statusLabel = ready
+    ? "登録情報をコピーできます"
+    : readiness.tone === "blocked"
+      ? "先にVault/Agentを確認"
+      : "pairing完了待ち";
+  const firstStep = ready
+    ? "接続情報をコピー"
+    : readiness.tone === "blocked"
+      ? "Desktop appでVaultを開く"
+      : "Hosted Relayのpairingを完了";
+
+  return [
+    {
+      provider: "ChatGPT",
+      status,
+      statusLabel,
+      steps: [firstStep, "Connector設定へ貼り付け", "初回要求時にContext Packを確認"],
+      actionLabel: ready ? "ChatGPT用JSONをコピー" : readiness.nextStep,
+      boundary: "ChatGPTへ渡るのは、確認済みContext Packの本文と出典snippetだけです。"
+    },
+    {
+      provider: "Claude Web",
+      status,
+      statusLabel,
+      steps: [firstStep, "Remote MCP connectorへ登録", "回答前のPack内容を確認"],
+      actionLabel: ready ? "Claude用JSONをコピー" : readiness.nextStep,
+      boundary: "RelayはVault本文を保持せず、この端末のAgentが検索と承認待ちを処理します。"
+    },
+    {
+      provider: "MCPなしのAI",
+      status: "ready",
+      statusLabel: "いつでも利用可",
+      steps: ["RequestsでPackを作成", "内容を確認してコピー", "普段使うAIへ貼り付け"],
+      actionLabel: "Requestsで確認・コピー",
+      boundary: "MCP未接続でも、AIへ渡した内容をAuditで追える導線です。"
+    }
+  ];
 }
 
 export function aiAccessChecklistItems(

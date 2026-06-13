@@ -19,6 +19,7 @@ import {
   manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
+  webAiRegistrationGuides,
   webAiMcpEndpoint
 } from "./App";
 import { createEmptyVault } from "./vault";
@@ -145,6 +146,43 @@ describe("AI access UI safety", () => {
     expect(readiness.items.find((item) => item.label === "Public MCP URL")?.state).toBe("ready");
     expect(readiness.items.find((item) => item.label === "OAuth metadata")?.state).toBe("ready");
     expect(JSON.stringify(readiness)).not.toContain("secret-code");
+  });
+
+  it("turns hosted relay readiness into provider-specific Web AI registration steps", () => {
+    const readiness = {
+      tone: "ready" as const,
+      title: "Web AIへ登録できます",
+      summary: "公開HTTPS Relayとのpairing確認済みです。",
+      nextStep: "Web AI用接続情報をコピーします。",
+      items: []
+    };
+
+    const guides = webAiRegistrationGuides(readiness, {
+      name: "Life Context Vault",
+      url: "https://relay.example.com/mcp"
+    });
+
+    expect(guides).toHaveLength(3);
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("ready");
+    expect(guides.find((guide) => guide.provider === "Claude Web")?.actionLabel).toBe("Claude用JSONをコピー");
+    expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
+    expect(JSON.stringify(guides)).toContain("確認済みContext Pack");
+  });
+
+  it("keeps Web AI registration steps pending until connector info is available", () => {
+    const readiness = {
+      tone: "attention" as const,
+      title: "pairing確認待ちです",
+      summary: "公開MCP URLは推定できます。",
+      nextStep: "Hosted RelayへAgent接続を実行します。",
+      items: []
+    };
+
+    const guides = webAiRegistrationGuides(readiness, null);
+
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("pending");
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.actionLabel).toBe("Hosted RelayへAgent接続を実行します。");
+    expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
   });
 
   it("keeps hosted relay registration pending until pairing is confirmed", () => {
