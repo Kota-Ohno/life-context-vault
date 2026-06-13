@@ -37,6 +37,7 @@ const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_MCP_SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MCP_SSE_RETRY_MS: u64 = 5_000;
+const MCP_SSE_REPLAY_POLICY: &str = "metadata_only_no_event_replay";
 const HTTP_READ_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -967,6 +968,8 @@ impl RelayState {
       "mcpSessionCount": inner.mcp_sessions.len(),
       "sseEventCount": inner.sse_events.len(),
       "sseResumeSupported": false,
+      "sseReplayPolicy": MCP_SSE_REPLAY_POLICY,
+      "sseLastEventIdStored": false,
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
@@ -2305,7 +2308,9 @@ fn mcp_sse_ready_response(
     "transport": "mcp_streamable_http_sse",
     "clientId": client_id,
     "resumeSupported": false,
+    "replayPolicy": MCP_SSE_REPLAY_POLICY,
     "lastEventIdReceived": last_event_id_received,
+    "lastEventIdStored": false,
     "message": "SSE receive channel is available. Life Context Vault does not replay prior events from Relay memory."
   });
   let body = format!(
@@ -3399,9 +3404,19 @@ mod tests {
     assert!(body.contains("event: ready"));
     assert!(body.contains("retry: 5000"));
     assert!(body.contains("\"resumeSupported\":false"));
+    assert!(body.contains("\"replayPolicy\":\"metadata_only_no_event_replay\""));
     assert!(body.contains("\"lastEventIdReceived\":false"));
+    assert!(body.contains("\"lastEventIdStored\":false"));
     let status = state.store_status();
     assert_eq!(status.get("sseEventCount").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+      status.get("sseReplayPolicy").and_then(Value::as_str),
+      Some("metadata_only_no_event_replay")
+    );
+    assert_eq!(
+      status.get("sseLastEventIdStored").and_then(Value::as_bool),
+      Some(false)
+    );
     assert_eq!(
       status
         .get("recentSseEvents")
@@ -3460,6 +3475,8 @@ mod tests {
 
     assert_eq!(response.status, 200);
     assert!(body.contains("\"lastEventIdReceived\":true"));
+    assert!(body.contains("\"lastEventIdStored\":false"));
+    assert!(body.contains("\"replayPolicy\":\"metadata_only_no_event_replay\""));
     let status = state.store_status();
     assert_eq!(
       status

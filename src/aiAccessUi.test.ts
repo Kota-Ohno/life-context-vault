@@ -12,6 +12,7 @@ import {
   homeNextActionKind,
   HomeView,
   InboxView,
+  aiAccessChecklistItems,
   isHostedRelayConfirmed,
   makeRestorePreview,
   manualCopyPayloadForPack,
@@ -113,6 +114,33 @@ describe("AI access UI safety", () => {
     expect(diagnostic.tone).toBe("ready");
     expect(diagnostic.primaryAction).toBe("copy_web_connector");
     expect(diagnostic.items.find((item) => item.label === "Web AI")?.value).toBe("Remote MCP登録可");
+  });
+
+  it("separates SSE ready diagnostics from unsupported event replay in the AI access checklist", () => {
+    const status = {
+      managedByApp: true,
+      relayMode: "local_managed",
+      relayReachable: true,
+      relayManagedRunning: true,
+      agentManagedRunning: true,
+      agentConnected: true,
+      relayUrl: "http://127.0.0.1:8765",
+      mcpServerUrl: "http://127.0.0.1:8765/mcp",
+      relayStateStatusUrl: "http://127.0.0.1:8765/relay/state",
+      agentRuntimeStatus: null,
+      pairingCode: null,
+      lastError: null
+    } satisfies AiAccessServiceStatus;
+
+    const streamableHttp = aiAccessChecklistItems(
+      status,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3"
+    ).find((item) => item.label === "Streamable HTTP");
+
+    expect(streamableHttp?.state).toBe("ready");
+    expect(streamableHttp?.detail).toContain("GET SSE ready");
+    expect(streamableHttp?.detail).toContain("SSE event replayは未広告");
+    expect(streamableHttp?.detail).toContain("Last-Event-ID値を保存しません");
   });
 
   it("shows source titles for source-backed facts", () => {

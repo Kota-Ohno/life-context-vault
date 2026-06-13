@@ -274,9 +274,9 @@ Last updated: 2026-06-13
   - `npm run product:check` now runs the smoke after release sidecar binaries are built
 - Added Streamable HTTP SSE receive-channel support:
   - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
-  - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`
+  - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`
   - relay state and persisted metadata remain body-free and exclude SSE cursor values
-  - ready SSE events now carry a generated `mcp_sse_*` event id and the Relay exposes metadata-only recent SSE event diagnostics without storing Last-Event-ID values
+  - ready SSE events now carry a generated `mcp_sse_*` event id and the Relay exposes metadata-only recent SSE event diagnostics plus replay policy without storing Last-Event-ID values
 - Added Universal AI Access readiness UX:
   - Connections now shows the MCP endpoint, Remote/Local/Copy access routes, Context Pack boundary, and readiness checklist in one first-screen panel
   - Remote Relay diagnostics include an SSE ready check alongside health and POST header checks
@@ -304,7 +304,7 @@ Last updated: 2026-06-13
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Remote MCP hosted-client certification, long-running SSE soak, and provider-specific connector registration against a real public HTTPS Relay.
+- Remote MCP hosted-client certification, long-running SSE soak, real event replay/resumability if provider certification requires it, and provider-specific connector registration against a real public HTTPS Relay.
 - OCR setup now detects common local Tesseract providers, Legacy Office setup detects common local LibreOffice/soffice providers, both offer one-click Settings presets, and both include OS-specific guided install commands. Remaining product-hardening: bundled OCR/Office conversion runtimes for users who do not want to install providers separately.
 
 ## Verification
@@ -1041,6 +1041,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged restore as a trust-critical device migration path. Security/privacy review checked that the receipt does not echo sensitive backup contents and that paired AI connection metadata is called out for post-restore review. UI/UX review checked desktop/mobile wrapping and the separation between "saved in Vault" and "sent to AI." Maintainability review put the receipt classification in `makeRestorePreview` with unit coverage.
 - Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check` passed. System Chrome headless rendered Settings restore preview at desktop `1280x900` and mobile `390x844`: desktop uses two receipt columns, mobile uses one, the restore buttons remain visible, and neither the page nor `.restore-preview` has horizontal overflow.
 
+### Remote MCP SSE Replay Policy Slice
+
+- Product fit: Connections and Relay diagnostics now separate "SSE ready channel works" from "event replay/resume is supported." This avoids misleading hosted-client setup during provider certification and gives operators a precise `/relay/state` signal.
+- Security/privacy: the Relay still does not persist `Last-Event-ID` values, MCP bodies, Context Pack bodies, Raw Sources, or tool responses. The SSE ready event and `/relay/state` expose only `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`.
+- Technical design: `GET /mcp` ready payloads and `/relay/state` now carry the same replay policy. Connections labels the command as an SSE ready check and states that event replay is not advertised, so future true resumability work has a clear contract to update.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed. The UI helper test confirms the readiness checklist mentions `GET SSE ready`, unadvertised replay, and non-storage of `Last-Event-ID` values.
+- Review fallback: SubAgents were not used for this incremental protocol/UX slice; the main thread ran protocol compatibility, security/privacy, product, and maintainability passes.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -1048,6 +1056,6 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
 - Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state plus an open-app review path.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
-- Deferred protocol-hardening findings: full Streamable HTTP SSE/resumability semantics and real hosted-client certification remain before a hosted connector beta.
+- Deferred protocol-hardening findings: real Streamable HTTP event replay/resumability, long-running SSE soak, and real hosted-client certification remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
 - Deferred general-user polish: a bundled OCR runtime remains product-hardening work after the core AI access boundary.

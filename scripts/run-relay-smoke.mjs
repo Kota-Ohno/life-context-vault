@@ -257,7 +257,12 @@ async function main() {
     assert(sseWithSession.body.includes("event: ready"), "SSE GET must emit a ready event");
     assert(/(^|\n)id: mcp_sse_/m.test(sseWithSession.body), "SSE GET must emit a stable event id");
     assert(sseWithSession.body.includes("\"resumeSupported\":false"), "SSE GET must explicitly mark replay unsupported");
+    assert(
+      sseWithSession.body.includes("\"replayPolicy\":\"metadata_only_no_event_replay\""),
+      "SSE GET must expose the replay policy"
+    );
     assert(sseWithSession.body.includes("\"lastEventIdReceived\":true"), "SSE GET must acknowledge Last-Event-ID presence");
+    assert(sseWithSession.body.includes("\"lastEventIdStored\":false"), "SSE GET must state Last-Event-ID values are not stored");
 
     const missingSession = await request(baseUrl, {
       method: "POST",
@@ -305,6 +310,11 @@ async function main() {
     assert(stateBody.tenantId === "smoke", "relay state must expose configured tenant");
     assert(typeof stateBody.mcpSessionCount === "number", "relay state must expose session count metadata");
     assert(stateBody.sseResumeSupported === false, "relay state must expose SSE resume support status");
+    assert(
+      stateBody.sseReplayPolicy === "metadata_only_no_event_replay",
+      "relay state must expose the metadata-only SSE replay policy"
+    );
+    assert(stateBody.sseLastEventIdStored === false, "relay state must not claim to store Last-Event-ID values");
     assert(stateBody.sseEventCount >= 1, "relay state must expose metadata-only SSE event count");
     assert(
       stateBody.recentSseEvents?.[0]?.id?.startsWith("mcp_sse_"),

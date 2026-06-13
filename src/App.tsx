@@ -3650,11 +3650,11 @@ function ConnectionsView({
               <button
                 className="secondary-button"
                 disabled={!canCopyMcpEndpoint}
-                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
+                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE ready診断コマンドをコピーしました。")}
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy SSE check
+                Copy SSE ready check
               </button>
             </div>
           </div>
@@ -4104,7 +4104,7 @@ function ConnectionsView({
               <div className="scope-row">
                 <Badge>health: 200</Badge>
                 <Badge>mcp: 401 OAuth</Badge>
-                <Badge>sse: ready</Badge>
+                <Badge>sse: ready only</Badge>
                 <Badge>headers: 406/415</Badge>
               </div>
               <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
@@ -4127,11 +4127,11 @@ function ConnectionsView({
                 </button>
                 <button
                   className="secondary-button"
-                  onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE診断コマンドをコピーしました。")}
+                  onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE ready診断コマンドをコピーしました。")}
                   type="button"
                 >
                   <Clipboard size={16} />
-                  Copy SSE check
+                  Copy SSE ready check
                 </button>
               </div>
               <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
@@ -7024,7 +7024,7 @@ export function aiConnectionDiagnostic(
   };
 }
 
-function aiAccessChecklistItems(
+export function aiAccessChecklistItems(
   status: AiAccessServiceStatus | null,
   nativePath: string | null
 ): Array<{ label: string; detail: string; state: "ready" | "pending" | "blocked" }> {
@@ -7061,8 +7061,8 @@ function aiAccessChecklistItems(
     {
       label: "Streamable HTTP",
       detail: status?.relayReachable
-        ? "POST JSON-RPC、GET SSE、MCP session、DELETE終了に対応しています。"
-        : "Relay起動後にSSE ready診断で確認できます。",
+        ? "POST JSON-RPC、GET SSE ready、MCP session、DELETE終了に対応しています。SSE event replayは未広告で、RelayはLast-Event-ID値を保存しません。"
+        : "Relay起動後にSSE ready診断で確認できます。event replayは対応状況を/relay/stateで確認します。",
       state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
     },
     {
