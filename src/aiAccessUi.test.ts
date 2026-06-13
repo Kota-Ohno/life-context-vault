@@ -6,6 +6,7 @@ import {
   canCopyAiMcpEndpoint,
   factInventoryCounts,
   factSourceNames,
+  homeNextActionKind,
   InboxView,
   isHostedRelayConfirmed,
   shouldShowCopyFallbackStarter,
@@ -91,6 +92,49 @@ describe("AI access UI safety", () => {
     expect(shouldShowCopyFallbackStarter([], null)).toBe(true);
     expect(shouldShowCopyFallbackStarter([{ id: "request_1" }], null)).toBe(false);
     expect(shouldShowCopyFallbackStarter([], { id: "pack_1" })).toBe(false);
+  });
+
+  it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {
+    expect(
+      homeNextActionKind({
+        candidateCount: 0,
+        backgroundStarted: true,
+        approvedFactCount: 2,
+        pendingRequestCount: 0,
+        requestCount: 0,
+        aiAccessReady: false
+      })
+    ).toBe("try_context_pack");
+    expect(
+      homeNextActionKind({
+        candidateCount: 0,
+        backgroundStarted: true,
+        approvedFactCount: 2,
+        pendingRequestCount: 0,
+        requestCount: 1,
+        aiAccessReady: false
+      })
+    ).toBe("connect_ai");
+    expect(
+      homeNextActionKind({
+        candidateCount: 1,
+        backgroundStarted: true,
+        approvedFactCount: 2,
+        pendingRequestCount: 0,
+        requestCount: 0,
+        aiAccessReady: false
+      })
+    ).toBe("review_candidates");
+    expect(
+      homeNextActionKind({
+        candidateCount: 0,
+        backgroundStarted: true,
+        approvedFactCount: 0,
+        pendingRequestCount: 0,
+        requestCount: 0,
+        aiAccessReady: false
+      })
+    ).toBe("add_background");
   });
 
   it("gives first-time users clear entry points from an empty Memory Inbox", () => {

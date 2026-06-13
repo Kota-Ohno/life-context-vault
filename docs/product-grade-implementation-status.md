@@ -980,6 +980,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review checked the Connections-to-Requests handoff. Security/privacy review confirmed the same Context Pack boundary, exclusions, and confirmation gate remain in force. UI/UX review checks desktop/mobile empty Requests, form labels, and no horizontal overflow. Maintainability review added `shouldShowCopyFallbackStarter` coverage for the empty-state rule.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: demo data can route from Connections to Requests, the empty Requests inbox shows `MCPなしでContext Packを作る`, the advanced manual-test summary is hidden in that state, `確認用Context Packを作成` generates a Context Pack preview with `確認してコピーFallback`, and there is no page-level horizontal overflow.
 
+### Home First Context Pack Slice
+
+- Product fit: Home now treats the first Context Pack trial as the next value moment after ApprovedFacts exist, even when MCP/Agent setup is not ready. AI connection setup becomes the follow-up for repeated use instead of blocking the first useful copy-fallback experience.
+- UX/design: the first-10-minutes checklist now reads `生活背景を入れる -> 候補を承認する -> Context Packを試す -> AI連携を常用化する`. The next-action card sends users to Requests with copy-fallback wording rather than asking them to start AI Access first.
+- Security/privacy: no AI boundary changed. The Home action only opens Requests; Pack generation, exclusions, confirmation, copy, and Audit still happen in the existing Context Pack path.
+- Review fallback: Product fit review flagged the previous Home priority as over-optimizing for MCP setup before the user had felt value. Security/privacy review confirmed copy fallback still requires Pack preview. UI/UX review checks Home checklist order, next-action copy, desktop/mobile layout, and the Requests handoff. Maintainability review added `homeNextActionKind` coverage for the priority rule.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: after demo data, Home shows `Context Packを試す` as the next action, checklist step 3 is Context Pack before AI connection step 4, `Packを確認` opens the Requests copy-fallback starter, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

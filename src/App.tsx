@@ -174,6 +174,13 @@ type OnboardingStep = {
   disabled?: boolean;
 };
 
+type HomeNextActionKind =
+  | "review_candidates"
+  | "add_background"
+  | "review_pending_request"
+  | "try_context_pack"
+  | "connect_ai";
+
 type SearchMode = "native_fts" | "browser_fallback" | "loading";
 
 type UploadFeedback = {
@@ -2084,6 +2091,14 @@ function HomeView({
   const requestTried = requests.length > 0;
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
   const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request)).length;
+  const nextActionKind = homeNextActionKind({
+    candidateCount: candidates.length,
+    backgroundStarted,
+    approvedFactCount: facts.length,
+    pendingRequestCount,
+    requestCount: requests.length,
+    aiAccessReady
+  });
   const focusSetup = () => {
     document.getElementById("home-guided-setup")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -2109,25 +2124,31 @@ function HomeView({
       action: goInbox
     },
     {
-      title: "AI Accessを起動する",
-      body: accessReadiness.body,
-      status: aiAccessReady ? "done" : nativePath ? "current" : "blocked",
-      actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "起動する" : "Desktopで開く",
-      action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
-      disabled: aiServiceBusy
-    },
-    {
-      title: "Context Packを確認する",
+      title: "Context Packを試す",
       body: requestTried
         ? `${requests.length}件のContext Request履歴があります。`
-        : "AIへ渡す最小文脈を確認してから回答を作ります。",
+        : approvedContextReady
+          ? "MCPなしでも、確認してコピーすれば普段使うAIで試せます。"
+          : "ApprovedFactができたら、AIへ渡す最小文脈を確認します。",
       status: requestTried ? "done" : approvedContextReady ? "current" : "blocked",
       actionLabel: "Requestsを開く",
       action: goRequests
+    },
+    {
+      title: "AI連携を常用化する",
+      body: aiAccessReady
+        ? "外部AIからContext Packを呼べる状態です。"
+        : requestTried
+          ? accessReadiness.body
+          : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
+      status: aiAccessReady ? "done" : requestTried ? "current" : "blocked",
+      actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
+      action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
+      disabled: aiServiceBusy
     }
   ];
   const nextAction = (() => {
-    if (candidates.length > 0) {
+    if (nextActionKind === "review_candidates") {
       return {
         title: `${candidates.length}件の候補を確認`,
         body: "保存する生活文脈だけをFactにします。承認前の候補はAIには渡りません。",
@@ -2136,7 +2157,7 @@ function HomeView({
         icon: <Inbox size={18} />
       };
     }
-    if (!backgroundStarted) {
+    if (nextActionKind === "add_background") {
       return {
         title: "生活背景を追加",
         body: "呼び名、制約、いま動いている生活領域からMemory Inbox候補を作ります。",
@@ -2145,7 +2166,7 @@ function HomeView({
         icon: <Sparkles size={18} />
       };
     }
-    if (pendingRequestCount > 0) {
+    if (nextActionKind === "review_pending_request") {
       return {
         title: `${pendingRequestCount}件のContext Packを確認`,
         body: "外部AIに渡る最小文脈を見て、不要なFactを外してから承認できます。",
@@ -2154,9 +2175,18 @@ function HomeView({
         icon: <MessageSquare size={18} />
       };
     }
-    if (!aiAccessReady) {
+    if (nextActionKind === "try_context_pack") {
       return {
-        title: nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
+        title: "Context Packを試す",
+        body: "MCP接続前でも、確認した内容だけをコピーして普段使うAIに渡せます。",
+        label: "Packを確認",
+        action: goRequests,
+        icon: <MessageSquare size={18} />
+      };
+    }
+    if (nextActionKind === "connect_ai") {
+      return {
+        title: requestTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
         body: accessReadiness.body,
         label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
         action: nativePath ? startAiAccess : goConnections,
@@ -5434,6 +5464,30 @@ export function shouldShowCopyFallbackStarter(
   currentPack: Pick<ContextPack, "id"> | null
 ): boolean {
   return requests.length === 0 && !currentPack;
+}
+
+export function homeNextActionKind({
+  candidateCount,
+  backgroundStarted,
+  approvedFactCount,
+  pendingRequestCount,
+  requestCount,
+  aiAccessReady
+}: {
+  candidateCount: number;
+  backgroundStarted: boolean;
+  approvedFactCount: number;
+  pendingRequestCount: number;
+  requestCount: number;
+  aiAccessReady: boolean;
+}): HomeNextActionKind {
+  if (candidateCount > 0) return "review_candidates";
+  if (!backgroundStarted) return "add_background";
+  if (pendingRequestCount > 0) return "review_pending_request";
+  if (approvedFactCount === 0) return "add_background";
+  if (approvedFactCount > 0 && requestCount === 0) return "try_context_pack";
+  if (!aiAccessReady) return "connect_ai";
+  return "try_context_pack";
 }
 
 function Input({
