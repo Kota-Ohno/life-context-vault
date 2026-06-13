@@ -210,6 +210,15 @@ interface WebAiRegistrationGuide {
   boundary: string;
 }
 
+type ContextPackBoundaryTone = "ready" | "attention";
+
+type ContextPackBoundaryReceiptItem = {
+  label: string;
+  tone: ContextPackBoundaryTone;
+  value: string;
+  detail: string;
+};
+
 interface HomeCaptureSafetySummary {
   tone: "ready" | "attention";
   title: string;
@@ -4568,6 +4577,7 @@ function ContextRequestsView({
   const readyRequests = requests.filter((request) => request.status === "fulfilled");
   const closedRequests = requests.filter((request) => request.status === "denied" || request.status === "expired");
   const showCopyFallbackStarter = shouldShowCopyFallbackStarter(requests, currentPack);
+  const boundaryReceiptItems = currentPack ? contextPackBoundaryReceipt(currentPack, currentRequest) : [];
   const requestQueueTitle =
     pendingReviewRequests.length > 0
       ? `${pendingReviewRequests.length}件の確認待ち`
@@ -4758,6 +4768,15 @@ function ContextRequestsView({
               <span>
                 {currentPack.items.length}件のFactと{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
+            </div>
+            <div className="pack-boundary-receipt-grid" aria-label="Context Pack delivery boundary">
+              {boundaryReceiptItems.map((item) => (
+                <div className={`pack-boundary-receipt ${item.tone}`} key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <small>{item.detail}</small>
+                </div>
+              ))}
             </div>
             {activeManualCopyPayload && (
               <div className="manual-copy-panel">
@@ -5971,6 +5990,57 @@ export function manualCopyPayloadForPack(
   currentPack: Pick<ContextPack, "id"> | null
 ): Pick<ManualCopyPayload, "packId" | "payloadText" | "createdAt"> | null {
   return payload && currentPack && payload.packId === currentPack.id ? payload : null;
+}
+
+export function contextPackBoundaryReceipt(
+  pack: Pick<
+    ContextPack,
+    "items" | "sourceSnippets" | "excludedItems" | "expiresAt" | "confirmationStatus" | "maxSensitivityIncluded"
+  >,
+  request: Pick<ContextPackRequest, "clientName" | "sensitivityCeiling" | "expiresAt" | "status"> | null
+): ContextPackBoundaryReceiptItem[] {
+  const snippetCount = pack.sourceSnippets?.length ?? 0;
+  const expiry = pack.expiresAt ?? request?.expiresAt ?? null;
+  const expiresAt = expiry ? Date.parse(expiry) : NaN;
+  const minutesLeft = Number.isFinite(expiresAt)
+    ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 60_000))
+    : null;
+  const clientName = request?.clientName ?? "このAI";
+  const isConfirmed = pack.confirmationStatus === "confirmed" || request?.status === "fulfilled";
+  const excludedReasons = Array.from(new Set(pack.excludedItems.map((item) => exclusionReasonLabel(item.reason))));
+  const exclusionDetail =
+    excludedReasons.length > 0
+      ? `${excludedReasons.slice(0, 3).join("、")}${excludedReasons.length > 3 ? "など" : ""}で除外しています。`
+      : "Raw Source本文、未承認候補、削除済み/期限切れFactは送信対象にしていません。";
+
+  return [
+    {
+      label: "AIに渡る",
+      tone: pack.items.length > 0 || snippetCount > 0 ? "ready" : "attention",
+      value: `${pack.items.length} Facts / ${snippetCount} snippets`,
+      detail: `${clientName}へ渡るのは承認済みFactと最小snippetだけです。最高感度は${sensitivityLabel(pack.maxSensitivityIncluded)}です。`
+    },
+    {
+      label: "AIに渡らない",
+      tone: pack.excludedItems.length > 0 ? "attention" : "ready",
+      value: `${pack.excludedItems.length} exclusions`,
+      detail: exclusionDetail
+    },
+    {
+      label: "有効期限",
+      tone: minutesLeft === null || minutesLeft > 0 ? "ready" : "attention",
+      value: minutesLeft === null ? "短命Pack" : minutesLeft > 0 ? `約${minutesLeft}分` : "期限切れ",
+      detail: "期限切れ後は外部AIが同じPack本文を再取得できません。"
+    },
+    {
+      label: "確認状態",
+      tone: isConfirmed ? "ready" : "attention",
+      value: packConfirmationLabel(pack.confirmationStatus),
+      detail: isConfirmed
+        ? "承認済みのため、外部AIはこのPack境界内だけを取得できます。"
+        : "承認するまでPack本文は外部AIへ返しません。"
+    }
+  ];
 }
 
 function Input({

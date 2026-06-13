@@ -6,6 +6,7 @@ import {
   aiMcpEndpointDisplay,
   auditReceiptBody,
   canCopyAiMcpEndpoint,
+  contextPackBoundaryReceipt,
   documentIngestionReadiness,
   factInventoryCounts,
   factSourceNames,
@@ -24,7 +25,14 @@ import {
   webAiMcpEndpoint
 } from "./App";
 import { createEmptyVault } from "./vault";
-import type { AuditEvent, PassiveCaptureEvent, PassiveCaptureSettings, RawSource } from "./types";
+import type {
+  AuditEvent,
+  ContextPack,
+  ContextPackRequest,
+  PassiveCaptureEvent,
+  PassiveCaptureSettings,
+  RawSource
+} from "./types";
 import type { AiAccessServiceStatus } from "./nativeStorage";
 
 describe("AI access UI safety", () => {
@@ -351,6 +359,84 @@ describe("AI access UI safety", () => {
     expect(manualCopyPayloadForPack(payload, { id: "pack_2" })).toBeNull();
     expect(manualCopyPayloadForPack(null, { id: "pack_1" })).toBeNull();
     expect(manualCopyPayloadForPack(payload, null)).toBeNull();
+  });
+
+  it("summarizes the Context Pack delivery boundary without exposing raw content", () => {
+    const pack: ContextPack = {
+      id: "pack_1",
+      requestId: "request_1",
+      taskText: "来月の手続きを整理して",
+      taskDomain: "routines_and_logistics",
+      riskLevel: "medium",
+      generatedAt: "2026-06-13T00:00:00.000Z",
+      expiresAt: "2099-06-13T00:10:00.000Z",
+      maxSensitivityIncluded: "sensitive",
+      confirmationStatus: "pending_user_confirmation",
+      items: [
+        {
+          id: "item_1",
+          factId: "fact_1",
+          itemText: "Approved fact text that may be sent",
+          reasonIncluded: "Relevant to the user's task",
+          sensitivity: "sensitive",
+          sourceTitles: ["Insurance document"],
+          confidence: "source_backed"
+        }
+      ],
+      sourceSnippets: [
+        {
+          id: "snippet_1",
+          sourceId: "source_1",
+          title: "Insurance document",
+          text: "Short approved snippet",
+          sensitivity: "sensitive",
+          reasonIncluded: "Evidence for the approved fact"
+        }
+      ],
+      excludedItems: [
+        {
+          referencedId: "candidate_1",
+          reason: "secret_never_send"
+        },
+        {
+          referencedId: "raw_source_1",
+          reason: "deleted"
+        }
+      ],
+      warnings: []
+    };
+    const request: ContextPackRequest = {
+      id: "request_1",
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "来月の手続きを整理して",
+      purpose: "planning",
+      requestedDomains: ["routines_and_logistics"],
+      sensitivityCeiling: "sensitive",
+      approvalMode: "always_review",
+      createdAt: "2026-06-13T00:00:00.000Z",
+      expiresAt: "2099-06-13T00:10:00.000Z",
+      status: "pending_user_confirmation"
+    };
+
+    const receipt = contextPackBoundaryReceipt(pack, request);
+
+    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 Facts / 1 snippets");
+    expect(receipt.find((item) => item.label === "AIに渡る")?.detail).toContain("ChatGPT");
+    expect(receipt.find((item) => item.label === "AIに渡らない")?.value).toBe("2 exclusions");
+    expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("送信禁止");
+    expect(receipt.find((item) => item.label === "確認状態")?.tone).toBe("attention");
+    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("承認するまでPack本文");
+    expect(JSON.stringify(receipt)).not.toContain("Approved fact text that may be sent");
+    expect(JSON.stringify(receipt)).not.toContain("Short approved snippet");
+
+    const confirmed = contextPackBoundaryReceipt(
+      { ...pack, confirmationStatus: "confirmed", expiresAt: "2000-01-01T00:00:00.000Z" },
+      { ...request, status: "fulfilled", expiresAt: "2000-01-01T00:00:00.000Z" }
+    );
+
+    expect(confirmed.find((item) => item.label === "確認状態")?.tone).toBe("ready");
+    expect(confirmed.find((item) => item.label === "有効期限")?.value).toBe("期限切れ");
   });
 
   it("builds a restore receipt that explains backup contents and current Vault replacement", () => {

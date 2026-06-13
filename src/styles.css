@@ -2708,6 +2708,56 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.pack-boundary-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pack-boundary-receipt {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dce5d8;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.pack-boundary-receipt.ready {
+  border-color: #bdd6bd;
+  background: #f6fbf4;
+}
+
+.pack-boundary-receipt.attention {
+  border-color: #dfc28d;
+  background: #fffaf0;
+}
+
+.pack-boundary-receipt span,
+.pack-boundary-receipt strong,
+.pack-boundary-receipt small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pack-boundary-receipt span {
+  color: #596255;
+  font-size: 12px;
+}
+
+.pack-boundary-receipt strong {
+  color: #1f2d25;
+  font-size: 14px;
+}
+
+.pack-boundary-receipt small {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .manual-copy-panel {
   display: grid;
   gap: 12px;
@@ -2996,6 +3046,7 @@ button:focus-visible {
   .hosted-relay-boundary,
   .web-ai-registration-guide,
   .document-readiness-grid,
+  .pack-boundary-receipt-grid,
   .ai-access-quickstart,
   .ai-access-map-grid,
   .ai-access-checklist,

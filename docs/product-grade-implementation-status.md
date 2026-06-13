@@ -1114,6 +1114,15 @@ Last updated: 2026-06-13
 - Verification: official OpenAI Apps SDK and Claude MCP connector docs were rechecked before implementation. `node --check scripts/web-ai-connector-packet.mjs`, `node scripts/web-ai-connector-packet.mjs --mcp-url https://relay.example.com/mcp --format json`, invalid localhost/non-`/mcp` rejection, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed.
 - Review fallback: SubAgents were not used for this incremental registration slice; the main thread ran provider-fit, security/privacy, operations, and maintainability passes.
 
+### Context Pack Boundary Receipt UX Slice
+
+- Product fit: Requests now shows a compact delivery-boundary receipt for the active Context Pack, separating what will be sent to the AI, what will not be sent, Pack expiry, and confirmation state before users approve or copy the payload.
+- UX/design: the receipt reuses the existing dense card language from restore/audit receipts, making the core promise visible at the exact decision point instead of relying on scattered explanatory copy.
+- Security/privacy: the receipt is generated from Pack metadata only. It summarizes counts, sensitivity, exclusions, TTL, and confirmation state without copying Fact text, Source snippet text, Raw Source body, or unapproved MemoryCandidate content into a new surface.
+- Technical design: `contextPackBoundaryReceipt` is a pure UI helper covered by unit tests. It does not change Context Pack generation, confirmation, Relay handoff, manual copy payloads, or Audit persistence.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Requests at desktop and mobile widths: the boundary receipt renders four cards and neither viewport has page-level horizontal overflow.
+- Review fallback: SubAgents were not used for this incremental boundary receipt slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
+
 ### Document Ingestion Readiness UX Slice
 
 - Product fit: Sources now shows a compact document-ingestion readiness receipt before users upload files, separating always-local PDF/DOCX-style extraction from optional image OCR and legacy DOC/XLS/PPT conversion providers.
