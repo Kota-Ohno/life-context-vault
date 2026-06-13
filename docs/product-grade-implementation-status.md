@@ -88,6 +88,7 @@ Last updated: 2026-06-13
   - `GET /.well-known/oauth-authorization-server`
   - `POST /oauth/register`
   - Authorization Code + PKCE endpoints at `/oauth/authorize`, `/oauth/approve`, and `/oauth/token`
+  - ChatGPT-style CIMD public-client `client_id` URLs are accepted only after the public HTTPS metadata document is fetched and validated; unsafe URLs, unsafe resolved addresses, mismatched `redirect_uri`, and token exchange client id mismatches are rejected
   - device pairing endpoints at `/pairing/start` and `/pairing/status`
   - local Agent WebSocket endpoint at `/agent/ws`
   - `lcv-agent` forwards paired relay requests to the local encrypted `lcv-mcp` sidecar
@@ -95,6 +96,7 @@ Last updated: 2026-06-13
   - static bearer token fallback remains for local development
   - loopback bind by default
   - OAuth dynamic client registrations are persisted in a relay state store
+  - CIMD clients do not create DCR rows; the Relay uses the verified CIMD URL as the OAuth client id and still requires PKCE S256 plus resource binding
   - recent relay request audit metadata is persisted without MCP bodies or Context Pack bodies
   - `GET /relay/state` exposes metadata-only relay status for local Control Center and smoke checks, including MCP session metadata without request bodies
 - Added Relay state retention controls:
@@ -323,6 +325,7 @@ Last updated: 2026-06-13
 
 - Hosted operations outside this repository: actual public HTTPS Relay domain, DNS, platform secret store, persistent volume, backups, uptime monitoring, and provider registration against the real `/mcp` endpoint.
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
+- Confidential-client CIMD hardening if provider certification requires `private_key_jwt`; the current Relay supports public-client CIMD metadata document validation with PKCE/resource binding plus DCR fallback.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
 - Remote MCP hosted-client certification and provider-specific long-lived SSE behavior if certification requires more than the current metadata-only resume window and session lifecycle.
@@ -1112,7 +1115,7 @@ Last updated: 2026-06-13
 ### Hosted OAuth Smoke Completion Slice
 
 - Product fit: deployed Relay smoke can now verify the provider-facing OAuth path before Agent pairing, then optionally require the paired Agent for a full end-to-end connector rehearsal.
-- Security/privacy: the hosted smoke still runs metadata/CORS/challenge checks without admin credentials. With `LCV_RELAY_ADMIN_TOKEN`, it verifies that public browser approval remains owner-gated, uses admin-authenticated approval to exercise DCR, `resource=<origin>/mcp`, S256 PKCE, token exchange, pending-agent handling, and metadata-only `/relay/state`, and asserts state output excludes OAuth tokens, authorization codes, and PKCE verifiers.
+- Security/privacy: the hosted smoke still runs metadata/CORS/challenge checks without admin credentials and verifies that OAuth metadata advertises CIMD support. With `LCV_RELAY_ADMIN_TOKEN`, it verifies that public browser approval remains owner-gated, uses admin-authenticated approval to exercise DCR, `resource=<origin>/mcp`, S256 PKCE, token exchange, pending-agent handling, and metadata-only `/relay/state`, and asserts state output excludes OAuth tokens, authorization codes, and PKCE verifiers.
 - Technical design: `scripts/hosted-relay-smoke.mjs` treats `pending_agent_offline` as a valid OAuth-readiness result unless `LCV_HOSTED_RELAY_REQUIRE_AGENT=1` is set. Full Agent-backed `initialize`/`tools/list` remains available for staging connector rehearsals without making early public endpoint checks brittle.
 - Verification: `node --check scripts/hosted-relay-smoke.mjs`, `npm run hosted-relay:check -- --example`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed; `node scripts/hosted-relay-smoke.mjs` correctly fails fast without `LCV_HOSTED_RELAY_URL`. Live hosted OAuth smoke remains pending until a real staging endpoint exists.
 - SubAgent disposition: closes the remaining P2 release-gate gap in code by adding the staging smoke path and separating OAuth readiness from Agent readiness. Real public-provider readiness still requires provisioning the HTTPS Relay and running this smoke against that environment.
@@ -1227,6 +1230,14 @@ Last updated: 2026-06-13
 - Security/privacy: no persistence or provider execution path changed. Backup passphrases, backup JSON, OCR image data, Office documents, Source bodies, and Context Pack payloads are not newly logged, copied, or sent.
 - Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, and `git diff --check` passed. In-app Browser verified Settings at desktop `1280px` and mobile `390px`: backup/OCR/Office Japanese labels render, old `Backup JSON`/`Legacy Office conversion`/`Timeout seconds` labels are absent from the visible page, and neither viewport has page-level horizontal overflow.
 - Review fallback: this is a scoped UX text cleanup following the same Product Design concern as the Connections labeling slice.
+
+### Remote MCP CIMD Metadata Validation Slice
+
+- Product fit: ChatGPT connector setup can now use the Apps SDK-preferred CIMD path when available, while DCR remains available. This reduces the gap between the local product promise and real Web AI connector setup without asking general users to understand OAuth registration variants.
+- Security/privacy: CIMD client ids must be public HTTPS metadata document URLs and are not stored as DCR rows. The Relay rejects localhost, userinfo, fragments, query strings, empty document paths, non-HTTPS schemes, non-default HTTPS ports, non-public IP literals or DNS results, control characters, oversized values, redirects, non-JSON documents, and documents over 128 KiB. The fetched metadata must match the OAuth `client_id`, list the requested `redirect_uri`, and remain a public PKCE client (`token_endpoint_auth_method: none` when present). Both CIMD and DCR still require Authorization Code + PKCE S256 plus MCP `resource` binding, and token exchange rejects client id mismatch.
+- Technical design: OAuth metadata now advertises `client_id_metadata_document_supported: true`. `oauth_authorize` resolves either a registered DCR client or a fetched and validated CIMD metadata document. `oauth_approve` preserves DCR revalidation while allowing metadata-validated CIMD authorization sessions, and `oauth_token` binds optional `client_id` form values to the consumed authorization code.
+- Verification: focused Relay unit tests cover metadata advertising, unsafe CIMD URL rejection, CIMD metadata document acceptance/rejection, and token client mismatch rejection. Release smoke checks real-binary CIMD metadata advertising and keeps DCR/OAuth/MCP behavior network-stable.
+- Known limit: this is public-client CIMD compatibility. `private_key_jwt` and confidential-client assertions remain future hardening if provider certification requires them.
 
 ## SubAgent Completion Review Disposition
 

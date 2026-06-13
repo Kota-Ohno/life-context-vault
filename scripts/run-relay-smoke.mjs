@@ -231,6 +231,18 @@ async function main() {
       "unauthenticated MCP POST must include OAuth resource metadata challenge"
     );
 
+    const oauthMetadata = await request(baseUrl, { path: "/.well-known/oauth-authorization-server" });
+    assert(oauthMetadata.status === 200, "OAuth metadata must be reachable");
+    const oauthMetadataBody = oauthMetadata.json();
+    assert(
+      oauthMetadataBody.client_id_metadata_document_supported === true,
+      "OAuth metadata must advertise CIMD support"
+    );
+    assert(
+      oauthMetadataBody.registration_endpoint?.endsWith("/oauth/register"),
+      "OAuth metadata must keep DCR available"
+    );
+
     const missingAccept = await request(baseUrl, {
       method: "POST",
       path: "/mcp",

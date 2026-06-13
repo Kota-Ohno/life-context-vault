@@ -66,6 +66,7 @@ function outputPacket(format, packet) {
   console.log("");
   console.log(`- Authorization server metadata: \`${packet.authorizationServerMetadata}\``);
   console.log(`- Protected resource metadata: \`${packet.protectedResourceMetadata}\``);
+  console.log(`- Client ID Metadata Documents: ${packet.clientIdMetadataDocuments}`);
   console.log(`- Dynamic client registration: \`${packet.dynamicClientRegistration}\``);
   console.log("");
   console.log("## Boundary");
@@ -87,6 +88,7 @@ const packet = {
   mcpServerUrl: mcpUrl,
   authorizationServerMetadata: `${baseUrl}/.well-known/oauth-authorization-server`,
   protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
+  clientIdMetadataDocuments: "supported for public PKCE clients; DCR remains available",
   dynamicClientRegistration: `${baseUrl}/oauth/register`,
   relayStateStatus: `${baseUrl}/relay/state`,
   scopes: [
@@ -99,7 +101,7 @@ const packet = {
     connectorName: name,
     description,
     connectorUrl: mcpUrl,
-    expectedOAuth: "Authorization Code + PKCE S256 with resource-bound access tokens"
+    expectedOAuth: "CIMD or DCR + Authorization Code + PKCE S256 with resource-bound access tokens"
   },
   claudeApi: {
     mcp_servers: [

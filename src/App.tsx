@@ -3485,7 +3485,7 @@ function ConnectionsView({
           <div>
             <p className="eyebrow">Connection Diagnostics</p>
             <h3>AIからVaultを呼べる状態を確認</h3>
-            <span>Relay、Agent、Web AI登録の詳しい状態を必要な時だけ確認します。</span>
+            <span>Relay、Agent、CIMD/DCR登録の詳しい状態を必要な時だけ確認します。</span>
           </div>
           <div className="panel-summary-status">
             <Badge>{connectionDiagnosticSummary.label}</Badge>
@@ -3910,7 +3910,7 @@ function ConnectionsView({
           <div className="ai-access-endpoint">
             <span>MCP endpoint</span>
             <strong>{mcpEndpointDisplay}</strong>
-            <p>ChatGPT/ClaudeのRemote MCP、Claude Desktop/CodexのLocal MCP、コピーfallbackのどれでも、AIへ渡す外部境界はContext Packだけです。</p>
+            <p>ChatGPT/ClaudeのRemote MCP、Claude Desktop/CodexのLocal MCP、コピーfallbackのどれでも、AIへ渡す外部境界はContext Packだけです。ChatGPTはCIMD優先、DCRも利用できます。</p>
             <div className="service-actions">
               <button
                 className="primary-button"
@@ -7883,9 +7883,9 @@ export function webAiRegistrationGuides(
       provider: "ChatGPT",
       status,
       statusLabel,
-      steps: [firstStep, "Connector設定へ貼り付け", "初回要求時にContext Packを確認"],
+      steps: [firstStep, "CIMD対応Connectorへ貼り付け", "初回要求時にContext Packを確認"],
       actionLabel: ready ? "ChatGPT用JSONをコピー" : blockedAction,
-      boundary: "ChatGPTへ渡るのは、確認済みContext Packの本文と出典snippetだけです。"
+      boundary: "ChatGPTへ渡るのは、確認済みContext Packの本文と出典snippetだけです。CIMD優先で、DCRも利用できます。"
     },
     {
       provider: "Claude Web",
@@ -7925,7 +7925,7 @@ export function aiAccessChecklistItems(
           ? "Hosted HTTPS Relayとのpairingを確認済みです。"
           : "pairing確認後にAIへ登録できます。今は確認待ちです。"
         : status?.relayReachable
-        ? "Remote MCPのHTTPS/HTTP入口が応答しています。"
+        ? "Remote MCPのHTTPS/HTTP入口が応答しています。OAuth metadataはCIMDとDCRを案内します。"
         : "AI連携を開始してMCP endpointを起動します。",
       state: status?.relayMode === "hosted_agent" ? status.agentConnected ? "ready" : "pending" : status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
     },
@@ -8100,7 +8100,9 @@ function makeRemoteConnectorInfo(mcpServerUrl: string) {
     mcpServerUrl,
     authorizationServerMetadata: `${baseUrl}/.well-known/oauth-authorization-server`,
     protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
+    clientIdMetadataDocuments: "supported for public PKCE clients; DCR remains available",
     dynamicClientRegistration: `${baseUrl}/oauth/register`,
+    expectedOAuth: "CIMD or DCR + Authorization Code + PKCE S256 with resource-bound access tokens",
     relayStateStatus: `${baseUrl}/relay/state`,
     scopes: [
       "context_pack.request",

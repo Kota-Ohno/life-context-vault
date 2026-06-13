@@ -9,7 +9,7 @@ use std::{
   env,
   fs,
   io::{BufRead, BufReader, Read, Write},
-  net::{TcpListener, TcpStream},
+  net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream},
   path::PathBuf,
   sync::{
     mpsc::{self, Sender},
@@ -43,6 +43,7 @@ const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_REDIRECT_URIS: usize = 10;
 const MAX_OAUTH_REDIRECT_URI_BYTES: usize = 2048;
+const MAX_CIMD_CLIENT_ID_BYTES: usize = 2048;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -426,6 +427,7 @@ struct AuthCode {
 struct PendingAuthorization {
   id: String,
   client_id: String,
+  client_is_registered: bool,
   redirect_uri: String,
   code_challenge: String,
   code_challenge_method: String,
@@ -1341,6 +1343,7 @@ fn authorization_server_metadata(config: &RelayConfig) -> HttpResponse {
     "issuer": config.base_url,
     "authorization_endpoint": format!("{}/oauth/authorize", config.base_url),
     "token_endpoint": format!("{}/oauth/token", config.base_url),
+    "client_id_metadata_document_supported": true,
     "registration_endpoint": format!("{}/oauth/register", config.base_url),
     "response_types_supported": ["code"],
     "grant_types_supported": ["authorization_code"],
@@ -1539,28 +1542,63 @@ fn oauth_resource_from_param(
   Ok(Some(expected))
 }
 
+struct OAuthClientIdentity {
+  client_name: String,
+  registered: bool,
+}
+
+fn resolve_oauth_client(
+  client_id: &str,
+  redirect_uri: &str,
+  state: &RelayState,
+) -> Result<OAuthClientIdentity, HttpResponse> {
+  if let Some(client) = state.client(client_id) {
+    if !client.redirect_uris.iter().any(|uri| uri == redirect_uri) {
+      return Err(json_response(400, json!({
+        "error": "invalid_redirect_uri",
+        "message": "redirect_uri does not match the registered client."
+      })));
+    }
+    if let Err(message) = validate_oauth_redirect_uri(redirect_uri) {
+      return Err(json_response(400, json!({
+        "error": "invalid_redirect_uri",
+        "message": message
+      })));
+    }
+    return Ok(OAuthClientIdentity {
+      client_name: client.client_name,
+      registered: true,
+    });
+  }
+
+  match validate_cimd_client_id(client_id) {
+    Ok(client_name) => {
+      if let Err(message) = validate_oauth_redirect_uri(redirect_uri) {
+        return Err(json_response(400, json!({
+          "error": "invalid_redirect_uri",
+          "message": message
+        })));
+      }
+      Ok(OAuthClientIdentity {
+        client_name,
+        registered: false,
+      })
+    }
+    Err(message) => Err(json_response(400, json!({
+      "error": "invalid_client",
+      "message": message
+    }))),
+  }
+}
+
 fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
   let query = parse_query(&request.query);
   let client_id = query.get("client_id").cloned().unwrap_or_default();
   let redirect_uri = query.get("redirect_uri").cloned().unwrap_or_default();
-  let Some(client) = state.client(&client_id) else {
-    return json_response(400, json!({
-      "error": "invalid_client",
-      "message": "Register the OAuth client before authorization."
-    }));
+  let client = match resolve_oauth_client(&client_id, &redirect_uri, state) {
+    Ok(client) => client,
+    Err(response) => return response,
   };
-  if !client.redirect_uris.iter().any(|uri| uri == &redirect_uri) {
-    return json_response(400, json!({
-      "error": "invalid_redirect_uri",
-      "message": "redirect_uri does not match the registered client."
-    }));
-  }
-  if let Err(message) = validate_oauth_redirect_uri(&redirect_uri) {
-    return json_response(400, json!({
-      "error": "invalid_redirect_uri",
-      "message": message
-    }));
-  }
   if query.get("response_type").map(String::as_str) != Some("code") {
     return json_response(400, json!({
       "error": "unsupported_response_type"
@@ -1602,6 +1640,7 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
   let pending = state.insert_pending_authorization(PendingAuthorization {
     id: random_token("oauth_session"),
     client_id: client_id.clone(),
+    client_is_registered: client.registered,
     redirect_uri: redirect_uri.clone(),
     code_challenge: query
       .get("code_challenge")
@@ -1682,19 +1721,21 @@ fn oauth_approve(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       "message": "authorization session expired."
     }));
   }
-  let Some(client) = state.client(&pending.client_id) else {
-    return json_response(400, json!({
-      "error": "invalid_client"
-    }));
-  };
-  if !client
-    .redirect_uris
-    .iter()
-    .any(|uri| uri == &pending.redirect_uri)
-  {
-    return json_response(400, json!({
-      "error": "invalid_redirect_uri"
-    }));
+  if pending.client_is_registered {
+    let Some(client) = state.client(&pending.client_id) else {
+      return json_response(400, json!({
+        "error": "invalid_client"
+      }));
+    };
+    if !client
+      .redirect_uris
+      .iter()
+      .any(|uri| uri == &pending.redirect_uri)
+    {
+      return json_response(400, json!({
+        "error": "invalid_redirect_uri"
+      }));
+    }
   }
   if let Err(message) = validate_oauth_redirect_uri(&pending.redirect_uri) {
     return json_response(400, json!({
@@ -1768,6 +1809,14 @@ fn oauth_token(request: &HttpRequest, config: &RelayConfig, state: &RelayState) 
       "error": "invalid_grant",
       "message": "redirect_uri mismatch"
     }));
+  }
+  if let Some(client_id) = form.get("client_id").filter(|value| !value.trim().is_empty()) {
+    if client_id != &auth_code.client_id {
+      return json_response(400, json!({
+        "error": "invalid_grant",
+        "message": "client_id mismatch"
+      }));
+    }
   }
   let verifier = form.get("code_verifier").cloned().unwrap_or_default();
   if !verify_pkce(
@@ -1878,6 +1927,115 @@ fn validate_oauth_redirect_uri(uri: &str) -> Result<(), String> {
     return Err("http redirect_uri is allowed only for loopback development hosts".to_string());
   }
   Ok(())
+}
+
+fn validate_cimd_client_id(client_id: &str) -> Result<String, String> {
+  let value = client_id.trim();
+  if value.is_empty() {
+    return Err("client_id is required.".to_string());
+  }
+  if value.len() > MAX_CIMD_CLIENT_ID_BYTES {
+    return Err(format!(
+      "CIMD client_id must be at most {MAX_CIMD_CLIENT_ID_BYTES} bytes."
+    ));
+  }
+  if value.chars().any(|character| character.is_control()) {
+    return Err("CIMD client_id must not contain control characters.".to_string());
+  }
+  if value.contains('#') {
+    return Err("CIMD client_id must not include a fragment.".to_string());
+  }
+  let (scheme, rest) = value
+    .split_once("://")
+    .ok_or_else(|| "Register the OAuth client before authorization, or provide an HTTPS CIMD client_id.".to_string())?;
+  if scheme != "https" {
+    return Err("CIMD client_id must use https://.".to_string());
+  }
+  let authority_end = rest
+    .find(['/', '?'])
+    .unwrap_or(rest.len());
+  let authority = &rest[..authority_end];
+  if authority.is_empty() || authority.contains('@') {
+    return Err("CIMD client_id must include a host and must not include userinfo.".to_string());
+  }
+  if authority.ends_with(':') {
+    return Err("CIMD client_id port must be a valid TCP port.".to_string());
+  }
+  if let Some(port) = authority_port(authority) {
+    if port != "443" {
+      return Err("CIMD client_id must use the default HTTPS port.".to_string());
+    }
+  }
+  let host = redirect_uri_host(authority)
+    .map_err(|_| "CIMD client_id must include a valid host.".to_string())?;
+  if cimd_host_is_forbidden(&host) {
+    return Err("CIMD client_id must be a public HTTPS metadata document URL.".to_string());
+  }
+  let path_and_query = &rest[authority_end..];
+  if path_and_query.is_empty() || path_and_query == "/" {
+    return Err("CIMD client_id must point to a metadata document path.".to_string());
+  }
+  if path_and_query.contains('?') {
+    return Err("CIMD client_id must not include a query string.".to_string());
+  }
+  Ok(format!("CIMD client {}", host))
+}
+
+fn authority_port(authority: &str) -> Option<&str> {
+  if let Some(rest) = authority.strip_prefix('[') {
+    let (_, port_part) = rest.split_once(']')?;
+    return port_part.strip_prefix(':').filter(|port| !port.is_empty());
+  }
+  authority
+    .rsplit_once(':')
+    .and_then(|(_, port)| (!port.is_empty()).then_some(port))
+}
+
+fn cimd_host_is_forbidden(host: &str) -> bool {
+  let host = host.trim().trim_matches('.').to_ascii_lowercase();
+  if host.is_empty()
+    || host == "localhost"
+    || host.ends_with(".localhost")
+    || host.ends_with(".local")
+  {
+    return true;
+  }
+  host
+    .parse::<IpAddr>()
+    .map(cimd_ip_is_forbidden)
+    .unwrap_or(false)
+}
+
+fn cimd_ip_is_forbidden(ip: IpAddr) -> bool {
+  match ip {
+    IpAddr::V4(ip) => cimd_ipv4_is_forbidden(ip),
+    IpAddr::V6(ip) => cimd_ipv6_is_forbidden(ip),
+  }
+}
+
+fn cimd_ipv4_is_forbidden(ip: Ipv4Addr) -> bool {
+  let octets = ip.octets();
+  ip.is_private()
+    || ip.is_loopback()
+    || ip.is_link_local()
+    || ip.is_broadcast()
+    || ip.is_documentation()
+    || octets[0] == 0
+    || octets[0] >= 224
+    || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+    || (octets[0] == 169 && octets[1] == 254)
+    || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+    || (octets[0] == 198 && (18..=19).contains(&octets[1]))
+}
+
+fn cimd_ipv6_is_forbidden(ip: Ipv6Addr) -> bool {
+  let segments = ip.segments();
+  ip.is_loopback()
+    || ip.is_unspecified()
+    || ip.is_multicast()
+    || (segments[0] & 0xfe00) == 0xfc00
+    || (segments[0] & 0xffc0) == 0xfe80
+    || (segments[0] == 0x2001 && segments[1] == 0x0db8)
 }
 
 fn redirect_uri_host(authority: &str) -> Result<String, String> {
@@ -4340,6 +4498,7 @@ mod tests {
     let body = String::from_utf8(response.body).expect("json body");
     assert!(body.contains("authorization_endpoint"));
     assert!(body.contains("token_endpoint"));
+    assert!(body.contains("client_id_metadata_document_supported"));
     assert!(body.contains("registration_endpoint"));
     assert!(body.contains("S256"));
   }
@@ -4458,6 +4617,35 @@ mod tests {
       "http://[::1]:3000/oauth/callback".to_string(),
     ])
     .is_ok());
+  }
+
+  #[test]
+  fn cimd_client_id_url_validation_rejects_non_public_metadata_urls() {
+    for client_id in [
+      "http://chatgpt.com/oauth/client.json",
+      "https://user@chatgpt.com/oauth/client.json",
+      "https://chatgpt.com/oauth/client.json#fragment",
+      "https://chatgpt.com/oauth/client.json?x=1",
+      "https://chatgpt.com",
+      "https://chatgpt.com/",
+      "https://localhost/oauth/client.json",
+      "https://127.0.0.1/oauth/client.json",
+      "https://10.0.0.1/oauth/client.json",
+      "https://[::1]/oauth/client.json",
+      "https://chatgpt.com:8443/oauth/client.json",
+      "https://chatgpt.com:/oauth/client.json",
+      "client_unregistered",
+    ] {
+      assert!(
+        validate_cimd_client_id(client_id).is_err(),
+        "unsafe CIMD client_id should be rejected: {client_id}"
+      );
+    }
+    assert_eq!(
+      validate_cimd_client_id("https://chatgpt.com/oauth/client.json")
+        .expect("valid CIMD client_id"),
+      "CIMD client chatgpt.com"
+    );
   }
 
   #[test]
@@ -4603,6 +4791,20 @@ mod tests {
       oauth_token(&missing_token_resource, &config, &state).status,
       400
     );
+
+    let wrong_client_code = issue_code();
+    let wrong_client_token = HttpRequest {
+      body: form_encode(&[
+        ("grant_type", "authorization_code"),
+        ("code", wrong_client_code.as_str()),
+        ("client_id", "client_attacker"),
+        ("redirect_uri", "https://client.example/callback"),
+        ("code_verifier", verifier),
+        ("resource", resource.as_str()),
+      ]),
+      ..missing_token_resource.clone()
+    };
+    assert_eq!(oauth_token(&wrong_client_token, &config, &state).status, 400);
 
     let code = issue_code();
     let token_request = HttpRequest {
