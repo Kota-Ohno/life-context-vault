@@ -948,6 +948,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged empty Inbox as a likely first-run stall. Security/privacy review confirmed no automatic saving or sending was added. UI/UX review checks desktop and mobile button layout, focusable controls, and no horizontal overflow. Maintainability review keeps the change scoped to `InboxView` presentation and one static rendering test.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked the empty Inbox at desktop `1280x900` and mobile `390x844`: all three entry buttons render, the trust boundary copy is visible, each button navigates to the intended Control Center view, keyboard Tab reaches the three actions, and there is no page-level horizontal overflow.
 
+### Search Memory Inventory Slice
+
+- Product fit: Search now acts as a memory inventory, not only a text search. Users can see how many ApprovedFacts are AI-eligible, waiting for review, hidden/deleted, or retained only as history/expired context.
+- UX/design: the inventory uses the existing compact metric style, keeps the Active-only Context Pack rule in a short trust note, gives empty Search users direct Sources/Inbox entry points, and shows hidden/deleted Facts in an "Outside AI context" section with an explicit restore action. Expired context remains counted with history instead of being directly restored without a date review.
+- Security/privacy: restoring an excluded Fact is a user action labeled `AI候補へ戻す`. The change does not broaden retrieval; it makes the existing Active-only boundary more visible and keeps Raw Source bodies and unapproved candidates out of Search results.
+- Review fallback: Product fit review flagged "what does the Vault remember and what can AI use?" as a daily trust question. Security/privacy review checked that excluded Facts stay outside Context Packs until explicit restore. UI/UX review checked desktop and mobile inventory density, action labels, and no horizontal overflow. Maintainability review added `factInventoryCounts` coverage so state-category drift is visible.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Search at desktop `1280x900` and mobile `390x900`: empty Search shows Sources/Inbox actions and the Active-only rule; demo data shows 4 AI candidates; hiding a Fact changes counts to 3 AI candidates and 1 hidden/deleted, renders the Outside AI context section, and `AI候補へ戻す` restores counts to 4/0 with no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

@@ -715,6 +715,43 @@ button:focus-visible {
   border-bottom: 1px solid #e0e5dd;
 }
 
+.memory-inventory-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e0e5dd;
+}
+
+.context-inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.context-inventory-grid div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.context-inventory-grid span {
+  color: #667267;
+  font-size: 11px;
+}
+
+.context-inventory-grid strong {
+  color: #17211b;
+  font-size: 20px;
+}
+
+.inventory-actions {
+  margin-top: 2px;
+}
+
 .compact-heading {
   margin-bottom: 0;
 }
@@ -2338,6 +2375,7 @@ button:focus-visible {
   .onboarding-checklist,
   .launch-panel .onboarding-checklist,
   .inbox-empty-action-grid,
+  .context-inventory-grid,
   .policy-grid,
   .policy-controls,
   .policy-domain-list,

@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   aiMcpEndpointDisplay,
   canCopyAiMcpEndpoint,
+  factInventoryCounts,
   factSourceNames,
   InboxView,
   isHostedRelayConfirmed,
@@ -46,6 +47,25 @@ describe("AI access UI safety", () => {
     ).toBe("Guided background setup, Sample insurance renewal note, +1");
     expect(factSourceNames({ sourceIds: [] }, [])).toBe("出典なし");
     expect(factSourceNames({ sourceIds: ["missing"] }, [])).toBe("Source未検出");
+  });
+
+  it("counts which approved facts are eligible for AI context", () => {
+    expect(
+      factInventoryCounts([
+        { status: "active" },
+        { status: "needs_review" },
+        { status: "user_hidden" },
+        { status: "deleted" },
+        { status: "superseded" },
+        { status: "expired" }
+      ])
+    ).toEqual({
+      total: 6,
+      active: 1,
+      needsReview: 1,
+      hiddenOrDeleted: 2,
+      history: 2
+    });
   });
 
   it("gives first-time users clear entry points from an empty Memory Inbox", () => {

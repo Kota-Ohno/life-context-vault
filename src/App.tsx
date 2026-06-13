@@ -1940,6 +1940,7 @@ export function App() {
             setDomainFilter={setDomainFilter}
             sensitivityFilter={sensitivityFilter}
             setSensitivityFilter={setSensitivityFilter}
+            facts={state.facts}
             results={searchResults}
             reviewFacts={reviewFacts}
             supersededFacts={supersededFacts}
@@ -1949,6 +1950,8 @@ export function App() {
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
+            goInbox={() => setView("inbox")}
+            goSources={() => setView("sources")}
           />
         )}
         {view === "audit" && (
@@ -4358,6 +4361,7 @@ function SearchView({
   setDomainFilter,
   sensitivityFilter,
   setSensitivityFilter,
+  facts,
   results,
   reviewFacts,
   supersededFacts,
@@ -4366,7 +4370,9 @@ function SearchView({
   editFactMetadata,
   searchMode,
   searchError,
-  nativePath
+  nativePath,
+  goInbox,
+  goSources
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -4374,6 +4380,7 @@ function SearchView({
   setDomainFilter: (value: LifeContextDomain | "all") => void;
   sensitivityFilter: SensitivityTier | "all";
   setSensitivityFilter: (value: SensitivityTier | "all") => void;
+  facts: ApprovedFact[];
   results: ApprovedFact[];
   reviewFacts: ApprovedFact[];
   supersededFacts: ApprovedFact[];
@@ -4383,10 +4390,56 @@ function SearchView({
   searchMode: SearchMode;
   searchError: string | null;
   nativePath: string | null;
+  goInbox: () => void;
+  goSources: () => void;
 }) {
   const modeCopy = searchModeCopy(searchMode, Boolean(nativePath));
+  const inventory = factInventoryCounts(facts);
+  const filteredExcludedFacts = facts
+    .filter(
+      (fact) =>
+        ["user_hidden", "deleted"].includes(fact.status) &&
+        (domainFilter === "all" || fact.domain === domainFilter) &&
+        (sensitivityFilter === "all" || fact.sensitivity === sensitivityFilter) &&
+        (!query.trim() || fact.factText.toLowerCase().includes(query.trim().toLowerCase()))
+    )
+    .slice(0, 25);
+  const hasAnyFact = inventory.total > 0;
   return (
     <section className="panel wide">
+      <div className="memory-inventory-panel">
+        <div className="panel-heading compact-heading">
+          <div>
+            <p className="eyebrow">Memory inventory</p>
+            <h3>AIが使える保存済みFact</h3>
+          </div>
+          <Badge>{inventory.active} AI候補</Badge>
+        </div>
+        <div className="context-inventory-grid">
+          <Metric label="AI候補" value={inventory.active} />
+          <Metric label="再確認待ち" value={inventory.needsReview} />
+          <Metric label="非表示/削除" value={inventory.hiddenOrDeleted} />
+          <Metric label="履歴/期限切れ" value={inventory.history} />
+        </div>
+        <div className={inventory.needsReview > 0 ? "trust-note attention-note" : "trust-note"}>
+          <ShieldCheck size={16} />
+          <span>
+            Context Pack候補に入るのはActiveなApprovedFactだけです。再確認待ち、非表示、削除済み、期限切れ、置き換え済みFactはAIに渡しません。
+          </span>
+        </div>
+        {!hasAnyFact && (
+          <div className="action-row inventory-actions">
+            <button className="primary-button" onClick={goSources} type="button">
+              <FileText size={16} />
+              Sourceを追加
+            </button>
+            <button className="secondary-button" onClick={goInbox} type="button">
+              <Inbox size={16} />
+              Inboxを確認
+            </button>
+          </div>
+        )}
+      </div>
       {reviewFacts.length > 0 && (
         <div className="memory-review-panel">
           <div className="panel-heading compact-heading">
@@ -4458,6 +4511,32 @@ function SearchView({
         ))}
         {results.length === 0 && <p className="muted">一致するApprovedFactがありません。</p>}
       </div>
+      {filteredExcludedFacts.length > 0 && (
+        <div className="memory-review-panel excluded-facts-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <p className="eyebrow">Outside AI context</p>
+              <h3>AI候補から外れているFact</h3>
+            </div>
+            <Badge>{filteredExcludedFacts.length}件</Badge>
+          </div>
+          <div className="trust-note">
+            <EyeOff size={16} />
+            <span>非表示、削除済みのFactです。AIに使う必要が戻ったものだけ、明示的にAI候補へ戻します。</span>
+          </div>
+          <div className="domain-list">
+            {filteredExcludedFacts.map((fact) => (
+              <FactRow
+                changeFactLifecycle={changeFactLifecycle}
+                fact={fact}
+                key={fact.id}
+                sources={sources}
+                variant="excluded"
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {supersededFacts.length > 0 && (
         <div className="memory-review-panel version-history-panel">
           <div className="panel-heading compact-heading">
@@ -5096,7 +5175,7 @@ function FactRow({
 }: {
   fact: ApprovedFact;
   sources?: VaultState["sources"];
-  variant?: "readonly" | "active" | "review";
+  variant?: "readonly" | "active" | "review" | "excluded";
   changeFactLifecycle?: (factId: string, action: FactLifecycleAction) => void;
   editFactMetadata?: (factId: string, input: FactMetadataUpdate) => Promise<boolean>;
 }) {
@@ -5231,6 +5310,12 @@ function FactRow({
             </button>
           </>
         )}
+        {variant === "excluded" && changeFactLifecycle && (
+          <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "restore")} type="button">
+            <RefreshCw size={16} />
+            AI候補へ戻す
+          </button>
+        )}
       </div>
     </div>
   );
@@ -5246,6 +5331,26 @@ export function factSourceNames(
     .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Source未検出");
   const hiddenCount = fact.sourceIds.length - visibleNames.length;
   return hiddenCount > 0 ? [...visibleNames, `+${hiddenCount}`].join(", ") : visibleNames.join(", ");
+}
+
+export function factInventoryCounts(facts: Array<Pick<ApprovedFact, "status">>): {
+  total: number;
+  active: number;
+  needsReview: number;
+  hiddenOrDeleted: number;
+  history: number;
+} {
+  return facts.reduce(
+    (counts, fact) => {
+      counts.total += 1;
+      if (fact.status === "active") counts.active += 1;
+      if (fact.status === "needs_review") counts.needsReview += 1;
+      if (fact.status === "user_hidden" || fact.status === "deleted") counts.hiddenOrDeleted += 1;
+      if (fact.status === "superseded" || fact.status === "expired") counts.history += 1;
+      return counts;
+    },
+    { total: 0, active: 0, needsReview: 0, hiddenOrDeleted: 0, history: 0 }
+  );
 }
 
 function Input({
