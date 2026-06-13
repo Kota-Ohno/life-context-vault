@@ -964,6 +964,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged Sources as a first-run handoff risk after upload/manual entry. Security/privacy review checked that the queue includes only source-backed unapproved statuses and not approved/rejected candidates. UI/UX review checked desktop/mobile layout and the click path into Inbox. Maintainability review added `sourceReviewCandidates` coverage for the filtering boundary.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Sources at desktop `1280x900` and mobile `390x900`: adding a manual Source creates one pending candidate, the Sources review queue renders the candidate and trust boundary, `Inboxで承認` opens Memory Inbox with one candidate card and save action, and there is no page-level horizontal overflow.
 
+### Connections Copy Fallback Route Slice
+
+- Product fit: the Connections "MCPなしでコピー" route now sends users to Context Requests instead of copying the MCP URL. This matches the product promise that copy fallback means "review a Context Pack, then copy its content to any AI."
+- UX/design: the first-screen connection cards keep one clear action per route. Web/local routes still copy or install connector setup, while the fallback route uses `Requestsで確認・コピー` with the same card density and mobile layout.
+- Security/privacy: the route does not expose a connector URL as a substitute for approved content. Users land in the existing Context Pack confirmation flow, preserving minimization, exclusions, audit receipts, and explicit send/copy decisions.
+- Review fallback: Product fit review flagged the old fallback button as misleading because it copied an MCP endpoint rather than the AI-bound pack content. Security/privacy review confirmed no new data path was added. UI/UX review checked desktop/mobile Connections cards and the click path to Requests.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Connections at desktop `1280x900` and mobile `390x900`: the card is labeled `MCPなしでコピー`, the old `現在の入口をコピー` button is absent, `Requestsで確認・コピー` appears once, clicking it opens Context Requests, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

@@ -1908,6 +1908,7 @@ export function App() {
             captureHostInstallResult={captureHostInstallResult}
             installCaptureHostManifest={installCaptureHostManifest}
             simulatePassiveCapture={simulatePassiveCapture}
+            goRequests={() => setView("requests")}
           />
         )}
         {view === "requests" && (
@@ -2931,7 +2932,8 @@ function ConnectionsView({
   captureHostInstallBusy,
   captureHostInstallResult,
   installCaptureHostManifest,
-  simulatePassiveCapture
+  simulatePassiveCapture,
+  goRequests
 }: {
   connectors: ConnectorSession[];
   policies: VaultState["accessPolicies"];
@@ -2978,6 +2980,7 @@ function ConnectionsView({
   captureHostInstallResult: BrowserCaptureHostInstallResult | null;
   installCaptureHostManifest: () => void;
   simulatePassiveCapture: () => void;
+  goRequests: () => void;
 }) {
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
   const aiAccessChecklist = aiAccessChecklistItems(aiServiceStatus, nativePath);
@@ -3172,20 +3175,19 @@ function ConnectionsView({
             <div className="wizard-card-heading">
               <Clipboard size={18} />
               <div>
-                <strong>コピーFallback</strong>
+                <strong>MCPなしでコピー</strong>
                 <span>どのAIでも使えます</span>
               </div>
             </div>
-            <p>RequestsでContext Packを確認してから本文をコピーします。MCP接続前でも、渡した内容をAuditで追える導線です。</p>
+            <p>RequestsでContext Packを確認してから本文をコピーします。MCP接続前でも、AIへ渡した内容をAuditで追える導線です。</p>
             <div className="service-actions">
               <button
-                className="secondary-button"
-                disabled={!canCopyMcpEndpoint}
-                onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
+                className="primary-button"
+                onClick={goRequests}
                 type="button"
               >
-                <Clipboard size={16} />
-                現在の入口をコピー
+                <MessageSquare size={16} />
+                Requestsで確認・コピー
               </button>
             </div>
           </article>
