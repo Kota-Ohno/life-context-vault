@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import http from "node:http";
@@ -96,6 +97,26 @@ function mcpHeaders(extra = {}) {
     "MCP-Protocol-Version": "2025-11-25",
     ...extra
   };
+}
+
+function base64Url(buffer) {
+  return buffer
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function pkceChallenge(verifier) {
+  return base64Url(createHash("sha256").update(verifier).digest());
+}
+
+function formBody(entries) {
+  return new URLSearchParams(entries).toString();
+}
+
+function locationHeader(response) {
+  return headerValue(response.headers, "location");
 }
 
 async function main() {
@@ -304,10 +325,94 @@ async function main() {
     });
     assert(toolsAfterDelete.status === 200, "client without active session can use POST without MCP-Session-Id");
 
+    const redirectUri = "http://127.0.0.1/oauth/callback";
+    const registration = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/register",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: {
+        client_name: "Relay Smoke OAuth Client",
+        redirect_uris: [redirectUri]
+      }
+    });
+    assert(registration.status === 201, `dynamic OAuth registration must succeed: ${registration.body}`);
+    const registeredClient = registration.json();
+    assert(
+      registeredClient.client_id?.startsWith("client_"),
+      "dynamic OAuth registration must return a client id"
+    );
+    assert(
+      registeredClient.scope.includes("context_pack.request") && registeredClient.scope.includes("request.status"),
+      "dynamic OAuth registration must advertise Life Context scopes"
+    );
+
+    const codeVerifier = base64Url(randomBytes(32));
+    const codeChallenge = pkceChallenge(codeVerifier);
+    const requestedScope = "context_pack.request memory.propose policy.read request.status";
+    const authorizeParams = new URLSearchParams({
+      response_type: "code",
+      client_id: registeredClient.client_id,
+      redirect_uri: redirectUri,
+      scope: requestedScope,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      resource: `${baseUrl}/mcp`,
+      state: "relay-smoke-state"
+    });
+    const authorize = await request(baseUrl, {
+      path: `/oauth/authorize?${authorizeParams.toString()}`
+    });
+    assert(authorize.status === 200, `OAuth authorize must show approval page: ${authorize.body}`);
+    assert(authorize.body.includes("Authorize Relay Smoke OAuth Client"), "approval page must name the OAuth client");
+    assert(authorize.body.includes("Raw Vault reads are not exposed"), "approval page must explain the Context Pack boundary");
+    const approvePath = authorize.body.match(/href="([^"]*\/oauth\/approve\?[^"]+)"/)?.[1];
+    assert(approvePath, "approval page must include an approve URL");
+
+    const approve = await request(baseUrl, { path: approvePath.replace(/&amp;/g, "&") });
+    assert(approve.status === 302, `OAuth approval must redirect with code: ${approve.body}`);
+    const approvedLocation = locationHeader(approve);
+    assert(approvedLocation.startsWith(`${redirectUri}?code=`), "OAuth approval redirect must return an authorization code");
+    const approvedUrl = new URL(approvedLocation);
+    const authorizationCode = approvedUrl.searchParams.get("code");
+    assert(authorizationCode?.startsWith("code_"), "OAuth approval redirect must include a generated code");
+    assert(approvedUrl.searchParams.get("state") === "relay-smoke-state", "OAuth approval must preserve state");
+
+    const tokenResponse = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/token",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: formBody({
+        grant_type: "authorization_code",
+        code: authorizationCode,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+        resource: `${baseUrl}/mcp`
+      })
+    });
+    assert(tokenResponse.status === 200, `OAuth token exchange must succeed: ${tokenResponse.body}`);
+    const tokenBody = tokenResponse.json();
+    assert(tokenBody.token_type === "Bearer", "OAuth token response must issue a Bearer token");
+    assert(tokenBody.access_token?.startsWith("lcv_at_"), "OAuth token response must issue an access token");
+    assert(tokenBody.scope === requestedScope, "OAuth token response must preserve requested scopes");
+
+    const oauthTools = await request(baseUrl, {
+      method: "POST",
+      path: "/mcp",
+      headers: mcpHeaders({ Authorization: `Bearer ${tokenBody.access_token}` }),
+      body: { jsonrpc: "2.0", id: 8, method: "tools/list", params: {} }
+    });
+    assert(oauthTools.status === 200, `OAuth bearer must authorize MCP tools/list: ${oauthTools.body}`);
+    assert(oauthTools.body.includes("life_context.request_context_pack"), "OAuth bearer tools/list must expose Life Context tools");
+
     const state = await request(baseUrl, { path: "/relay/state" });
     assert(state.status === 200, "loopback relay state must be readable for diagnostics");
     const stateBody = state.json();
     assert(stateBody.tenantId === "smoke", "relay state must expose configured tenant");
+    assert(stateBody.registeredClientCount >= 1, "relay state must expose dynamic OAuth client metadata count");
     assert(typeof stateBody.mcpSessionCount === "number", "relay state must expose session count metadata");
     assert(stateBody.sseResumeSupported === false, "relay state must expose SSE resume support status");
     assert(
@@ -330,8 +435,12 @@ async function main() {
 
     const persistedState = await readFile(statePath, "utf8");
     assert(persistedState.includes("\"tenant_id\": \"smoke\""), "persisted state must include tenant metadata");
+    assert(persistedState.includes(registeredClient.client_id), "persisted state must include dynamic OAuth client metadata");
     assert(!persistedState.includes("life_context.request_context_pack"), "persisted state must not contain MCP tools response");
     assert(!persistedState.includes("mcp_session_"), "persisted state must not contain MCP session ids");
+    assert(!persistedState.includes(tokenBody.access_token), "persisted state must not contain OAuth access tokens");
+    assert(!persistedState.includes(authorizationCode), "persisted state must not contain OAuth authorization codes");
+    assert(!persistedState.includes(codeVerifier), "persisted state must not contain PKCE verifiers");
 
     console.log(`Relay smoke passed at ${baseUrl}`);
   } catch (error) {

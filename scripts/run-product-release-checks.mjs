@@ -42,6 +42,7 @@ function cargoFmtAvailable() {
 const full = hasFlag("--full");
 const includeBench = full || hasFlag("--include-bench");
 const includeTauriBuild = full || hasFlag("--include-tauri-build");
+const includeSseSoak = full || hasFlag("--include-sse-soak");
 const benchEnv = {};
 const benchFacts = valueFor("--bench-facts");
 const benchChunksPerFact = valueFor("--bench-chunks-per-fact");
@@ -69,6 +70,11 @@ run("Rust release binaries", "cargo", [
 ]);
 
 run("HTTP relay smoke", "npm", ["run", "relay:smoke"]);
+run("hosted Relay config baseline", "npm", ["run", "hosted-relay:check", "--", "--example"]);
+
+if (includeSseSoak) {
+  run("HTTP relay SSE soak", "npm", ["run", "relay:sse-soak"]);
+}
 
 if (includeTauriBuild) {
   run("Tauri sidecar integration build", "npm", ["run", "tauri:build"]);

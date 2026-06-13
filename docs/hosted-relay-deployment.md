@@ -25,6 +25,14 @@ LCV_RELAY_ALLOWED_ORIGINS=https://chatgpt.com,https://claude.ai
 LCV_RELAY_STATE_PATH=/data/relay-state.json
 ```
 
+Before deploying, validate the public Relay environment:
+
+```bash
+npm run hosted-relay:check
+```
+
+The same checker is part of `npm run product:check` in documented-example mode, so release checks catch drift in the required hosted boundary even when a real public Relay URL is not available in CI.
+
 The public endpoint must terminate HTTPS before traffic reaches the container. `LCV_RELAY_BASE_URL` must be the public HTTPS origin because OAuth metadata, connector URLs, and Agent WebSocket URLs are derived from it.
 
 Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STATIC_TOKEN=1` in public or shared deployments; real clients should use OAuth Authorization Code + PKCE.
@@ -68,6 +76,24 @@ Confirmed Context Pack handoff bodies are memory-only, admin-gated, client-bound
 `POST /relay/handoff` also requires a Vault-generated HMAC signature over the requesting client id, request id, pack expiry, and MCP response body. Unsigned or expired handoffs are rejected even when the caller has admin access.
 
 ## Smoke Test
+
+Before a public endpoint exists, run the local release smoke:
+
+```bash
+npm run relay:smoke
+```
+
+This starts release `lcv-relay` and `lcv-mcp` on loopback, then exercises dynamic OAuth client registration, the approval page, Authorization Code + S256 PKCE, `resource=<relay>/mcp` token binding, OAuth bearer MCP `tools/list`, session lifecycle, SSE readiness metadata, and metadata-only persisted state. It does not certify a real public domain, but it catches protocol regressions before provider registration.
+
+For an automated public endpoint smoke, set the deployed origin and run:
+
+```bash
+LCV_HOSTED_RELAY_URL=https://relay.example.com \
+LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token> \
+npm run hosted-relay:smoke
+```
+
+`LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also checks that `/relay/state` is reachable through admin auth and does not expose MCP or Context Pack bodies.
 
 ```bash
 curl -fsS https://relay.example.com/health

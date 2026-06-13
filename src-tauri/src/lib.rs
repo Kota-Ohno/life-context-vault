@@ -8598,7 +8598,17 @@ mod tests {
         path
           .file_name()
           .and_then(|value| value.to_str())
-          .map(|name| name.starts_with("lcv_legacy_office"))
+          .map(|name| {
+            name
+              .strip_prefix("lcv_legacy_office_")
+              .map(|suffix| {
+                suffix.len() == 24
+                  && suffix
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+              })
+              .unwrap_or(false)
+          })
           .unwrap_or(false)
       })
       .collect()

@@ -257,8 +257,9 @@ Last updated: 2026-06-13
   - `LCV_BENCH_FACTS` and `LCV_BENCH_CHUNKS_PER_FACT` can reduce or expand the synthetic dataset for local profiling
 - Added product release qualification commands:
   - `npm run product:check` runs frontend tests/build, Rust tests, Rust release binary build, format check when rustfmt is installed, and `git diff --check`
-  - `npm run product:check:full` additionally runs the Tauri sidecar integration build and large retrieval benchmark
+  - `npm run product:check:full` additionally runs the Tauri sidecar integration build, local SSE soak, and large retrieval benchmark
   - `product:check` can run smaller benchmark profiles through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`
+  - `product:check` also validates the documented hosted Relay configuration baseline, while real deployed endpoints use `npm run hosted-relay:smoke`
 - Added GitHub Actions product qualification workflow:
   - `.github/workflows/product-check.yml` runs `npm run product:check` on pull requests and pushes to `main`/`master`
   - scheduled weekly runs and manual `workflow_dispatch` can include a bounded retrieval benchmark profile
@@ -266,12 +267,19 @@ Last updated: 2026-06-13
 - Added hosted Relay deployment artifacts:
   - `deploy/relay/Dockerfile` builds a relay-only container with direct Vault sidecar fallback disabled
   - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
-  - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, smoke tests, token rotation, and incident runbooks
+  - `scripts/check-hosted-relay-config.mjs` validates the hosted Relay environment boundary: public HTTPS origin, no direct sidecar/Vault settings, no static bearer fallback, long admin/handoff secrets, exact HTTPS CORS origins, tenant id, and durable metadata path
+  - `scripts/hosted-relay-smoke.mjs` verifies a deployed HTTPS Relay health, OAuth metadata, protected-resource metadata, trusted/untrusted CORS behavior, OAuth challenge behavior, and optional metadata-only `/relay/state`
+  - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, automated/manual smoke tests, token rotation, and incident runbooks
   - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
 - Added release-gated HTTP Relay smoke:
   - `npm run relay:smoke` starts release `lcv-relay` and `lcv-mcp` on a random loopback port with a temporary encrypted Vault
-  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, and metadata-only relay persistence
+  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, dynamic OAuth client registration, approval-page consent, S256 PKCE token exchange, OAuth bearer `tools/list`, and metadata-only relay persistence
+  - persisted relay state is asserted to keep registered OAuth client metadata while excluding MCP tool responses, MCP session ids, OAuth access tokens, authorization codes, and PKCE verifiers
   - `npm run product:check` now runs the smoke after release sidecar binaries are built
+- Added local SSE soak coverage:
+  - `npm run relay:sse-soak` opens repeated authenticated Streamable HTTP receive channels against release `lcv-relay`
+  - the soak verifies ready events, unsupported replay disclosure, non-storage/non-echo of `Last-Event-ID`, bounded recent SSE diagnostics, and metadata-only persisted state
+  - `npm run product:check:full` includes the soak for release candidates, while `product:check` keeps the default loop bounded
 - Added Streamable HTTP SSE receive-channel support:
   - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
   - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`
@@ -304,7 +312,7 @@ Last updated: 2026-06-13
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Remote MCP hosted-client certification, long-running SSE soak, real event replay/resumability if provider certification requires it, and provider-specific connector registration against a real public HTTPS Relay.
+- Remote MCP hosted-client certification, real event replay/resumability if provider certification requires it, and provider-specific connector registration against a real public HTTPS Relay.
 - OCR setup now detects common local Tesseract providers, Legacy Office setup detects common local LibreOffice/soffice providers, both offer one-click Settings presets, and both include OS-specific guided install commands. Remaining product-hardening: bundled OCR/Office conversion runtimes for users who do not want to install providers separately.
 
 ## Verification
@@ -1049,6 +1057,22 @@ Last updated: 2026-06-13
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed. The UI helper test confirms the readiness checklist mentions `GET SSE ready`, unadvertised replay, and non-storage of `Last-Event-ID` values. System Chrome headless rendered Connections at desktop `1280x900` and mobile `390x844`: `Copy SSE ready check` is visible, buttons do not overflow, and there is no page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental protocol/UX slice; the main thread ran protocol compatibility, security/privacy, product, and maintainability passes.
 
+### Hosted Relay Readiness Gate Slice
+
+- Product fit: hosted Relay readiness now has explicit operator commands instead of prose-only deployment expectations. `hosted-relay:check` catches dangerous public settings before deployment, and `hosted-relay:smoke` verifies a real HTTPS endpoint after provisioning.
+- Security/privacy: the config gate rejects public static bearer fallback, direct Vault sidecar settings, hosted Vault paths/keys, non-HTTPS origins, wildcard CORS, missing tenant id, and short/matching admin or handoff secrets. The public smoke keeps the same Context Pack boundary and checks that optional `/relay/state` output is metadata-only.
+- Technical design: `product:check` validates the documented hosted baseline without needing a real domain, while `product:check:full` now adds local SSE soak coverage. Real provider certification remains a deployment task because it requires a public HTTPS Relay and provider-side connector registration.
+- Verification: `npm run hosted-relay:check -- --example`, `npm run relay:sse-soak`, and `git diff --check` passed. `node scripts/hosted-relay-smoke.mjs` was intentionally not run against a real endpoint in this local slice and correctly fails fast without `LCV_HOSTED_RELAY_URL`.
+- Review fallback: SubAgents were not used for this incremental release-gate slice; the main thread ran product fit, security/privacy, operations, and maintainability passes.
+
+### Remote MCP OAuth Smoke Slice
+
+- Product fit: release smoke now exercises the real daily-AI authorization path instead of relying only on the static local bearer fallback: dynamic OAuth client registration, human-readable approval page, authorization-code redirect, S256 PKCE token exchange, and OAuth bearer MCP `tools/list`.
+- Security/privacy: the smoke asserts the approval page explains the Context Pack boundary, and that persisted Relay state excludes OAuth access tokens, authorization codes, PKCE verifiers, MCP session ids, MCP tool responses, Vault data, Raw Sources, and Context Pack bodies.
+- Technical design: `scripts/run-relay-smoke.mjs` generates a verifier/challenge pair, requests the full Life Context scope set with `resource=<relay>/mcp`, approves the authorization session, exchanges the code, and then calls `/mcp` with the issued OAuth bearer token.
+- Verification: `node --check scripts/run-relay-smoke.mjs` and `npm run relay:smoke` passed for the initial slice; `npm run product:check` is rerun before commit.
+- Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran product fit, OAuth/protocol compatibility, security/privacy, and maintainability passes.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
@@ -1056,6 +1080,6 @@ SubAgent reviews were used for the product-grade completion pass. Material findi
 - Fixed security findings: OAuth approval now requires a pending authorization session; static bearer MCP access is opt-in development-only; loopback admin calls reject browser origins without an admin token; Relay handoffs are client-bound; Remote Relay authenticated client ids reach Vault Core through Agent/MCP; `get_request_status` is client-bound; OCR command execution clears inherited environment and uses a private temp directory; passive-capture TTL purge is enforced in Rust Vault saves; AccessPolicy domain and approval-threshold rules are enforced in Pack generation, Pack editing, and fail-closed malformed policy handling.
 - Fixed product/UX findings: Connections surfaces AI Access start/status first, Requests keeps approval actions in the first review viewport, Pack copy/approval wording separates saved memory from AI-bound payloads, Control Center approval can push a confirmed short-lived handoff to Relay, Audit shows AI delivery receipts without storing Pack bodies, Sources accepts file selection or drag-and-drop without losing the native picker, and the browser extension can run opt-in Auto Capture with visible in-page state plus an open-app review path.
 - Deferred hosted-product findings: public HTTPS Relay provisioning, real OAuth redirect registration, uptime monitoring, and tenant secret storage remain deployment work, not local code-only work.
-- Deferred protocol-hardening findings: real Streamable HTTP event replay/resumability, long-running SSE soak, and real hosted-client certification remain before a hosted connector beta.
+- Deferred protocol-hardening findings: real Streamable HTTP event replay/resumability, if provider certification requires it, and real hosted-client certification remain before a hosted connector beta.
 - Deferred scale/architecture findings: normalized SQLite projections are implemented, but several write paths still treat the JSON Vault snapshot as the mutation envelope; moving all writes to normalized authoritative tables remains a larger migration.
 - Deferred general-user polish: a bundled OCR runtime remains product-hardening work after the core AI access boundary.
