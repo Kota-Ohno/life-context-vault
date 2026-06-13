@@ -1070,7 +1070,7 @@ Last updated: 2026-06-13
 - Product fit: release smoke now exercises the real daily-AI authorization path instead of relying only on the static local bearer fallback: dynamic OAuth client registration, human-readable approval page, authorization-code redirect, S256 PKCE token exchange, and OAuth bearer MCP `tools/list`.
 - Security/privacy: the smoke asserts the approval page explains the Context Pack boundary, and that persisted Relay state excludes OAuth access tokens, authorization codes, PKCE verifiers, MCP session ids, MCP tool responses, Vault data, Raw Sources, and Context Pack bodies.
 - Technical design: `scripts/run-relay-smoke.mjs` generates a verifier/challenge pair, requests the full Life Context scope set with `resource=<relay>/mcp`, approves the authorization session, exchanges the code, and then calls `/mcp` with the issued OAuth bearer token.
-- Verification: `node --check scripts/run-relay-smoke.mjs` and `npm run relay:smoke` passed for the initial slice; `npm run product:check` is rerun before commit.
+- Verification: `node --check scripts/run-relay-smoke.mjs`, `npm run relay:smoke`, and `npm run product:check` passed.
 - Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran product fit, OAuth/protocol compatibility, security/privacy, and maintainability passes.
 
 ## SubAgent Completion Review Disposition
