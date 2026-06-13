@@ -8,6 +8,7 @@ import {
   factSourceNames,
   InboxView,
   isHostedRelayConfirmed,
+  sourceReviewCandidates,
   webAiMcpEndpoint
 } from "./App";
 
@@ -66,6 +67,23 @@ describe("AI access UI safety", () => {
       hiddenOrDeleted: 2,
       history: 2
     });
+  });
+
+  it("shows only source-backed unapproved candidates in the Sources review queue", () => {
+    expect(
+      sourceReviewCandidates([
+        { id: "candidate_new", sourceIds: ["source_1"], status: "new" },
+        { id: "candidate_detail", sourceIds: ["source_1"], status: "needs_user_detail" },
+        { id: "candidate_sensitive", sourceIds: ["source_2"], status: "blocked_sensitive" },
+        { id: "candidate_without_source", sourceIds: [], status: "new" },
+        { id: "candidate_approved", sourceIds: ["source_3"], status: "approved" },
+        { id: "candidate_rejected", sourceIds: ["source_3"], status: "rejected" }
+      ])
+    ).toEqual([
+      { id: "candidate_new", sourceIds: ["source_1"], status: "new" },
+      { id: "candidate_detail", sourceIds: ["source_1"], status: "needs_user_detail" },
+      { id: "candidate_sensitive", sourceIds: ["source_2"], status: "blocked_sensitive" }
+    ]);
   });
 
   it("gives first-time users clear entry points from an empty Memory Inbox", () => {

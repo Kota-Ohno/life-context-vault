@@ -956,6 +956,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged "what does the Vault remember and what can AI use?" as a daily trust question. Security/privacy review checked that excluded Facts stay outside Context Packs until explicit restore. UI/UX review checked desktop and mobile inventory density, action labels, and no horizontal overflow. Maintainability review added `factInventoryCounts` coverage so state-category drift is visible.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Search at desktop `1280x900` and mobile `390x900`: empty Search shows Sources/Inbox actions and the Active-only rule; demo data shows 4 AI candidates; hiding a Fact changes counts to 3 AI candidates and 1 hidden/deleted, renders the Outside AI context section, and `AI候補へ戻す` restores counts to 4/0 with no page-level horizontal overflow.
 
+### Sources Review Queue Slice
+
+- Product fit: Sources now connects the "add a document or memo" action to the next required step. Source-backed unapproved candidates appear in a local review queue with an `Inboxで承認` action, so users do not have to infer where newly extracted memories went.
+- UX/design: the queue uses the existing panel and row language, previews up to three pending candidate facts, keeps one primary action, and stacks cleanly on mobile. It appears only when there is actual user work waiting.
+- Security/privacy: the queue displays only MemoryCandidate text already created locally from the Source and repeats that these candidates are not Facts, Context Pack candidates, or AI-bound content until Inbox approval. It does not approve, send, or widen policy automatically.
+- Review fallback: Product fit review flagged Sources as a first-run handoff risk after upload/manual entry. Security/privacy review checked that the queue includes only source-backed unapproved statuses and not approved/rejected candidates. UI/UX review checked desktop/mobile layout and the click path into Inbox. Maintainability review added `sourceReviewCandidates` coverage for the filtering boundary.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Sources at desktop `1280x900` and mobile `390x900`: adding a manual Source creates one pending candidate, the Sources review queue renders the candidate and trust boundary, `Inboxで承認` opens Memory Inbox with one candidate card and save action, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.

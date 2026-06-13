@@ -1861,6 +1861,7 @@ export function App() {
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
             editSourceBody={editSourceBody}
+            goInbox={() => setView("inbox")}
           />
         )}
         {view === "connections" && (
@@ -2502,7 +2503,8 @@ function SourcesView({
   uploadFeedback,
   changeSourceLifecycle,
   editSourceMetadata,
-  editSourceBody
+  editSourceBody,
+  goInbox
 }: {
   sources: VaultState["sources"];
   candidates: VaultState["candidates"];
@@ -2523,8 +2525,10 @@ function SourcesView({
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
   editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
+  goInbox: () => void;
 }) {
   const [isDragActive, setIsDragActive] = useState(false);
+  const pendingSourceCandidates = sourceReviewCandidates(candidates);
   function handleDropZoneDrag(event: React.DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -2621,6 +2625,43 @@ function SourcesView({
           </span>
         </div>
       </div>
+
+      {pendingSourceCandidates.length > 0 && (
+        <div className="panel wide source-review-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Review queue</p>
+              <h3>Sourceから作られた承認待ち候補</h3>
+            </div>
+            <Badge>{pendingSourceCandidates.length}件</Badge>
+          </div>
+          <div className="trust-note">
+            <ShieldCheck size={16} />
+            <span>ここにある候補はまだFactではありません。Inboxで保存するまでContext Pack候補にもAI送信対象にもなりません。</span>
+          </div>
+          <div className="source-review-list">
+            {pendingSourceCandidates.slice(0, 3).map((candidate) => (
+              <div className="source-review-row" key={candidate.id}>
+                <div>
+                  <strong>{candidate.proposedFactText}</strong>
+                  <span>{domainLabel(candidate.domain)} / {candidate.reasonToRemember}</span>
+                </div>
+                <div className="source-review-meta">
+                  <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
+                  <Badge>{candidate.confidence}</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="action-row">
+            <button className="primary-button" onClick={goInbox} type="button">
+              <Inbox size={16} />
+              Inboxで承認
+            </button>
+            {pendingSourceCandidates.length > 3 && <span className="muted">ほか {pendingSourceCandidates.length - 3}件</span>}
+          </div>
+        </div>
+      )}
 
       <div className="panel wide">
         <div className="panel-heading">
@@ -5350,6 +5391,16 @@ export function factInventoryCounts(facts: Array<Pick<ApprovedFact, "status">>):
       return counts;
     },
     { total: 0, active: 0, needsReview: 0, hiddenOrDeleted: 0, history: 0 }
+  );
+}
+
+export function sourceReviewCandidates<T extends Pick<MemoryCandidate, "sourceIds" | "status">>(
+  candidates: T[]
+): T[] {
+  return candidates.filter(
+    (candidate) =>
+      candidate.sourceIds.length > 0 &&
+      ["new", "needs_user_detail", "blocked_sensitive"].includes(candidate.status)
   );
 }
 

@@ -796,6 +796,52 @@ button:focus-visible {
   align-items: stretch;
 }
 
+.source-review-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.source-review-list {
+  display: grid;
+  gap: 8px;
+}
+
+.source-review-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.source-review-row div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.source-review-row strong,
+.source-review-row span {
+  overflow-wrap: anywhere;
+}
+
+.source-review-row span {
+  color: #667267;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.source-review-meta {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .compact-toggle {
   margin: 0;
   min-height: 100%;
@@ -2437,6 +2483,7 @@ button:focus-visible {
   .fact-row,
   .table-row,
   .connection-row,
+  .source-review-row,
   .audit-row,
   .toggle-row {
     flex-direction: column;
