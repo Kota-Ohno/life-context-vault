@@ -290,10 +290,12 @@ LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef \
 src-tauri/target/release/lcv-agent
 ```
 
-## Remaining Remote Work
+## Remaining Hosted Operations Work
 
-This relay is not yet the public hosted relay.
+The same `lcv-relay` binary now supports local development, single-host hosted deployment, OAuth, Agent pairing, short-lived Context Pack handoff, and metadata-only persistence. What remains outside the repository is provider and operations work against a real public deployment:
 
-Remaining production work:
-
-- Provisioning the actual public HTTPS domain, TLS terminator, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
+- Provisioning the actual public HTTPS domain, DNS, secret store, persistent volume, backups, and uptime monitoring in the chosen hosting environment.
+- Running `npm run hosted-relay:init` with the real public host and certificate email, then deploying `deploy/relay/compose.yaml` or an equivalent platform manifest.
+- Running `npm run hosted-relay:smoke` against that public origin after the desktop Agent is paired.
+- Registering the public `/mcp` endpoint with the target AI provider and completing provider-specific connector certification.
+- Implementing true event replay/resumability only if a provider certification path requires more than the current SSE readiness channel and session lifecycle.

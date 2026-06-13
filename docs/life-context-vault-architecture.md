@@ -566,7 +566,7 @@ Do not expose:
 
 MCP clients receive Context Packs, not unrestricted database access.
 
-Remote MCP relay remains a later network surface. It must preserve the same tool and Context Pack boundary.
+Remote MCP relay uses the same tool and Context Pack boundary. Hosted deployments keep the Relay metadata-only: Vault search, policy checks, and Context Pack generation stay on the user's device through the paired local Agent.
 
 ## Implementation Milestones
 

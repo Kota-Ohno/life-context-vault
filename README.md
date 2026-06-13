@@ -129,4 +129,4 @@ Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri des
 6. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
 7. Open **Audit** to see what was captured, saved, requested, generated, copied, or denied.
 
-See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for hosted connector certification and full normalized-store migration.
+See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for hosted connector certification, bundled document providers, and future semantic memory upgrades.

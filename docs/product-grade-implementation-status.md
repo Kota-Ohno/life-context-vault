@@ -313,12 +313,11 @@ Last updated: 2026-06-13
 
 ## Still Remaining For Full Product Grade
 
-- Provisioning the actual public HTTPS Relay domain, TLS termination, secret store, persistent volume, and uptime monitoring in the chosen hosting environment.
+- Hosted operations outside this repository: actual public HTTPS Relay domain, DNS, platform secret store, persistent volume, backups, uptime monitoring, and provider registration against the real `/mcp` endpoint.
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Remote MCP hosted-client certification, real event replay/resumability if provider certification requires it, and provider-specific connector registration against a real public HTTPS Relay.
-- OCR setup now detects common local Tesseract providers, Legacy Office setup detects common local LibreOffice/soffice providers, both offer one-click Settings presets, and both include OS-specific guided install commands. Remaining product-hardening: bundled OCR/Office conversion runtimes for users who do not want to install providers separately.
+- Remote MCP hosted-client certification and true event replay/resumability if provider certification requires more than the current SSE readiness channel and session lifecycle.
 
 ## Verification
 
