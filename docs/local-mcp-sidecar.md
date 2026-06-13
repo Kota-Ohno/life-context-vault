@@ -20,7 +20,7 @@ src-tauri/target/release/lcv-mcp
 
 ## Claude Desktop Config
 
-Use the **Connections** screen in the Tauri desktop app and click **Install Claude config**. The app:
+Use the **Connections** screen in the Tauri desktop app and click **Claude設定へ追加**. The app:
 
 - resolves the bundled `lcv-mcp` sidecar path,
 - writes the current encrypted Vault path into the MCP environment,

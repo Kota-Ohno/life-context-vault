@@ -19,6 +19,7 @@
     "relay:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin lcv-relay",
     "relay:smoke": "node scripts/run-relay-smoke.mjs",
     "relay:sse-soak": "node scripts/run-relay-sse-soak.mjs",
+    "hosted-relay:init": "node scripts/init-hosted-relay-config.mjs",
     "hosted-relay:check": "node scripts/check-hosted-relay-config.mjs",
     "hosted-relay:smoke": "node scripts/hosted-relay-smoke.mjs",
     "web-ai:packet": "node scripts/web-ai-connector-packet.mjs",

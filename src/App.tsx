@@ -665,7 +665,7 @@ export function App() {
             current
               ? {
                   ...current,
-                  lastError: error instanceof Error ? error.message : "AI Access Service status failed"
+                  lastError: error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。"
                 }
               : current
           );
@@ -3993,7 +3993,7 @@ function ConnectionsView({
                   </div>
                 </div>
                 <div className="policy-grid">
-                  <Metric label="Transport" value={connector.transport === "remote_mcp_relay" ? "Relay" : connector.transport === "local_mcp" ? "Local" : connector.transport === "browser_extension" ? "Capture" : "Copy"} />
+                  <Metric label="Transport" value={connector.transport === "remote_mcp_relay" ? "Relay" : connector.transport === "local_mcp" ? "Local" : connector.transport === "browser_extension" ? "Capture" : "コピー"} />
                   <Metric label="Status" value={connector.status} />
                   <Metric label="Ceiling" value={policy?.sensitivityCeiling ?? "n/a"} />
                 </div>
@@ -4163,7 +4163,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <PlayCircle size={16} />
-                  Enable login
+                  ログイン時に起動
                 </button>
                 <button
                   className="secondary-button"
@@ -4172,7 +4172,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <PauseCircle size={16} />
-                  Disable
+                  無効化
                 </button>
                 <button
                   className="secondary-button"
@@ -4181,10 +4181,10 @@ function ConnectionsView({
                   type="button"
                 >
                   <RefreshCw size={16} />
-                  Check
+                  状態を確認
                 </button>
               </div>
-              {loginItemStatus?.plistPath && <span>Startup item: {loginItemStatus.plistPath}</span>}
+              {loginItemStatus?.plistPath && <span>起動項目: {loginItemStatus.plistPath}</span>}
               {loginItemStatus?.backupPath && <span>Backup: {loginItemStatus.backupPath}</span>}
               {loginItemStatus?.lastError && <span>{loginItemStatus.lastError}</span>}
             </div>
@@ -4206,12 +4206,12 @@ function ConnectionsView({
                 type="button"
               >
                 {runtimePreferences.autoStartAiAccess ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-                {runtimePreferences.autoStartAiAccess ? "Turn off" : "Turn on"}
+                {runtimePreferences.autoStartAiAccess ? "自動開始を停止" : "自動開始を有効化"}
               </button>
               <span>
                 {runtimePreferences.autoStartAiAccess
                   ? "次回起動時にAI Accessを自動で戻します。"
-                  : "必要なときだけ手動でStartします。"}
+                  : "必要なときだけ手動でAI連携を開始します。"}
               </span>
             </div>
             <div className="automation-card">
@@ -4260,7 +4260,7 @@ function ConnectionsView({
               type="button"
             >
               <Plug size={16} />
-              Install Claude config
+              Claude設定へ追加
             </button>
             <button
               className="secondary-button"
@@ -4268,7 +4268,7 @@ function ConnectionsView({
               type="button"
             >
               <Clipboard size={16} />
-              Copy config
+              設定をコピー
             </button>
           </div>
           {claudeInstallResult && (
@@ -4299,7 +4299,7 @@ function ConnectionsView({
               type="button"
             >
               <Clipboard size={16} />
-              Copy config
+              設定をコピー
             </button>
           </div>
           <div className="setup-step">
@@ -4347,7 +4347,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy command
+                Relay起動をコピー
               </button>
             </div>
             <div className="setup-step">
@@ -4360,7 +4360,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy pairing
+                Pairing発行をコピー
               </button>
             </div>
             <div className="setup-step">
@@ -4373,7 +4373,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy agent
+                Agent起動をコピー
               </button>
             </div>
             <div className="setup-step">
@@ -4398,7 +4398,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <Clipboard size={16} />
-                  Copy health
+                  Health確認をコピー
                 </button>
                 <button
                   className="secondary-button"
@@ -4406,7 +4406,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <Clipboard size={16} />
-                  Copy MCP check
+                  MCP診断をコピー
                 </button>
                 <button
                   className="secondary-button"
@@ -4462,7 +4462,7 @@ function ConnectionsView({
             type="button"
           >
             {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-            {captureSettings.enabled ? "Pause" : "Start"}
+            {captureSettings.enabled ? "一時停止" : "開始"}
           </button>
         </div>
         <div className="form-stack">
@@ -4619,7 +4619,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Plug size={16} />
-                Install host
+                Native Hostを追加
               </button>
               <button
                 className="secondary-button"
@@ -4632,7 +4632,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy fallback
+                手動コマンドをコピー
               </button>
             </div>
             {captureHostInstallResult && (
@@ -4647,7 +4647,7 @@ function ConnectionsView({
             )}
           </div>
           <pre className="code-box">{makeCaptureSetupCommand(captureExtensionId)}</pre>
-          <p className="muted">Captureはpopup操作で明示的に実行され、Passive CaptureがStartで、対象サイトが許可済みのときだけInbox候補を作ります。</p>
+          <p className="muted">Captureはpopup操作で明示的に実行され、Passive Captureが開始済みで、対象サイトが許可済みのときだけInbox候補を作ります。</p>
           <button
             className="secondary-button"
             onClick={() =>
@@ -4659,7 +4659,7 @@ function ConnectionsView({
             type="button"
           >
             <Clipboard size={16} />
-            Copy setup
+            セットアップをコピー
           </button>
         </div>
       </details>
@@ -4854,7 +4854,7 @@ function ContextRequestsView({
           <div className="copy-fallback-starter">
             <div className="panel-heading compact-heading">
               <div>
-                <p className="eyebrow">Copy fallback</p>
+                <p className="eyebrow">コピーFallback</p>
                 <h3>MCPなしでContext Packを作る</h3>
               </div>
               <Clipboard size={18} />

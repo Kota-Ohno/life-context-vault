@@ -77,7 +77,7 @@ The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault s
 npm run mcp:build
 ```
 
-Then open **Connections** in the Tauri desktop app and use **Install Claude config**. The app merges the `life-context-vault` MCP server into Claude Desktop's config and backs up an existing config first. Manual copy remains available as a fallback.
+Then open **Connections** in the Tauri desktop app and use **Claude設定へ追加**. The app merges the `life-context-vault` MCP server into Claude Desktop's config and backs up an existing config first. Manual copy remains available as a fallback.
 
 The MCP sidecar exposes controlled tools only:
 
@@ -103,7 +103,13 @@ For day-to-day use, **Connections** also includes operations controls to launch 
 
 The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, persists OAuth client registrations plus request metadata only, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
 
-For a hosted HTTPS relay, deploy `deploy/relay/Dockerfile`, start pairing from the relay's trusted admin path, then paste the returned `agentWebSocketUrl` into **Connections -> Hosted Relay Agent**. The desktop app accepts only `wss://.../agent/ws?pairing_code=...`, starts the local Agent process, clears the short-lived URL from the UI, and keeps the Vault work on the user's device. The Relay sends an explicit `agent_ready` ACK after pairing succeeds; only then does the Agent write fresh local `agent-status.json` metadata without the pairing secret, and Control Center marks Hosted as ready.
+For a hosted HTTPS relay, start with the guarded config initializer using your real public host and certificate email:
+
+```bash
+npm run hosted-relay:init -- --public-host relay.example.com --email ops@example.com --tenant-id personal
+```
+
+Then deploy `deploy/relay/Dockerfile`, start pairing from the relay's trusted admin path, and paste the returned `agentWebSocketUrl` into **Connections -> Hosted Relay Agent**. The desktop app accepts only `wss://.../agent/ws?pairing_code=...`, starts the local Agent process, clears the short-lived URL from the UI, and keeps the Vault work on the user's device. The Relay sends an explicit `agent_ready` ACK after pairing succeeds; only then does the Agent write fresh local `agent-status.json` metadata without the pairing secret, and Control Center marks Hosted as ready. See `docs/hosted-relay-deployment.md`.
 
 ## Run Browser Capture Extension
 
@@ -111,7 +117,7 @@ For a hosted HTTPS relay, deploy `deploy/relay/Dockerfile`, start pairing from t
 npm run capture:build
 ```
 
-Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri desktop app, open **Connections**, paste the generated Chrome extension id, and use **Install host** to write the Native Messaging host manifest. The manual `LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest` command remains available as a fallback. See `docs/browser-capture-extension.md`.
+Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri desktop app, open **Connections**, paste the generated Chrome extension id, and use **Native Hostを追加** to write the Native Messaging host manifest. The manual `LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest` command remains available as a fallback. See `docs/browser-capture-extension.md`.
 
 ## Try The Product-Grade Slice
 
@@ -119,7 +125,7 @@ Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri des
 2. Review the generated candidate in **Inbox** and save it as an ApprovedFact.
 3. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task. Use copy fallback first if MCP/Relay is not connected yet.
 4. Open **Connections** when you want to make the route persistent: Claude Desktop/local MCP, ChatGPT or Claude Web via hosted HTTPS Relay, browser capture, or copy fallback.
-5. Start Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
+5. Use Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
 6. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
 7. Open **Audit** to see what was captured, saved, requested, generated, copied, or denied.
 

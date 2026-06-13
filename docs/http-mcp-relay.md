@@ -19,7 +19,14 @@ npm run agent:build
 
 `npm run tauri:bundle` prepares and embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` into the macOS app bundle.
 
-For hosted container deployment, see [Hosted Relay Deployment](./hosted-relay-deployment.md).
+For hosted container deployment, generate guarded env files first with your real public host and certificate email, then follow [Hosted Relay Deployment](./hosted-relay-deployment.md):
+
+```bash
+npm run hosted-relay:init -- \
+  --public-host relay.example.com \
+  --email ops@example.com \
+  --tenant-id personal
+```
 
 For hosted use from the desktop app, the Control Center can now start the local Agent from a hosted pairing URL. Generate a pairing session on the hosted relay, copy the returned `agentWebSocketUrl`, and paste it into **Connections -> Hosted Relay Agent**. Hosted URLs must use the exact WSS path `wss://.../agent/ws?pairing_code=...`; `lcv-agent` is built with TLS support for that path. Relay sends an explicit `agent_ready` message only after pairing succeeds. The Agent then writes local `agent-status.json` metadata with `connecting`, `connected`, or `disconnected`, redacts the pairing secret, and lets Control Center distinguish process liveness from pairing readiness with a fresh timestamp, process id, and per-spawn status token.
 

@@ -14,6 +14,19 @@ docker build -f deploy/relay/Dockerfile -t life-context-vault-relay:local .
 
 For a single-host staging deployment with automatic HTTPS termination, use the deployment bundle in `deploy/relay/`.
 
+The safest first step is to generate real env files with random Relay secrets. Replace the sample host, email, and tenant before running:
+
+```bash
+npm run hosted-relay:init -- \
+  --public-host relay.example.com \
+  --email ops@example.com \
+  --tenant-id production
+```
+
+The initializer writes `deploy/relay/relay.env` and `deploy/relay/compose.env` with `0600` permissions, refuses to overwrite existing files unless `--force` is passed, validates the generated files with `hosted-relay:check`, and does not print secret values. Use `--dry-run` to validate inputs without writing repo files.
+
+Manual setup is still supported:
+
 ```bash
 cp deploy/relay/relay.env.example deploy/relay/relay.env
 cp deploy/relay/compose.env.example deploy/relay/compose.env

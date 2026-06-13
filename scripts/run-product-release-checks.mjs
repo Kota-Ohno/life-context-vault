@@ -83,6 +83,19 @@ run("hosted Relay env template", "npm", [
   "--name",
   "deploy/relay templates"
 ]);
+run("hosted Relay init syntax", "node", ["--check", "scripts/init-hosted-relay-config.mjs"]);
+run("hosted Relay init sample", "npm", [
+  "run",
+  "hosted-relay:init",
+  "--",
+  "--public-host",
+  "relay.lcv.test",
+  "--email",
+  "ops@lcv.test",
+  "--tenant-id",
+  "release-check",
+  "--dry-run"
+]);
 run("hosted Relay smoke syntax", "node", ["--check", "scripts/hosted-relay-smoke.mjs"]);
 run("Web AI connector packet syntax", "node", ["--check", "scripts/web-ai-connector-packet.mjs"]);
 run("Web AI connector packet sample", "node", [

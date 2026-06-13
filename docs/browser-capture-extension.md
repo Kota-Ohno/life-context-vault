@@ -51,7 +51,7 @@ Use the Tauri desktop app for the normal path:
 
 1. Open **Connections**.
 2. Paste the generated Chrome extension id into **Chrome拡張ID**.
-3. Click **Install host**.
+3. Click **Native Hostを追加**.
 
 The app writes the Native Messaging host manifest for the bundled `lcv-capture-host`, backs up any previous manifest with the same host name, and refuses invalid extension IDs.
 

@@ -101,6 +101,11 @@ Last updated: 2026-06-13
   - OAuth client registrations remain durable by default but can be expired through `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS`
   - relay state persistence keeps metadata-only backup generations using `LCV_RELAY_STATE_BACKUP_COUNT`, defaulting to 3 and allowing 0 to disable backups
   - `/relay/state` exposes retention settings without exposing MCP bodies, Raw Sources, Vault content, or Context Pack bodies
+- Added guarded Hosted Relay deployment initialization:
+  - `npm run hosted-relay:init` generates `deploy/relay/relay.env` and `deploy/relay/compose.env` from user-provided public host, ACME email, and tenant id
+  - generated Relay secrets are random, written with private file permissions, and never printed to the terminal
+  - the initializer refuses accidental overwrites unless `--force` is passed, supports `--dry-run`, and immediately runs the hosted Relay config checker
+  - product release checks now validate both the initializer syntax and a dry-run generated config
 - Added Relay tenant isolation controls:
   - loopback development defaults to `LCV_RELAY_TENANT_ID=local`
   - non-loopback binds require explicit `LCV_RELAY_TENANT_ID`
@@ -1187,10 +1192,10 @@ Last updated: 2026-06-13
 
 ### Connections General-User Labeling Slice
 
-- Product fit: Connections now presents the ordinary path as `AI連携を開始`, `状態を更新`, `MCP URLをコピー`, and `管理中の連携を停止` instead of operator-flavored English labels. The detailed Relay/Agent/Web AI diagnostic panel is collapsed by default so first-time users see connection choices before protocol internals.
+- Product fit: Connections now presents the ordinary path as `AI連携を開始`, `状態を更新`, `MCP URLをコピー`, `管理中の連携を停止`, `Claude設定へ追加`, `Native Hostを追加`, and `開始/一時停止` instead of operator-flavored English labels. The detailed Relay/Agent/Web AI diagnostic panel is collapsed by default so first-time users see connection choices before protocol internals.
 - UX/design: the change keeps the existing card and disclosure system, but separates "what should I press?" from "how do I debug MCP/SSE/Agent state?" without adding a new screen. The collapsed diagnostic summary still shows a compact readiness badge such as `利用不可 0/4 ready`.
 - Security/privacy: no data path changed. The collapsed diagnostic summary is readiness metadata only and does not include runtime errors, pairing URLs, bearer tokens, Context Pack text, Source bodies, or candidate text. The opened diagnostic still exposes only operational status and redacted error text.
-- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and in-app Browser checks passed. Browser verified Connections at desktop `1280px` and mobile `390px`: Japanese primary labels render, old `Start AI Access`/`Copy URL` labels are absent from the visible page, the diagnostic disclosure is closed by default with a summary readiness badge, expanding reveals four status cards, and neither viewport has page-level horizontal overflow.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and in-app Browser checks passed. Browser verified Connections at desktop `1280px` and mobile `390px`: Japanese primary labels render, old `Start AI Access`/`Copy URL` labels are absent from the visible page, the diagnostic disclosure is closed by default with a summary readiness badge, expanding reveals four status cards, and neither viewport has page-level horizontal overflow. A follow-up pass also removed remaining English action labels from Local MCP setup, login/startup controls, Passive Capture, and Browser extension setup.
 - Review fallback: SubAgents were not re-run for this small follow-up slice; it directly addresses prior Product Design/Product-fit findings about English operational labels and Connections complexity.
 
 ## SubAgent Completion Review Disposition
