@@ -193,6 +193,14 @@ interface ConnectionDiagnostic {
   items: ConnectionDiagnosticItem[];
 }
 
+interface HostedRelayRegistrationReadiness {
+  tone: ConnectionDiagnosticTone;
+  title: string;
+  summary: string;
+  nextStep: string;
+  items: ConnectionDiagnosticItem[];
+}
+
 interface HomeCaptureSafetySummary {
   tone: "ready" | "attention";
   title: string;
@@ -2135,9 +2143,9 @@ function NavButton({
 
 function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div>
+    <div className="metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong><span className="sr-only">: </span>{value}</strong>
     </div>
   );
 }
@@ -2225,8 +2233,8 @@ export function HomeView({
         ? "Sourceまたは候補が作成されています。"
         : "呼び名、制約、いま動いている生活領域から始めます。",
       status: backgroundStarted ? "done" : "current",
-      actionLabel: backgroundStarted ? "Sourceを見る" : "Source追加",
-      action: goSources
+      actionLabel: backgroundStarted ? "Sourceを見る" : "入力欄へ",
+      action: backgroundStarted ? goSources : focusSetup
     },
     {
       title: "候補を承認する",
@@ -2618,7 +2626,7 @@ export function InboxView({
               <div className="supersede-panel">
                 <div className="trust-note compact-note">
                   <RefreshCw size={16} />
-                  <span>この候補で古いFactを置き換える場合だけ選択します。置き換えたFactはAI候補から外れ、履歴に残ります。</span>
+                  <span>この候補で古いFactを置き換える場合だけ選択します。置き換えたFactはContext Pack候補から外れ、履歴に残ります。</span>
                 </div>
                 <div className="supersede-options">
                   {replacementOptions.map((fact) => (
@@ -3179,6 +3187,12 @@ function ConnectionsView({
     hostedAgentWebsocketUrl,
     webMcpEndpoint
   );
+  const hostedRelayReadiness = hostedRelayRegistrationReadiness(
+    aiServiceStatus,
+    nativePath,
+    hostedAgentWebsocketUrl,
+    webMcpEndpoint
+  );
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
   const recentCaptures = [...passiveCaptureEvents]
     .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
@@ -3609,6 +3623,37 @@ function ConnectionsView({
               label="問題"
               value={hostedLastErrorCopy(aiServiceStatus)}
             />
+            <div className={`hosted-relay-readiness ${hostedRelayReadiness.tone}`}>
+              <div className="hosted-relay-readiness-heading">
+                <div>
+                  <span>Web AI registration</span>
+                  <strong>{hostedRelayReadiness.title}</strong>
+                </div>
+                {hostedRelayReadiness.tone === "ready" ? <ShieldCheck size={18} /> : <ShieldAlert size={18} />}
+              </div>
+              <p>{hostedRelayReadiness.summary}</p>
+              <div className="hosted-relay-readiness-list" aria-label="Hosted Relay registration readiness">
+                {hostedRelayReadiness.items.map((item) => (
+                  <div className={`hosted-relay-readiness-item ${item.state}`} key={item.label}>
+                    {item.state === "ready" ? (
+                      <CheckCircle2 size={15} />
+                    ) : item.state === "blocked" ? (
+                      <ShieldAlert size={15} />
+                    ) : (
+                      <Clock size={15} />
+                    )}
+                    <div>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hosted-relay-next-step">
+                <span>次にやること</span>
+                <strong>{hostedRelayReadiness.nextStep}</strong>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -4820,10 +4865,10 @@ function SearchView({
             <p className="eyebrow">Memory inventory</p>
             <h3>AIが使える保存済みFact</h3>
           </div>
-          <Badge>{inventory.active} AI候補</Badge>
+          <Badge>{inventory.active} Context Pack候補</Badge>
         </div>
         <div className="context-inventory-grid">
-          <Metric label="AI候補" value={inventory.active} />
+          <Metric label="Context Pack候補" value={inventory.active} />
           <Metric label="再確認待ち" value={inventory.needsReview} />
           <Metric label="非表示/削除" value={inventory.hiddenOrDeleted} />
           <Metric label="履歴/期限切れ" value={inventory.history} />
@@ -4923,13 +4968,13 @@ function SearchView({
           <div className="panel-heading compact-heading">
             <div>
               <p className="eyebrow">Outside AI context</p>
-              <h3>AI候補から外れているFact</h3>
+              <h3>Context Pack候補から外れているFact</h3>
             </div>
             <Badge>{filteredExcludedFacts.length}件</Badge>
           </div>
           <div className="trust-note">
             <EyeOff size={16} />
-            <span>非表示、削除済みのFactです。AIに使う必要が戻ったものだけ、明示的にAI候補へ戻します。</span>
+            <span>非表示、削除済みのFactです。AIに使う必要が戻ったものだけ、明示的にContext Pack候補へ戻します。</span>
           </div>
           <div className="domain-list">
             {filteredExcludedFacts.map((fact) => (
@@ -5764,7 +5809,7 @@ function FactRow({
         {variant === "excluded" && changeFactLifecycle && (
           <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "restore")} type="button">
             <RefreshCw size={16} />
-            AI候補へ戻す
+            Context Pack候補へ戻す
           </button>
         )}
       </div>
@@ -6185,6 +6230,15 @@ function isLocalhostUrl(value: string): boolean {
   }
 }
 
+function isPublicHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !isLocalhostUrl(value);
+  } catch {
+    return false;
+  }
+}
+
 function passiveCaptureSourceId(event: PassiveCaptureEvent): string | null {
   if (event.sourceId) return event.sourceId;
   const [sourceId] = event.textFragmentRef.split(":");
@@ -6549,7 +6603,7 @@ function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: 
     return "Factを保持し、Context Pack候補へ戻しました。";
   }
   if (action === "hide") {
-    return `FactをAI候補から非表示にしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+    return `FactをContext Pack候補から非表示にしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
   }
   if (action === "delete") {
     return `Factを削除済みにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
@@ -7020,6 +7074,120 @@ export function aiConnectionDiagnostic(
     nextStep: "Start AI AccessでLocal MCP用のRelayとAgentを起動します。",
     issue: null,
     primaryAction: "start_ai_access",
+    items
+  };
+}
+
+export function hostedRelayRegistrationReadiness(
+  status: AiAccessServiceStatus | null,
+  nativePath: string | null,
+  hostedAgentWebsocketUrl: string,
+  webMcpEndpoint: string | null
+): HostedRelayRegistrationReadiness {
+  const hostedPreview = hostedRelayMcpUrlFromAgentWs(hostedAgentWebsocketUrl);
+  const urlEntered = hostedAgentWebsocketUrl.trim().length > 0;
+  const validAgentUrl = Boolean(hostedPreview);
+  const hostedMode = status?.relayMode === "hosted_agent";
+  const confirmed = isHostedRelayConfirmed(status);
+  const publicMcpReady = Boolean(webMcpEndpoint && isPublicHttpsUrl(webMcpEndpoint));
+  const oauthMetadataReady = publicMcpReady;
+  const items: ConnectionDiagnosticItem[] = [
+    {
+      label: "Desktop Vault",
+      value: nativePath ? "この端末で開いている" : "Desktop appが必要",
+      state: nativePath ? "ready" : "blocked"
+    },
+    {
+      label: "短命Agent URL",
+      value: validAgentUrl
+        ? "WSS pairing URLを検証済み"
+        : urlEntered
+          ? "形式を確認してください"
+          : "Hosted Relayで発行待ち",
+      state: validAgentUrl ? "ready" : urlEntered ? "blocked" : "pending"
+    },
+    {
+      label: "Relay pairing",
+      value: confirmed
+        ? "この端末のAgentを確認済み"
+        : hostedMode && status?.agentManagedRunning
+          ? "Agent接続を確認中"
+          : "未確認",
+      state: confirmed ? "ready" : nativePath ? "pending" : "blocked"
+    },
+    {
+      label: "Public MCP URL",
+      value: publicMcpReady
+        ? "公開HTTPS URLを登録可能"
+        : validAgentUrl
+          ? "pairing後に表示"
+          : "未生成",
+      state: publicMcpReady ? "ready" : validAgentUrl ? "pending" : "blocked"
+    },
+    {
+      label: "OAuth metadata",
+      value: oauthMetadataReady
+        ? "metadata URLを接続情報へ含めます"
+        : "公開MCP URL確定後に生成",
+      state: oauthMetadataReady ? "ready" : validAgentUrl ? "pending" : "blocked"
+    },
+    {
+      label: "Data boundary",
+      value: "Context PackだけをAIへ返す",
+      state: "ready"
+    }
+  ];
+
+  if (!nativePath) {
+    return {
+      tone: "blocked",
+      title: "Desktop appでVaultを開いてください",
+      summary:
+        "Web AI登録には、この端末のVault Agentが必要です。ブラウザ表示だけではVaultをHosted Relayへpairingできません。",
+      nextStep: "Desktop appを開いてからHosted Relayの短命URLを貼り付けます。",
+      items
+    };
+  }
+
+  if (urlEntered && !validAgentUrl) {
+    return {
+      tone: "blocked",
+      title: "Agent URLの形式を確認してください",
+      summary:
+        "Hosted Relayが発行した `wss://.../agent/ws?pairing_code=...` だけを受け付けます。URL本文は保存しません。",
+      nextStep: "Hosted Relayで新しい短命Agent WebSocket URLを発行し直します。",
+      items
+    };
+  }
+
+  if (confirmed && publicMcpReady) {
+    return {
+      tone: "ready",
+      title: "Web AIへ登録できます",
+      summary:
+        "公開HTTPS Relayとのpairing確認済みです。ChatGPT/Claude WebにはRemote MCP接続情報を登録し、Vault処理はこの端末で行います。",
+      nextStep: "Web AI用接続情報をコピーして、普段使うAIのConnector設定へ貼り付けます。",
+      items
+    };
+  }
+
+  if (validAgentUrl) {
+    return {
+      tone: "attention",
+      title: hostedMode ? "pairing確認待ちです" : "Agent接続を開始できます",
+      summary:
+        "公開MCP URLは推定できますが、AIへ登録できるのはRelayがこの端末のAgentを確認した後です。",
+      nextStep: "Hosted RelayへAgent接続を実行し、確認後にWeb AI接続情報をコピーします。",
+      items
+    };
+  }
+
+  return {
+    tone: "neutral",
+    title: "Hosted Relay URLを待っています",
+    summary:
+      "ChatGPT/Claude Webはlocalhostへ直接来られません。公開HTTPS Relayで短命Agent WebSocket URLを発行して貼り付けます。",
+    nextStep: "self-hostのpairingコマンド、または運用中のHosted Relayから短命URLを発行します。",
     items
   };
 }

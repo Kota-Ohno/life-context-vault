@@ -267,13 +267,13 @@ Last updated: 2026-06-13
 - Added hosted Relay deployment artifacts:
   - `deploy/relay/Dockerfile` builds a relay-only container with direct Vault sidecar fallback disabled
   - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
-  - `scripts/check-hosted-relay-config.mjs` validates the hosted Relay environment boundary: public HTTPS origin, no direct sidecar/Vault settings, no static bearer fallback, long admin/handoff secrets, exact HTTPS CORS origins, tenant id, and durable metadata path
+  - `scripts/check-hosted-relay-config.mjs` validates the hosted Relay environment boundary: public HTTPS origin, no direct sidecar/Vault settings, no static bearer fallback, no hosted auto-approve, long admin/handoff secrets, exact HTTPS CORS origins, tenant id, durable metadata path, and hosted handoff TTL at or below 600 seconds
   - `scripts/hosted-relay-smoke.mjs` verifies a deployed HTTPS Relay health, OAuth metadata, protected-resource metadata, trusted/untrusted CORS behavior, OAuth challenge behavior, and optional metadata-only `/relay/state`
   - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, automated/manual smoke tests, token rotation, and incident runbooks
   - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
 - Added release-gated HTTP Relay smoke:
   - `npm run relay:smoke` starts release `lcv-relay` and `lcv-mcp` on a random loopback port with a temporary encrypted Vault
-  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, dynamic OAuth client registration, approval-page consent, S256 PKCE token exchange, OAuth bearer `tools/list`, and metadata-only relay persistence
+  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, dynamic OAuth client registration, unsafe redirect rejection, approval-page consent, S256 PKCE token exchange, wrong-verifier/resource/code-reuse rejection, insufficient-scope `403`, OAuth bearer `tools/list`, and metadata-only relay persistence
   - persisted relay state is asserted to keep registered OAuth client metadata while excluding MCP tool responses, MCP session ids, OAuth access tokens, authorization codes, and PKCE verifiers
   - `npm run product:check` now runs the smoke after release sidecar binaries are built
 - Added local SSE soak coverage:
@@ -1068,10 +1068,35 @@ Last updated: 2026-06-13
 ### Remote MCP OAuth Smoke Slice
 
 - Product fit: release smoke now exercises the real daily-AI authorization path instead of relying only on the static local bearer fallback: dynamic OAuth client registration, human-readable approval page, authorization-code redirect, S256 PKCE token exchange, and OAuth bearer MCP `tools/list`.
-- Security/privacy: the smoke asserts the approval page explains the Context Pack boundary, and that persisted Relay state excludes OAuth access tokens, authorization codes, PKCE verifiers, MCP session ids, MCP tool responses, Vault data, Raw Sources, and Context Pack bodies.
-- Technical design: `scripts/run-relay-smoke.mjs` generates a verifier/challenge pair, requests the full Life Context scope set with `resource=<relay>/mcp`, approves the authorization session, exchanges the code, and then calls `/mcp` with the issued OAuth bearer token.
+- Security/privacy: the smoke asserts the approval page explains the Context Pack boundary, and that persisted Relay state excludes OAuth access tokens, authorization codes, PKCE verifiers, MCP session ids, MCP tool responses, Vault data, Raw Sources, and Context Pack bodies. It also covers unsafe redirect URI rejection, wrong PKCE verifier rejection, wrong resource rejection, authorization-code reuse rejection, and insufficient-scope `403`.
+- Technical design: `scripts/run-relay-smoke.mjs` generates verifier/challenge pairs, requests the full Life Context scope set with `resource=<relay>/mcp`, approves loopback authorization sessions, exchanges the code, and then calls `/mcp` with the issued OAuth bearer token.
 - Verification: `node --check scripts/run-relay-smoke.mjs`, `npm run relay:smoke`, and `npm run product:check` passed.
 - Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran product fit, OAuth/protocol compatibility, security/privacy, and maintainability passes.
+
+### Hosted Relay OAuth Hardening Slice
+
+- Product fit: hosted Relay deployments now fail faster on dangerous production settings before a user tries to connect ChatGPT/Claude Web. The product promise depends on Web AI access being OAuth-first and owner-approved, not a public bearer-token shortcut.
+- Security/privacy: non-loopback Relay binds now reject static bearer fallback entirely, hosted config checks reject `LCV_RELAY_AUTO_APPROVE`, public OAuth approval requires owner/admin authorization, redirect URIs are validated for safe schemes/hosts/no fragments/no control characters, PKCE verifiers must meet length/character requirements, and handoff TTL is capped at 600 seconds for hosted deployments.
+- Technical design: Relay MCP authorization now distinguishes missing/invalid bearer tokens from insufficient scopes, returning `401` OAuth challenges for unauthenticated clients and `403 insufficient_scope` for under-scoped tokens. Hosted deployment docs now call out auto-approve, redirect URI, and handoff TTL boundaries.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm run hosted-relay:check -- --example`, `npm run relay:smoke`, and `npm run product:check -- --include-sse-soak` passed.
+- Review fallback: SubAgents were not used for this incremental security slice; the main thread ran protocol compatibility, security/privacy, operations, and maintainability passes.
+
+### Hosted Relay Registration UX Slice
+
+- Product fit: Connections now shows a `Web AI registration` readiness receipt inside the Hosted Relay panel, so users can tell whether ChatGPT/Claude Web registration is blocked by Desktop app state, malformed Agent URL, unconfirmed pairing, missing public HTTPS MCP URL, or metadata readiness.
+- UX/design: the receipt follows the existing compact status-card language, keeps the Hosted Relay panel as the single place for Web AI setup, and provides one concrete next step without exposing advanced self-host commands by default.
+- Security/privacy: the readiness helper never echoes the pasted `pairing_code`, treats public Web AI registration as ready only after confirmed hosted pairing plus a non-local HTTPS MCP URL, and repeats that the AI-bound boundary is Context Pack only.
+- Technical design: `hostedRelayRegistrationReadiness` is a pure UI helper used by Connections and covered with focused tests for ready, pending, invalid URL, browser-only, and secret-redaction states.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Connections at desktop width and confirmed no page-level horizontal overflow with the Web AI registration receipt present.
+- Review fallback: SubAgents were not used for this incremental UX slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
+
+### Product Review UX Closure Slice
+
+- Product fit: Home onboarding step 1 now sends first-time users to the guided life-background input instead of splitting them between Sources and the setup card.
+- UX/trust language: Search now labels active saved Facts as `Context Pack候補`, not generic `AI候補`, so "saved in Vault" remains separate from "sent to AI."
+- Passive Capture safety: the in-page extension badge is now keyboard/click actionable and pauses Auto Capture by updating the same extension storage setting used by the popup. Extension local metadata stores host and URL hash instead of full URL/title.
+- Verification: `node --check browser-extension/background.js`, `node --check browser-extension/content.js`, `node --check browser-extension/popup.js`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Search at desktop and mobile widths: `Context Pack候補` is visible and there is no page-level horizontal overflow. Home first-time `入力欄へ` is covered by static rendering because the live browser had existing local state.
+- SubAgent disposition: fixed P1 first-value split, P2 Passive Capture pause affordance, P2 extension metadata minimization, and P2 trust-language mismatch. A default hosted Relay service and bundled OCR/Office runtimes remain product-distribution work outside this local repository slice.
 
 ## SubAgent Completion Review Disposition
 

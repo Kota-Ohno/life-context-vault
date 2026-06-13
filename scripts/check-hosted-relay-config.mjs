@@ -81,6 +81,9 @@ function validate(config) {
     if (isTruthyPublicStatic(config.LCV_RELAY_ENABLE_STATIC_TOKEN)) {
       fail("LCV_RELAY_ENABLE_STATIC_TOKEN must not be enabled for hosted deployments");
     }
+    if (isTruthyPublicStatic(config.LCV_RELAY_AUTO_APPROVE)) {
+      fail("LCV_RELAY_AUTO_APPROVE must not be enabled for hosted deployments");
+    }
     if (config.LCV_RELAY_TOKEN) {
       fail("LCV_RELAY_TOKEN must not be set for hosted deployments; use OAuth clients instead");
     }
@@ -129,6 +132,13 @@ function validate(config) {
     if (config.LCV_MCP_COMMAND) fail("LCV_MCP_COMMAND must not be set on the hosted metadata-only relay");
     if (config.LCV_VAULT_DB_PATH) fail("LCV_VAULT_DB_PATH must not be set on the hosted metadata-only relay");
     if (config.LCV_VAULT_DB_KEY) fail("LCV_VAULT_DB_KEY must not be set on the hosted metadata-only relay");
+  });
+
+  check(() => {
+    const ttl = Number.parseInt(config.LCV_RELAY_HANDOFF_TTL_SECONDS ?? "600", 10);
+    if (!Number.isFinite(ttl) || ttl <= 0) fail("LCV_RELAY_HANDOFF_TTL_SECONDS must be a positive number of seconds");
+    if (ttl > 600) fail("LCV_RELAY_HANDOFF_TTL_SECONDS must be 600 seconds or less for hosted deployments");
+    if (config.LCV_RELAY_HANDOFF_TTL_DAYS) fail("LCV_RELAY_HANDOFF_TTL_DAYS must not be used for hosted deployments");
   });
 
   return { errors, warnings };

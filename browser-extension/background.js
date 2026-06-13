@@ -110,6 +110,7 @@ async function openControlCenter() {
 }
 
 async function recordCaptureMeta(page, result, reason) {
+  const url = safeUrl(page.url);
   const meta = {
     ok: Boolean(result?.ok),
     status: result?.status ?? (result?.ok ? "captured" : "failed"),
@@ -119,14 +120,28 @@ async function recordCaptureMeta(page, result, reason) {
     retentionUntil: result?.retentionUntil ?? null,
     sourceClient: page.sourceClient,
     conversationId: page.conversationId,
-    url: page.url,
-    pageTitle: page.title,
+    host: url?.hostname ?? null,
+    urlHash: await sha256Hex(page.url ?? ""),
     captureMode: page.captureMode ?? (page.selected ? "selection" : "full"),
     textLength: page.textLength ?? page.text.length,
     reason,
     capturedAt: new Date().toISOString()
   };
   await chrome.storage.local.set({ [STORAGE_LAST_CAPTURE_META]: meta });
+}
+
+function safeUrl(value) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function isAllowedUrl(url) {

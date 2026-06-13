@@ -86,7 +86,7 @@ Accept: application/json, text/event-stream
 MCP-Protocol-Version: 2025-11-25
 ```
 
-Remote clients should use OAuth discovery instead of the static token. Public or shared deployments should leave `LCV_RELAY_ENABLE_STATIC_TOKEN` unset.
+Remote clients should use OAuth discovery instead of the static token. Public or shared deployments cannot enable `LCV_RELAY_ENABLE_STATIC_TOKEN`; the relay refuses that configuration outside loopback.
 
 OAuth clients should request the Relay MCP endpoint as the resource:
 
@@ -216,6 +216,8 @@ The desktop Control Center uses the same endpoint after a user confirms a Contex
   - `life_context.get_policy_summary` -> `policy.read`
   - `life_context.get_request_status` -> `request.status`
 - OAuth approval requires a server-side pending authorization session. `/oauth/approve` cannot mint a code from query parameters alone.
+- On public/shared Relay binds, OAuth approval also requires owner/admin authorization. The browser consent page can create a pending approval session, but it cannot self-approve and issue an authorization code without Control Center or an admin-authenticated approval path.
+- Registered redirect URIs are validated before persistence: absolute `https://` is required except loopback development `http://` URLs, fragments/userinfo/control characters are rejected, and redirect count/length are capped.
 - MCP HTTP sessions are memory-only, client-bound, and terminable through `DELETE /mcp`; they do not grant broader access than the bearer token that created them.
 - The relay does not implement its own Vault reads. It forwards through `lcv-agent` to `lcv-mcp`, or through direct sidecar fallback only when explicitly allowed for local development.
 - The relay does not store Context Pack bodies or MCP request bodies.
@@ -233,7 +235,7 @@ npm run mcp:build
 npm run relay:smoke
 ```
 
-`npm run relay:smoke` starts `lcv-relay` on a random loopback port with a temporary encrypted Vault and metadata store. It verifies `/health`, `/mcp` method boundaries, CORS preflight headers, OAuth challenge behavior, `GET /mcp` SSE readiness, `Last-Event-ID` non-persistence, `406`/`415` header failures, `initialize` session issuance, `MCP-Session-Id` reuse, `DELETE /mcp` termination, and metadata-only relay state persistence. `npm run product:check` runs this smoke after building release sidecars.
+`npm run relay:smoke` starts `lcv-relay` on a random loopback port with a temporary encrypted Vault and metadata store. It verifies `/health`, `/mcp` method boundaries, CORS preflight headers, OAuth challenge behavior, dynamic OAuth client registration, redirect URI rejection, approval-page consent, S256 PKCE token exchange, wrong-verifier rejection, wrong-resource rejection, authorization-code reuse rejection, insufficient-scope `403`, OAuth bearer `tools/list`, `GET /mcp` SSE readiness, `Last-Event-ID` non-persistence, `406`/`415` header failures, `initialize` session issuance, `MCP-Session-Id` reuse, `DELETE /mcp` termination, and metadata-only relay state persistence. `npm run product:check` runs this smoke after building release sidecars.
 
 Manual smoke:
 

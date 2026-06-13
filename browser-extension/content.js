@@ -279,6 +279,18 @@ function ensureStatusBadge() {
   statusBadge = document.createElement("div");
   statusBadge.dataset.lcvCaptureUi = "true";
   statusBadge.setAttribute("aria-live", "polite");
+  statusBadge.setAttribute("role", "button");
+  statusBadge.setAttribute("tabindex", "0");
+  statusBadge.title = "Click to pause Life Context Vault Capture";
+  statusBadge.addEventListener("click", () => {
+    void pauseCaptureFromBadge();
+  });
+  statusBadge.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      void pauseCaptureFromBadge();
+    }
+  });
   Object.assign(statusBadge.style, {
     position: "fixed",
     right: "14px",
@@ -292,10 +304,16 @@ function ensureStatusBadge() {
     color: "#26352b",
     boxShadow: "0 6px 18px rgba(20, 28, 22, 0.12)",
     font: "12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    cursor: "pointer",
     overflowWrap: "anywhere",
-    pointerEvents: "none"
+    pointerEvents: "auto"
   });
   document.body.append(statusBadge);
+}
+
+async function pauseCaptureFromBadge() {
+  await chrome.storage.local.set({ [STORAGE_AUTO_CAPTURE]: false });
+  await setAutoCapture(false);
 }
 
 function renderStatus(text, state) {

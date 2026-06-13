@@ -37,7 +37,11 @@ The public endpoint must terminate HTTPS before traffic reaches the container. `
 
 Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STATIC_TOKEN=1` in public or shared deployments; real clients should use OAuth Authorization Code + PKCE.
 
+Do not set `LCV_RELAY_AUTO_APPROVE=1` in public or shared deployments. Public OAuth approvals must be completed by the Vault owner through Control Center or an admin-authenticated operator path; the public browser approval page is informational only.
+
 OAuth clients must request `resource=https://relay.example.com/mcp` during both authorization and token exchange. The Relay binds issued access tokens to that MCP resource and rejects tokens for a different resource. Unauthorized `/mcp` calls return a `WWW-Authenticate` challenge pointing clients to the protected-resource metadata and the minimum required scope.
+
+Dynamic OAuth redirect URIs are validated at registration and authorization time. Hosted deployments accept HTTPS redirect URIs for AI clients and loopback HTTP redirect URIs only for local development callbacks; control characters, userinfo, fragments, unsafe schemes, and non-loopback HTTP redirects are refused.
 
 `LCV_RELAY_ALLOWED_ORIGINS` gates browser CORS for `/mcp` and `/relay/handoff`. Keep it to the exact AI client origins you intend to support. OAuth discovery metadata remains public, but the AI-bound data endpoints reject browser requests from other Origins before authorization or request-body payload processing.
 
@@ -75,6 +79,8 @@ Confirmed Context Pack handoff bodies are memory-only, admin-gated, client-bound
 
 `POST /relay/handoff` also requires a Vault-generated HMAC signature over the requesting client id, request id, pack expiry, and MCP response body. Unsigned or expired handoffs are rejected even when the caller has admin access.
 
+Keep `LCV_RELAY_HANDOFF_TTL_SECONDS` at or below 600 seconds for hosted deployments. Longer handoff TTLs are rejected by the hosted config check because the Relay is a short-lived bridge, not Pack storage.
+
 ## Smoke Test
 
 Before a public endpoint exists, run the local release smoke:
@@ -83,7 +89,7 @@ Before a public endpoint exists, run the local release smoke:
 npm run relay:smoke
 ```
 
-This starts release `lcv-relay` and `lcv-mcp` on loopback, then exercises dynamic OAuth client registration, the approval page, Authorization Code + S256 PKCE, `resource=<relay>/mcp` token binding, OAuth bearer MCP `tools/list`, session lifecycle, SSE readiness metadata, and metadata-only persisted state. It does not certify a real public domain, but it catches protocol regressions before provider registration.
+This starts release `lcv-relay` and `lcv-mcp` on loopback, then exercises dynamic OAuth client registration, redirect URI rejection, the approval page, Authorization Code + S256 PKCE, wrong-verifier/resource/code-reuse rejection, insufficient-scope `403`, `resource=<relay>/mcp` token binding, OAuth bearer MCP `tools/list`, session lifecycle, SSE readiness metadata, and metadata-only persisted state. It does not certify a real public domain, but it catches protocol regressions before provider registration.
 
 For an automated public endpoint smoke, set the deployed origin and run:
 

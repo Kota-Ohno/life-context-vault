@@ -326,6 +326,19 @@ async function main() {
     assert(toolsAfterDelete.status === 200, "client without active session can use POST without MCP-Session-Id");
 
     const redirectUri = "http://127.0.0.1/oauth/callback";
+    const invalidRegistration = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/register",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: {
+        client_name: "Invalid Redirect Client",
+        redirect_uris: ["https://client.example/callback\r\nX-Evil: yes"]
+      }
+    });
+    assert(invalidRegistration.status === 400, "dynamic OAuth registration must reject unsafe redirect URIs");
+
     const registration = await request(baseUrl, {
       method: "POST",
       path: "/oauth/register",
@@ -348,36 +361,74 @@ async function main() {
       "dynamic OAuth registration must advertise Life Context scopes"
     );
 
-    const codeVerifier = base64Url(randomBytes(32));
-    const codeChallenge = pkceChallenge(codeVerifier);
-    const requestedScope = "context_pack.request memory.propose policy.read request.status";
-    const authorizeParams = new URLSearchParams({
-      response_type: "code",
-      client_id: registeredClient.client_id,
-      redirect_uri: redirectUri,
-      scope: requestedScope,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-      resource: `${baseUrl}/mcp`,
-      state: "relay-smoke-state"
-    });
-    const authorize = await request(baseUrl, {
-      path: `/oauth/authorize?${authorizeParams.toString()}`
-    });
-    assert(authorize.status === 200, `OAuth authorize must show approval page: ${authorize.body}`);
-    assert(authorize.body.includes("Authorize Relay Smoke OAuth Client"), "approval page must name the OAuth client");
-    assert(authorize.body.includes("Raw Vault reads are not exposed"), "approval page must explain the Context Pack boundary");
-    const approvePath = authorize.body.match(/href="([^"]*\/oauth\/approve\?[^"]+)"/)?.[1];
-    assert(approvePath, "approval page must include an approve URL");
+    async function issueAuthorizationCode(scope = "context_pack.request memory.propose policy.read request.status") {
+      const codeVerifier = base64Url(randomBytes(32));
+      const codeChallenge = pkceChallenge(codeVerifier);
+      const authorizeParams = new URLSearchParams({
+        response_type: "code",
+        client_id: registeredClient.client_id,
+        redirect_uri: redirectUri,
+        scope,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        resource: `${baseUrl}/mcp`,
+        state: "relay-smoke-state"
+      });
+      const authorize = await request(baseUrl, {
+        path: `/oauth/authorize?${authorizeParams.toString()}`
+      });
+      assert(authorize.status === 200, `OAuth authorize must show approval page: ${authorize.body}`);
+      assert(authorize.body.includes("Authorize Relay Smoke OAuth Client"), "approval page must name the OAuth client");
+      assert(authorize.body.includes("It never receives Raw Sources"), "approval page must explain the Context Pack boundary");
+      const approvePath = authorize.body.match(/href="([^"]*\/oauth\/approve\?[^"]+)"/)?.[1];
+      assert(approvePath, "approval page must include an approve URL on loopback");
 
-    const approve = await request(baseUrl, { path: approvePath.replace(/&amp;/g, "&") });
-    assert(approve.status === 302, `OAuth approval must redirect with code: ${approve.body}`);
-    const approvedLocation = locationHeader(approve);
-    assert(approvedLocation.startsWith(`${redirectUri}?code=`), "OAuth approval redirect must return an authorization code");
-    const approvedUrl = new URL(approvedLocation);
-    const authorizationCode = approvedUrl.searchParams.get("code");
-    assert(authorizationCode?.startsWith("code_"), "OAuth approval redirect must include a generated code");
-    assert(approvedUrl.searchParams.get("state") === "relay-smoke-state", "OAuth approval must preserve state");
+      const approve = await request(baseUrl, { path: approvePath.replace(/&amp;/g, "&") });
+      assert(approve.status === 302, `OAuth approval must redirect with code: ${approve.body}`);
+      const approvedLocation = locationHeader(approve);
+      assert(approvedLocation.startsWith(`${redirectUri}?code=`), "OAuth approval redirect must return an authorization code");
+      const approvedUrl = new URL(approvedLocation);
+      const authorizationCode = approvedUrl.searchParams.get("code");
+      assert(authorizationCode?.startsWith("code_"), "OAuth approval redirect must include a generated code");
+      assert(approvedUrl.searchParams.get("state") === "relay-smoke-state", "OAuth approval must preserve state");
+      return { authorizationCode, codeVerifier, scope };
+    }
+
+    const wrongVerifierGrant = await issueAuthorizationCode();
+    const wrongVerifier = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/token",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: formBody({
+        grant_type: "authorization_code",
+        code: wrongVerifierGrant.authorizationCode,
+        redirect_uri: redirectUri,
+        code_verifier: base64Url(randomBytes(32)),
+        resource: `${baseUrl}/mcp`
+      })
+    });
+    assert(wrongVerifier.status === 400, "OAuth token exchange must reject wrong PKCE verifier");
+
+    const wrongResourceGrant = await issueAuthorizationCode();
+    const wrongResource = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/token",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: formBody({
+        grant_type: "authorization_code",
+        code: wrongResourceGrant.authorizationCode,
+        redirect_uri: redirectUri,
+        code_verifier: wrongResourceGrant.codeVerifier,
+        resource: `${baseUrl}/wrong`
+      })
+    });
+    assert(wrongResource.status === 400, "OAuth token exchange must reject wrong resource");
+
+    const { authorizationCode, codeVerifier, scope: requestedScope } = await issueAuthorizationCode();
 
     const tokenResponse = await request(baseUrl, {
       method: "POST",
@@ -399,6 +450,22 @@ async function main() {
     assert(tokenBody.access_token?.startsWith("lcv_at_"), "OAuth token response must issue an access token");
     assert(tokenBody.scope === requestedScope, "OAuth token response must preserve requested scopes");
 
+    const codeReuse = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/token",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: formBody({
+        grant_type: "authorization_code",
+        code: authorizationCode,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+        resource: `${baseUrl}/mcp`
+      })
+    });
+    assert(codeReuse.status === 400, "OAuth token exchange must reject authorization code reuse");
+
     const oauthTools = await request(baseUrl, {
       method: "POST",
       path: "/mcp",
@@ -407,6 +474,37 @@ async function main() {
     });
     assert(oauthTools.status === 200, `OAuth bearer must authorize MCP tools/list: ${oauthTools.body}`);
     assert(oauthTools.body.includes("life_context.request_context_pack"), "OAuth bearer tools/list must expose Life Context tools");
+
+    const limitedGrant = await issueAuthorizationCode("request.status");
+    const limitedTokenResponse = await request(baseUrl, {
+      method: "POST",
+      path: "/oauth/token",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: formBody({
+        grant_type: "authorization_code",
+        code: limitedGrant.authorizationCode,
+        redirect_uri: redirectUri,
+        code_verifier: limitedGrant.codeVerifier,
+        resource: `${baseUrl}/mcp`
+      })
+    });
+    assert(limitedTokenResponse.status === 200, `limited OAuth token exchange must succeed: ${limitedTokenResponse.body}`);
+    const limitedTokenBody = limitedTokenResponse.json();
+    const insufficientScope = await request(baseUrl, {
+      method: "POST",
+      path: "/mcp",
+      headers: mcpHeaders({ Authorization: `Bearer ${limitedTokenBody.access_token}` }),
+      body: {
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "life_context.propose_memory", arguments: { proposedFactText: "Smoke memory" } }
+      }
+    });
+    assert(insufficientScope.status === 403, "OAuth bearer with insufficient scope must get 403");
+    assert(insufficientScope.body.includes("insufficient_scope"), "insufficient scope body must explain missing scope");
 
     const state = await request(baseUrl, { path: "/relay/state" });
     assert(state.status === 200, "loopback relay state must be readable for diagnostics");
@@ -441,6 +539,7 @@ async function main() {
     assert(!persistedState.includes(tokenBody.access_token), "persisted state must not contain OAuth access tokens");
     assert(!persistedState.includes(authorizationCode), "persisted state must not contain OAuth authorization codes");
     assert(!persistedState.includes(codeVerifier), "persisted state must not contain PKCE verifiers");
+    assert(!persistedState.includes(limitedTokenBody.access_token), "persisted state must not contain limited OAuth access tokens");
 
     console.log(`Relay smoke passed at ${baseUrl}`);
   } catch (error) {

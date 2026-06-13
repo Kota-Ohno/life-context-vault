@@ -71,6 +71,7 @@ run("Rust release binaries", "cargo", [
 
 run("HTTP relay smoke", "npm", ["run", "relay:smoke"]);
 run("hosted Relay config baseline", "npm", ["run", "hosted-relay:check", "--", "--example"]);
+run("hosted Relay smoke syntax", "node", ["--check", "scripts/hosted-relay-smoke.mjs"]);
 
 if (includeSseSoak) {
   run("HTTP relay SSE soak", "npm", ["run", "relay:sse-soak"]);

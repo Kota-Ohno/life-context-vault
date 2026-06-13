@@ -41,6 +41,8 @@ const MCP_SSE_REPLAY_POLICY: &str = "metadata_only_no_event_replay";
 const HTTP_READ_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+const MAX_OAUTH_REDIRECT_URIS: usize = 10;
+const MAX_OAUTH_REDIRECT_URI_BYTES: usize = 2048;
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -54,6 +56,12 @@ const SUPPORTED_SCOPES: &[&str] = &[
   "policy.read",
   "request.status",
 ];
+
+enum McpAuthorization {
+  Authorized(String),
+  MissingOrInvalid,
+  InsufficientScope(String),
+}
 
 fn main() {
   if let Err(error) = run() {
@@ -284,11 +292,9 @@ fn validate_relay_surface(
   if allow_direct_sidecar {
     return Err("LCV_RELAY_ALLOW_DIRECT_SIDECAR=0 is required when binding outside loopback".to_string());
   }
-  if allow_static_bearer && !static_token_set {
-    return Err(
-      "LCV_RELAY_TOKEN is required when explicitly enabling static bearer outside loopback"
-        .to_string(),
-    );
+  if allow_static_bearer {
+    let _ = static_token_set;
+    return Err("LCV_RELAY_ENABLE_STATIC_TOKEN=1 is allowed only on loopback development binds".to_string());
   }
   if allowed_origins.is_empty() {
     return Err(
@@ -1210,7 +1216,7 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/.well-known/openid-configuration") => authorization_server_metadata(config),
     ("POST", "/oauth/register") => register_oauth_client(request, state),
     ("GET", "/oauth/authorize") => oauth_authorize(request, config, state),
-    ("GET", "/oauth/approve") => oauth_approve(request, state),
+    ("GET", "/oauth/approve") => oauth_approve(request, config, state),
     ("POST", "/oauth/token") => oauth_token(request, config, state),
     ("POST", "/pairing/start") => start_pairing(request, config, state),
     ("GET", "/pairing/status") => pairing_status(request, state),
@@ -1300,7 +1306,7 @@ fn register_oauth_client(request: &HttpRequest, state: &RelayState) -> HttpRespo
     .and_then(Value::as_str)
     .unwrap_or("AI MCP Client")
     .to_string();
-  let redirect_uris = body
+  let raw_redirect_uris = body
     .get("redirect_uris")
     .and_then(Value::as_array)
     .map(|items| {
@@ -1312,6 +1318,15 @@ fn register_oauth_client(request: &HttpRequest, state: &RelayState) -> HttpRespo
     })
     .filter(|items| !items.is_empty())
     .unwrap_or_else(|| vec!["http://127.0.0.1/oauth/callback".to_string()]);
+  let redirect_uris = match validate_oauth_redirect_uris(&raw_redirect_uris) {
+    Ok(uris) => uris,
+    Err(message) => {
+      return json_response(400, json!({
+        "error": "invalid_redirect_uri",
+        "message": message
+      }));
+    }
+  };
   let client = match state.register_client(client_name, redirect_uris.clone()) {
     Ok(client) => client,
     Err(error) => {
@@ -1485,6 +1500,12 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
       "message": "redirect_uri does not match the registered client."
     }));
   }
+  if let Err(message) = validate_oauth_redirect_uri(&redirect_uri) {
+    return json_response(400, json!({
+      "error": "invalid_redirect_uri",
+      "message": message
+    }));
+  }
   if query.get("response_type").map(String::as_str) != Some("code") {
     return json_response(400, json!({
       "error": "unsupported_response_type"
@@ -1538,7 +1559,9 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
     expires_at: seconds_from_now(AUTH_CODE_TTL_SECONDS),
   });
 
-  if env::var("LCV_RELAY_AUTO_APPROVE").ok().as_deref() == Some("1") {
+  if is_loopback_bind(&config.bind)
+    && env::var("LCV_RELAY_AUTO_APPROVE").ok().as_deref() == Some("1")
+  {
     return issue_auth_code_redirect(pending, state);
   }
 
@@ -1546,29 +1569,50 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
     "/oauth/approve?{}",
     form_encode(&[("session", pending.id.as_str())])
   );
+  let approval_control = if is_loopback_bind(&config.bind) {
+    format!(
+      "<p><a href=\"{}\" style=\"display:inline-block;background:#26352b;color:white;padding:10px 14px;border-radius:8px;text-decoration:none\">Authorize on this device</a></p>",
+      approve_url
+    )
+  } else {
+    format!(
+      "<p style=\"background:#f5f1e8;border:1px solid #ddd3bf;border-radius:8px;padding:12px\">This public Relay cannot approve OAuth grants from this browser page. Open Life Context Vault Control Center or an admin-authenticated operator path to approve session <code>{}</code>.</p>",
+      html_escape(&pending.id)
+    )
+  };
   HttpResponse::html(
     200,
     format!(
       "<!doctype html><meta charset=\"utf-8\"><title>Life Context Vault Authorization</title>\
-       <main style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:680px;margin:48px auto;line-height:1.5\">\
+       <main style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:720px;margin:48px auto;line-height:1.5;color:#1f2a24\">\
        <p style=\"text-transform:uppercase;letter-spacing:.08em;color:#667267;font-size:12px\">Life Context Vault</p>\
        <h1>Authorize {}</h1>\
-       <p>This grants the AI client access only to Life Context Vault MCP tools. Raw Vault reads are not exposed; data leaves through reviewed Context Packs.</p>\
+       <p>This AI may request reviewed Context Packs, propose memories for your Inbox, read policy summaries, or check request status according to the scopes below.</p>\
+       <p>It never receives Raw Sources, unapproved candidates, deleted facts, or the whole Vault through OAuth. Context Packs still require Vault policy checks and user confirmation before sensitive context is sent.</p>\
        <p><strong>Scopes:</strong> {}</p>\
        <p><strong>Resource:</strong> {}</p>\
-       <p><a href=\"{}\" style=\"display:inline-block;background:#26352b;color:white;padding:10px 14px;border-radius:8px;text-decoration:none\">Authorize</a></p>\
+       {}\
+       <p><a href=\"{}\" style=\"color:#4c5d52\">Deny / cancel</a></p>\
        </main>",
       html_escape(&client.client_name),
       html_escape(&pending.scopes.join(" ")),
       html_escape(pending.resource.as_deref().unwrap_or("local development fallback")),
-      approve_url
+      approval_control,
+      html_escape(pending.resource.as_deref().unwrap_or(&config.base_url))
     ),
   )
   .with_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
   .with_header("X-Relay-Issuer", &config.base_url)
 }
 
-fn oauth_approve(request: &HttpRequest, state: &RelayState) -> HttpResponse {
+fn oauth_approve(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  if !is_loopback_bind(&config.bind) && !admin_authorized(request, config) {
+    return json_response(401, json!({
+      "error": "owner_approval_required",
+      "message": "Public Relay OAuth approval must be completed by the Vault owner through Control Center or an admin-authenticated approval path."
+    }))
+    .with_header("WWW-Authenticate", "Bearer");
+  }
   let query = parse_query(&request.query);
   let session_id = query.get("session").cloned().unwrap_or_default();
   let Some(pending) = state.consume_pending_authorization(&session_id) else {
@@ -1597,10 +1641,22 @@ fn oauth_approve(request: &HttpRequest, state: &RelayState) -> HttpResponse {
       "error": "invalid_redirect_uri"
     }));
   }
+  if let Err(message) = validate_oauth_redirect_uri(&pending.redirect_uri) {
+    return json_response(400, json!({
+      "error": "invalid_redirect_uri",
+      "message": message
+    }));
+  }
   issue_auth_code_redirect(pending, state)
 }
 
 fn issue_auth_code_redirect(pending: PendingAuthorization, state: &RelayState) -> HttpResponse {
+  if let Err(message) = validate_oauth_redirect_uri(&pending.redirect_uri) {
+    return json_response(400, json!({
+      "error": "invalid_redirect_uri",
+      "message": message
+    }));
+  }
   if pending.client_id.is_empty()
     || pending.redirect_uri.is_empty()
     || pending.code_challenge.is_empty()
@@ -1714,6 +1770,90 @@ fn oauth_token(request: &HttpRequest, config: &RelayConfig, state: &RelayState) 
   }))
 }
 
+fn validate_oauth_redirect_uris(redirect_uris: &[String]) -> Result<Vec<String>, String> {
+  if redirect_uris.is_empty() {
+    return Err("at least one redirect_uri is required".to_string());
+  }
+  if redirect_uris.len() > MAX_OAUTH_REDIRECT_URIS {
+    return Err(format!(
+      "at most {MAX_OAUTH_REDIRECT_URIS} redirect_uris may be registered"
+    ));
+  }
+  let mut normalized = Vec::new();
+  for raw in redirect_uris {
+    let uri = raw.trim().to_string();
+    validate_oauth_redirect_uri(&uri)?;
+    if !normalized.iter().any(|existing| existing == &uri) {
+      normalized.push(uri);
+    }
+  }
+  Ok(normalized)
+}
+
+fn validate_oauth_redirect_uri(uri: &str) -> Result<(), String> {
+  if uri.is_empty() {
+    return Err("redirect_uri must not be empty".to_string());
+  }
+  if uri.len() > MAX_OAUTH_REDIRECT_URI_BYTES {
+    return Err(format!(
+      "redirect_uri must be at most {MAX_OAUTH_REDIRECT_URI_BYTES} bytes"
+    ));
+  }
+  if uri.chars().any(|character| character.is_control()) {
+    return Err("redirect_uri must not contain control characters".to_string());
+  }
+  if uri.contains('#') {
+    return Err("redirect_uri must not include a fragment".to_string());
+  }
+  let (scheme, rest) = uri
+    .split_once("://")
+    .ok_or_else(|| "redirect_uri must include an http or https scheme".to_string())?;
+  if scheme != "https" && scheme != "http" {
+    return Err("redirect_uri must use https://, except loopback http:// for local development".to_string());
+  }
+  let authority_end = rest
+    .find(['/', '?'])
+    .unwrap_or(rest.len());
+  let authority = &rest[..authority_end];
+  if authority.is_empty() || authority.contains('@') {
+    return Err("redirect_uri must include a host and must not include userinfo".to_string());
+  }
+  let host = redirect_uri_host(authority)?;
+  if scheme == "http" && !is_loopback_redirect_host(&host) {
+    return Err("http redirect_uri is allowed only for loopback development hosts".to_string());
+  }
+  Ok(())
+}
+
+fn redirect_uri_host(authority: &str) -> Result<String, String> {
+  if let Some(rest) = authority.strip_prefix('[') {
+    let Some((host, port_part)) = rest.split_once(']') else {
+      return Err("redirect_uri IPv6 host must be bracketed".to_string());
+    };
+    if !port_part.is_empty()
+      && (!port_part.starts_with(':') || port_part[1..].parse::<u16>().is_err())
+    {
+      return Err("redirect_uri port must be a valid TCP port".to_string());
+    }
+    if host.is_empty() {
+      return Err("redirect_uri must include a host".to_string());
+    }
+    return Ok(host.to_ascii_lowercase());
+  }
+  let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+  if host.is_empty() || host.contains('[') || host.contains(']') {
+    return Err("redirect_uri must include a valid host".to_string());
+  }
+  if !port.is_empty() && port.parse::<u16>().is_err() {
+    return Err("redirect_uri port must be a valid TCP port".to_string());
+  }
+  Ok(host.to_ascii_lowercase())
+}
+
+fn is_loopback_redirect_host(host: &str) -> bool {
+  host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
 fn start_pairing(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
   if !admin_authorized(request, config) {
     return json_response(401, json!({
@@ -1770,25 +1910,49 @@ fn handle_mcp_request(request: &HttpRequest, config: &RelayConfig, state: &Relay
 
   let required_scope = required_scope_for_mcp_body(&request.body);
   let (method, tool_name) = mcp_request_summary(&request.body);
-  let Some(client_id) = mcp_authorized_client(request, config, state, required_scope) else {
-    record_relay_event(
-      state,
-      None,
-      required_scope,
-      &method,
-      tool_name.as_deref(),
-      "rejected_unauthorized",
-      "none",
-    );
-    return mcp_json_response(request, config, 401, json!({
-      "error": "unauthorized",
-      "message": "Missing or invalid Authorization bearer token."
-    }))
-    .with_mcp_protocol_version(&protocol_version)
-    .with_header(
-      "WWW-Authenticate",
-      &mcp_www_authenticate_challenge(config, required_scope),
-    );
+  let client_id = match mcp_authorization(request, config, state, required_scope) {
+    McpAuthorization::Authorized(client_id) => client_id,
+    McpAuthorization::MissingOrInvalid => {
+      record_relay_event(
+        state,
+        None,
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "rejected_unauthorized",
+        "none",
+      );
+      return mcp_json_response(request, config, 401, json!({
+        "error": "unauthorized",
+        "message": "Missing or invalid Authorization bearer token."
+      }))
+      .with_mcp_protocol_version(&protocol_version)
+      .with_header(
+        "WWW-Authenticate",
+        &mcp_www_authenticate_challenge(config, required_scope),
+      );
+    }
+    McpAuthorization::InsufficientScope(client_id) => {
+      record_relay_event(
+        state,
+        Some(client_id),
+        required_scope,
+        &method,
+        tool_name.as_deref(),
+        "rejected_insufficient_scope",
+        "none",
+      );
+      return mcp_json_response(request, config, 403, json!({
+        "error": "insufficient_scope",
+        "message": "The bearer token lacks the required MCP tool scope.",
+        "requiredScope": required_scope
+      }))
+      .with_mcp_protocol_version(&protocol_version)
+      .with_header(
+        "WWW-Authenticate",
+        &mcp_www_authenticate_insufficient_scope(config, required_scope),
+      );
+    }
   };
   if let Some(response) = mcp_session_error_for_request(
     request,
@@ -3004,6 +3168,14 @@ fn mcp_www_authenticate_challenge(config: &RelayConfig, required_scope: &str) ->
   )
 }
 
+fn mcp_www_authenticate_insufficient_scope(config: &RelayConfig, required_scope: &str) -> String {
+  format!(
+    "Bearer error=\"insufficient_scope\", resource_metadata=\"{}\", scope=\"{}\"",
+    config.protected_resource_metadata_uri(),
+    required_scope
+  )
+}
+
 fn mcp_authenticated_client(
   request: &HttpRequest,
   config: &RelayConfig,
@@ -3030,34 +3202,47 @@ fn mcp_authenticated_client(
   Some(access_token.client_id)
 }
 
+fn mcp_authorization(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+  required_scope: &str,
+) -> McpAuthorization {
+  let Some(token) = bearer_token(request) else {
+    return McpAuthorization::MissingOrInvalid;
+  };
+  if config.allow_static_bearer && token == config.token {
+    return McpAuthorization::Authorized("static-dev-token".to_string());
+  }
+  let Some(access_token) = state.access_token(token) else {
+    return McpAuthorization::MissingOrInvalid;
+  };
+  if SystemTime::now() > access_token.expires_at {
+    return McpAuthorization::MissingOrInvalid;
+  }
+  match access_token.resource.as_deref() {
+    Some(resource) if resource == config.mcp_resource_uri() => {}
+    Some(_) => return McpAuthorization::MissingOrInvalid,
+    None if !is_loopback_bind(&config.bind) => return McpAuthorization::MissingOrInvalid,
+    None => {}
+  }
+  if access_token.scopes.iter().any(|scope| scope == required_scope) {
+    McpAuthorization::Authorized(access_token.client_id)
+  } else {
+    McpAuthorization::InsufficientScope(access_token.client_id)
+  }
+}
+
+#[cfg(test)]
 fn mcp_authorized_client(
   request: &HttpRequest,
   config: &RelayConfig,
   state: &RelayState,
   required_scope: &str,
 ) -> Option<String> {
-  let Some(token) = bearer_token(request) else {
-    return None;
-  };
-  if config.allow_static_bearer && token == config.token {
-    return Some("static-dev-token".to_string());
-  }
-  let Some(access_token) = state.access_token(token) else {
-    return None;
-  };
-  if SystemTime::now() > access_token.expires_at {
-    return None;
-  }
-  match access_token.resource.as_deref() {
-    Some(resource) if resource == config.mcp_resource_uri() => {}
-    Some(_) => return None,
-    None if !is_loopback_bind(&config.bind) => return None,
-    None => {}
-  }
-  if access_token.scopes.iter().any(|scope| scope == required_scope) {
-    Some(access_token.client_id)
-  } else {
-    None
+  match mcp_authorization(request, config, state, required_scope) {
+    McpAuthorization::Authorized(client_id) => Some(client_id),
+    McpAuthorization::MissingOrInvalid | McpAuthorization::InsufficientScope(_) => None,
   }
 }
 
@@ -3080,7 +3265,7 @@ fn is_loopback_bind(bind: &str) -> bool {
 }
 
 fn verify_pkce(challenge: &str, method: &str, verifier: &str) -> bool {
-  if verifier.is_empty() {
+  if !valid_pkce_verifier(verifier) {
     return false;
   }
   if !method.eq_ignore_ascii_case("S256") {
@@ -3088,6 +3273,13 @@ fn verify_pkce(challenge: &str, method: &str, verifier: &str) -> bool {
   }
   let digest = Sha256::digest(verifier.as_bytes());
   URL_SAFE_NO_PAD.encode(digest) == challenge
+}
+
+fn valid_pkce_verifier(verifier: &str) -> bool {
+  (43..=128).contains(&verifier.len())
+    && verifier
+      .chars()
+      .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '~'))
 }
 
 fn parse_requested_scopes(scope_text: &str) -> Result<Vec<String>, String> {
@@ -3779,8 +3971,8 @@ mod tests {
       false,
       &["https://chatgpt.com".to_string()]
     )
-    .expect_err("explicit static bearer requires token")
-    .contains("LCV_RELAY_TOKEN"));
+    .expect_err("public relay must reject static bearer")
+    .contains("STATIC_TOKEN"));
     assert!(validate_relay_surface(
       "0.0.0.0:8765",
       "https://relay.example.com",
@@ -3834,7 +4026,7 @@ mod tests {
 
   #[test]
   fn pkce_s256_verification_matches_challenge() {
-    let verifier = "correct-horse-battery-staple";
+    let verifier = "correct-horse-battery-staple-0123456789abcdef";
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     assert!(verify_pkce(&challenge, "S256", verifier));
     assert!(!verify_pkce(&challenge, "S256", "wrong"));
@@ -3866,7 +4058,7 @@ mod tests {
       headers: Vec::new(),
       body: String::new(),
     };
-    let response = oauth_approve(&request, &state);
+    let response = oauth_approve(&request, &test_config(), &state);
     assert_eq!(response.status, 400);
     let body = String::from_utf8(response.body).expect("approve body");
     assert!(body.contains("authorization session"));
@@ -3881,7 +4073,7 @@ mod tests {
         vec!["https://client.example/callback".to_string()],
       )
       .expect("client registration");
-    let verifier = "correct-horse-battery-staple";
+    let verifier = "correct-horse-battery-staple-0123456789abcdef";
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
 
     let empty_scope = HttpRequest {
@@ -3931,7 +4123,7 @@ mod tests {
       headers: Vec::new(),
       body: String::new(),
     };
-    let approved = oauth_approve(&approve, &state);
+    let approved = oauth_approve(&approve, &test_config(), &state);
     assert_eq!(approved.status, 302);
     let location = approved
       .headers
@@ -3944,6 +4136,83 @@ mod tests {
   }
 
   #[test]
+  fn oauth_registration_rejects_unsafe_redirect_uris() {
+    for uri in [
+      "http://evil.example/callback",
+      "https://client.example/callback\r\nX-Evil: yes",
+      "https://user@client.example/callback",
+      "https://client.example/callback#fragment",
+      "javascript:alert(1)",
+      "http://[::1/callback",
+    ] {
+      assert!(
+        validate_oauth_redirect_uris(&[uri.to_string()]).is_err(),
+        "unsafe redirect should be rejected: {uri}"
+      );
+    }
+    assert!(validate_oauth_redirect_uris(&[
+      "https://client.example/callback".to_string(),
+      "http://127.0.0.1/oauth/callback".to_string(),
+      "http://localhost:3000/oauth/callback".to_string(),
+      "http://[::1]:3000/oauth/callback".to_string(),
+    ])
+    .is_ok());
+  }
+
+  #[test]
+  fn public_oauth_approval_requires_owner_authorization() {
+    let config = public_test_config();
+    let state = RelayState::new();
+    let client = state
+      .register_client(
+        "Public Client".to_string(),
+        vec!["https://client.example/callback".to_string()],
+      )
+      .expect("client registration");
+    let verifier = "correct-horse-battery-staple-0123456789abcdef";
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let authorize = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/authorize".to_string(),
+      query: form_encode(&[
+        ("response_type", "code"),
+        ("client_id", client.client_id.as_str()),
+        ("redirect_uri", "https://client.example/callback"),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "request.status"),
+        ("resource", config.mcp_resource_uri().as_str()),
+      ]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    assert_eq!(oauth_authorize(&authorize, &config, &state).status, 200);
+    let session_id = {
+      let inner = state.inner.lock().expect("relay state");
+      inner
+        .pending_authorizations
+        .keys()
+        .next()
+        .cloned()
+        .expect("pending authorization")
+    };
+    let public_approve = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/approve".to_string(),
+      query: form_encode(&[("session", session_id.as_str())]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    assert_eq!(oauth_approve(&public_approve, &config, &state).status, 401);
+
+    let owner_approve = HttpRequest {
+      headers: vec![("Authorization".to_string(), "Bearer admin-secret".to_string())],
+      ..public_approve
+    };
+    assert_eq!(oauth_approve(&owner_approve, &config, &state).status, 302);
+  }
+
+  #[test]
   fn public_oauth_requires_and_binds_mcp_resource() {
     let config = public_test_config();
     let state = RelayState::new();
@@ -3953,7 +4222,7 @@ mod tests {
         vec!["https://client.example/callback".to_string()],
       )
       .expect("client registration");
-    let verifier = "correct-horse-battery-staple";
+    let verifier = "correct-horse-battery-staple-0123456789abcdef";
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let resource = config.mcp_resource_uri();
 
@@ -4003,10 +4272,10 @@ mod tests {
         method: "GET".to_string(),
         path: "/oauth/approve".to_string(),
         query: form_encode(&[("session", session_id.as_str())]),
-        headers: Vec::new(),
+        headers: vec![("Authorization".to_string(), "Bearer admin-secret".to_string())],
         body: String::new(),
       };
-      let approved = oauth_approve(&approve, &state);
+      let approved = oauth_approve(&approve, &config, &state);
       assert_eq!(approved.status, 302);
       let location = response_header(&approved, "Location").expect("redirect location");
       let (_, query) = location.split_once('?').expect("redirect query");

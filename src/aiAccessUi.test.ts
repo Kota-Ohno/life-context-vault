@@ -11,6 +11,7 @@ import {
   homeCaptureSafetySummary,
   homeNextActionKind,
   HomeView,
+  hostedRelayRegistrationReadiness,
   InboxView,
   aiAccessChecklistItems,
   isHostedRelayConfirmed,
@@ -114,6 +115,92 @@ describe("AI access UI safety", () => {
     expect(diagnostic.tone).toBe("ready");
     expect(diagnostic.primaryAction).toBe("copy_web_connector");
     expect(diagnostic.items.find((item) => item.label === "Web AI")?.value).toBe("Remote MCP登録可");
+  });
+
+  it("marks hosted relay registration ready only after confirmed public HTTPS pairing", () => {
+    const hostedStatus = {
+      managedByApp: true,
+      relayMode: "hosted_agent",
+      relayReachable: true,
+      relayManagedRunning: false,
+      agentManagedRunning: true,
+      agentConnected: true,
+      relayUrl: "https://relay.example.com",
+      mcpServerUrl: "https://relay.example.com/mcp",
+      relayStateStatusUrl: "https://relay.example.com/relay/state",
+      agentRuntimeStatus: null,
+      pairingCode: null,
+      lastError: null
+    } satisfies AiAccessServiceStatus;
+
+    const readiness = hostedRelayRegistrationReadiness(
+      hostedStatus,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
+      "https://relay.example.com/mcp"
+    );
+
+    expect(readiness.tone).toBe("ready");
+    expect(readiness.title).toBe("Web AIへ登録できます");
+    expect(readiness.items.find((item) => item.label === "Public MCP URL")?.state).toBe("ready");
+    expect(readiness.items.find((item) => item.label === "OAuth metadata")?.state).toBe("ready");
+    expect(JSON.stringify(readiness)).not.toContain("secret-code");
+  });
+
+  it("keeps hosted relay registration pending until pairing is confirmed", () => {
+    const pendingStatus = {
+      managedByApp: true,
+      relayMode: "hosted_agent",
+      relayReachable: true,
+      relayManagedRunning: false,
+      agentManagedRunning: true,
+      agentConnected: false,
+      relayUrl: "https://relay.example.com",
+      mcpServerUrl: "https://relay.example.com/mcp",
+      relayStateStatusUrl: "https://relay.example.com/relay/state",
+      agentRuntimeStatus: null,
+      pairingCode: null,
+      lastError: null
+    } satisfies AiAccessServiceStatus;
+
+    const readiness = hostedRelayRegistrationReadiness(
+      pendingStatus,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
+      null
+    );
+
+    expect(readiness.tone).toBe("attention");
+    expect(readiness.title).toBe("pairing確認待ちです");
+    expect(readiness.items.find((item) => item.label === "短命Agent URL")?.state).toBe("ready");
+    expect(readiness.items.find((item) => item.label === "Public MCP URL")?.state).toBe("pending");
+    expect(JSON.stringify(readiness)).not.toContain("secret-code");
+  });
+
+  it("blocks hosted relay registration for invalid agent URLs or browser-only use", () => {
+    const invalidUrl = hostedRelayRegistrationReadiness(
+      null,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      "https://relay.example.com/agent/ws?pairing_code=secret-code",
+      null
+    );
+
+    expect(invalidUrl.tone).toBe("blocked");
+    expect(invalidUrl.title).toBe("Agent URLの形式を確認してください");
+    expect(invalidUrl.items.find((item) => item.label === "短命Agent URL")?.state).toBe("blocked");
+    expect(JSON.stringify(invalidUrl)).not.toContain("secret-code");
+
+    const browserOnly = hostedRelayRegistrationReadiness(
+      null,
+      null,
+      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
+      "https://relay.example.com/mcp"
+    );
+
+    expect(browserOnly.tone).toBe("blocked");
+    expect(browserOnly.title).toBe("Desktop appでVaultを開いてください");
+    expect(browserOnly.items.find((item) => item.label === "Desktop Vault")?.state).toBe("blocked");
+    expect(JSON.stringify(browserOnly)).not.toContain("secret-code");
   });
 
   it("separates SSE ready diagnostics from unsupported event replay in the AI access checklist", () => {
@@ -576,6 +663,49 @@ describe("AI access UI safety", () => {
         aiAccessReady: false
       })
     ).toBe("add_background");
+  });
+
+  it("sends first-time Home onboarding to the guided background setup", () => {
+    const noop = () => undefined;
+    const html = renderToStaticMarkup(
+      createElement(HomeView, {
+        facts: [],
+        candidates: [],
+        connectors: [],
+        captureSettings: {
+          enabled: false,
+          retentionDays: 14,
+          allowedSites: []
+        },
+        captureEvents: [],
+        sources: [],
+        requests: [],
+        nativePath: null,
+        aiServiceStatus: null,
+        aiServiceBusy: false,
+        setup: {
+          displayName: "",
+          tonePreference: "",
+          activeLifeAreas: "",
+          recurringConstraints: "",
+          confirmationTopics: ""
+        },
+        setSetup: noop,
+        submitBackground: noop,
+        startAiAccess: noop,
+        updateCapture: noop,
+        purgeAllPassiveCaptures: noop,
+        seedDemo: noop,
+        goInbox: noop,
+        goSources: noop,
+        goRequests: noop,
+        goConnections: noop
+      })
+    );
+
+    expect(html).toContain("生活背景を入れる");
+    expect(html).toContain("入力欄へ");
+    expect(html).toContain("生活背景を追加");
   });
 
   it("describes AI delivery receipts by life domain without storing body text", () => {
