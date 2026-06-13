@@ -154,6 +154,7 @@ Last updated: 2026-06-13
 - Added AI-bound Context Pack approval UX:
   - Requests separates "approve so the external AI can retrieve this Pack" from local PoC answer generation
   - confirmed Packs can be copied as an AI-bound payload for non-MCP clients
+  - when Clipboard write fails, Requests shows the explicit AI-bound payload for manual copy and lets the user record the manual delivery receipt after copying
   - copied and MCP-returned payloads are explicitly marked `ContextPack only` and omit local answer/audit internals
   - request details show client, purpose, expiry, sensitivity ceiling, and fulfillment status
 - Added Rust-owned AI-bound Context Pack minimization path:
@@ -995,6 +996,14 @@ Last updated: 2026-06-13
 - Security/privacy: Audit still does not store Pack body, Fact text, Raw Source body, or unapproved candidate text. The new metadata is limited to included life-domain ids derived from already-confirmed Pack items.
 - Review fallback: Product fit review flagged count-only receipts as weak for "what was sent?" Security/privacy review confirmed domain ids are metadata, not Pack body. UI/UX review checked receipt readability on desktop/mobile. Maintainability review added tests for receipt copy and metadata leakage.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: after copy fallback, Audit shows a receipt like `制約・配慮、価値観・希望、本人情報の文脈`, includes ApprovedFact/snippet/exclusion counts, states that Raw Source body and unapproved candidates were not included, does not show Fact/Source body text, and has no page-level horizontal overflow.
+
+### Manual Copy Fallback Payload Slice
+
+- Product fit: copy fallback now still works when the browser or OS blocks Clipboard writes. Requests displays the AI-bound Context Pack payload after an explicit copy attempt fails, so users can manually copy into any AI instead of hitting a dead end.
+- UX/design: the manual fallback appears inside the active Pack preview only for the affected Pack. It uses a fixed-height readonly payload field, one primary `手動コピー済みとしてAudit記録` action, and a secondary close action.
+- Security/privacy: the payload is shown only after the user explicitly asks to copy the Pack. It is not stored as a new persisted object; before recording the manual delivery receipt, the app re-checks the current Pack policy and Audit still stores only metadata.
+- Review fallback: Product fit review flagged the old Clipboard failure notice as dishonest because no content was actually displayed. Security/privacy review confirmed the fallback does not bypass Pack confirmation or add body text to Audit. UI/UX review checked desktop/mobile fallback layout and close behavior. Maintainability review added `manualCopyPayloadForPack` coverage so stale payloads cannot appear for another Pack.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright forced `navigator.clipboard.writeText` failure at desktop `1280x900` and mobile `390x900`: copy fallback displayed a readonly `ContextPack only` payload for the active Pack, `手動コピー済みとしてAudit記録` closed the panel and added the delivery receipt, Audit still stated that Raw Source body and unapproved candidates were not included, and there was no page-level horizontal overflow.
 
 ## SubAgent Completion Review Disposition
 

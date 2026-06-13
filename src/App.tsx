@@ -203,6 +203,12 @@ type RestorePreview = {
   newestSourceAt?: string;
 };
 
+type ManualCopyPayload = {
+  packId: string;
+  payloadText: string;
+  createdAt: string;
+};
+
 const domainOptions: Array<LifeContextDomain | "all"> = [
   "all",
   "identity_and_profile",
@@ -269,6 +275,7 @@ export function App() {
   const [requestClientId, setRequestClientId] = useState("conn_chatgpt");
   const [activePackId, setActivePackId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [manualCopyPayload, setManualCopyPayload] = useState<ManualCopyPayload | null>(null);
   const [captureClient, setCaptureClient] = useState<ConnectorKind>("chatgpt");
   const [captureConversationId, setCaptureConversationId] = useState("demo-thread");
   const [captureText, setCaptureText] = useState("");
@@ -1334,20 +1341,46 @@ export function App() {
         payloadPack = confirmedPack;
       }
     }
+    const payloadText = JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2);
     const copied = await copyText(
-      JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2),
+      payloadText,
       shouldConfirm
         ? "Context Packを承認し、AI向けペイロードをコピーしました。"
         : "AI向けContext Packをコピーしました。"
     );
     if (copied) {
+      setManualCopyPayload(null);
       setState((current) =>
         recordContextPackDelivery(current, payloadPack.id, {
           channel: "clipboard_copy",
           status: "copied"
         })
       );
+    } else {
+      setManualCopyPayload({
+        packId: payloadPack.id,
+        payloadText,
+        createdAt: new Date().toISOString()
+      });
+      setNotice("Clipboardに書き込めませんでした。下の手動コピー欄から選択してコピーしてください。");
     }
+  }
+
+  function recordManualCopyDelivery(packId: string) {
+    const pack = state.contextPacks.find((item) => item.id === packId);
+    if (!pack || !canSendContextPackToAi(state, pack)) {
+      setManualCopyPayload(null);
+      setNotice("このContext Packは現在のAI接続ポリシーでは記録できません。新しいContext Packを作成してください。");
+      return;
+    }
+    setState((current) =>
+      recordContextPackDelivery(current, packId, {
+        channel: "clipboard_copy",
+        status: "copied"
+      })
+    );
+    setManualCopyPayload(null);
+    setNotice("手動コピー済みとしてAuditに記録しました。");
   }
 
   async function denyActiveRequest() {
@@ -1939,6 +1972,9 @@ export function App() {
             generateAnswer={generateAnswer}
             denyActiveRequest={denyActiveRequest}
             changePackItemVisibility={changePackItemVisibility}
+            manualCopyPayload={manualCopyPayload}
+            recordManualCopyDelivery={recordManualCopyDelivery}
+            clearManualCopyPayload={() => setManualCopyPayload(null)}
           />
         )}
         {view === "search" && (
@@ -4128,7 +4164,10 @@ function ContextRequestsView({
   copyPackForAi,
   generateAnswer,
   denyActiveRequest,
-  changePackItemVisibility
+  changePackItemVisibility,
+  manualCopyPayload,
+  recordManualCopyDelivery,
+  clearManualCopyPayload
 }: {
   question: string;
   setQuestion: (value: string) => void;
@@ -4146,6 +4185,9 @@ function ContextRequestsView({
   generateAnswer: (pack: ContextPack) => void;
   denyActiveRequest: () => void;
   changePackItemVisibility: (pack: ContextPack, factId: string, included: boolean) => void;
+  manualCopyPayload: ManualCopyPayload | null;
+  recordManualCopyDelivery: (packId: string) => void;
+  clearManualCopyPayload: () => void;
 }) {
   const aiReady =
     currentPack?.confirmationStatus === "confirmed" ||
@@ -4162,6 +4204,7 @@ function ContextRequestsView({
           fact: facts.find((fact) => fact.id === item.referencedId)
         }))
     : [];
+  const activeManualCopyPayload = manualCopyPayloadForPack(manualCopyPayload, currentPack);
   const pendingReviewRequests = requests.filter((request) => request.status === "pending_user_confirmation");
   const unreturnedLowRiskRequests = requests.filter((request) => request.status === "approved");
   const actionableRequests = requests.filter((request) => requestNeedsUserAction(request));
@@ -4359,6 +4402,38 @@ function ContextRequestsView({
                 {currentPack.items.length}件のFactと{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
+            {activeManualCopyPayload && (
+              <div className="manual-copy-panel">
+                <div className="trust-note">
+                  <Clipboard size={16} />
+                  <span>
+                    Clipboardに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
+                  </span>
+                </div>
+                <label className="field manual-copy-field">
+                  <span>AIへ貼り付けるContext Pack payload</span>
+                  <textarea
+                    readOnly
+                    value={activeManualCopyPayload.payloadText}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </label>
+                <div className="action-row manual-copy-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => recordManualCopyDelivery(activeManualCopyPayload.packId)}
+                    type="button"
+                  >
+                    <CheckCircle2 size={16} />
+                    手動コピー済みとしてAudit記録
+                  </button>
+                  <button className="secondary-button" onClick={clearManualCopyPayload} type="button">
+                    <X size={16} />
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            )}
             {currentPack.warnings.map((warning) => (
               <div className="warning-line" key={warning.message}>
                 <ShieldAlert size={16} />
@@ -5501,6 +5576,13 @@ export function homeNextActionKind({
   if (approvedFactCount > 0 && requestCount === 0) return "try_context_pack";
   if (!aiAccessReady) return "connect_ai";
   return "try_context_pack";
+}
+
+export function manualCopyPayloadForPack(
+  payload: Pick<ManualCopyPayload, "packId" | "payloadText" | "createdAt"> | null,
+  currentPack: Pick<ContextPack, "id"> | null
+): Pick<ManualCopyPayload, "packId" | "payloadText" | "createdAt"> | null {
+  return payload && currentPack && payload.packId === currentPack.id ? payload : null;
 }
 
 function Input({

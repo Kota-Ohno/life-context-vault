@@ -10,6 +10,7 @@ import {
   homeNextActionKind,
   InboxView,
   isHostedRelayConfirmed,
+  manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
   webAiMcpEndpoint
@@ -94,6 +95,19 @@ describe("AI access UI safety", () => {
     expect(shouldShowCopyFallbackStarter([], null)).toBe(true);
     expect(shouldShowCopyFallbackStarter([{ id: "request_1" }], null)).toBe(false);
     expect(shouldShowCopyFallbackStarter([], { id: "pack_1" })).toBe(false);
+  });
+
+  it("shows a manual copy payload only for the active Context Pack", () => {
+    const payload = {
+      packId: "pack_1",
+      payloadText: "{\"trustBoundary\":\"ContextPack only\"}",
+      createdAt: "2026-06-13T00:00:00.000Z"
+    };
+
+    expect(manualCopyPayloadForPack(payload, { id: "pack_1" })).toEqual(payload);
+    expect(manualCopyPayloadForPack(payload, { id: "pack_2" })).toBeNull();
+    expect(manualCopyPayloadForPack(null, { id: "pack_1" })).toBeNull();
+    expect(manualCopyPayloadForPack(payload, null)).toBeNull();
   });
 
   it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {

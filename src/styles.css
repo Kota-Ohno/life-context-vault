@@ -2186,6 +2186,31 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.manual-copy-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d9c7a7;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.manual-copy-field textarea {
+  min-height: 180px;
+  max-height: 320px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+  white-space: pre;
+}
+
+.manual-copy-actions {
+  justify-content: flex-start;
+}
+
 .context-item {
   display: grid;
   gap: 8px;
