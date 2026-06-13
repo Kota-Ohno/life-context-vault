@@ -7254,6 +7254,7 @@ export function webAiRegistrationGuides(
     : readiness.tone === "blocked"
       ? "先にVault/Agentを確認"
       : "pairing完了待ち";
+  const blockedAction = readiness.tone === "blocked" ? "Vault/Agentを確認" : "pairing後にコピー";
   const firstStep = ready
     ? "接続情報をコピー"
     : readiness.tone === "blocked"
@@ -7266,7 +7267,7 @@ export function webAiRegistrationGuides(
       status,
       statusLabel,
       steps: [firstStep, "Connector設定へ貼り付け", "初回要求時にContext Packを確認"],
-      actionLabel: ready ? "ChatGPT用JSONをコピー" : readiness.nextStep,
+      actionLabel: ready ? "ChatGPT用JSONをコピー" : blockedAction,
       boundary: "ChatGPTへ渡るのは、確認済みContext Packの本文と出典snippetだけです。"
     },
     {
@@ -7274,7 +7275,7 @@ export function webAiRegistrationGuides(
       status,
       statusLabel,
       steps: [firstStep, "Remote MCP connectorへ登録", "回答前のPack内容を確認"],
-      actionLabel: ready ? "Claude用JSONをコピー" : readiness.nextStep,
+      actionLabel: ready ? "Claude用JSONをコピー" : blockedAction,
       boundary: "RelayはVault本文を保持せず、この端末のAgentが検索と承認待ちを処理します。"
     },
     {

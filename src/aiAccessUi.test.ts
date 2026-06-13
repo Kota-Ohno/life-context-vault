@@ -181,7 +181,7 @@ describe("AI access UI safety", () => {
     const guides = webAiRegistrationGuides(readiness, null);
 
     expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("pending");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.actionLabel).toBe("Hosted RelayへAgent接続を実行します。");
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.actionLabel).toBe("pairing後にコピー");
     expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
   });
 

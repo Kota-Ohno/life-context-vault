@@ -1095,7 +1095,7 @@ Last updated: 2026-06-13
 - UX/design: the receipt follows the existing compact status-card language, keeps the Hosted Relay panel as the single place for Web AI setup, and gives each provider a concrete next action without exposing advanced self-host commands by default.
 - Security/privacy: the readiness helper never echoes the pasted `pairing_code`, treats public Web AI registration as ready only after confirmed hosted pairing plus a non-local HTTPS MCP URL, and repeats that the AI-bound boundary is Context Pack only.
 - Technical design: `hostedRelayRegistrationReadiness` and `webAiRegistrationGuides` are pure UI helpers used by Connections and covered with focused tests for ready, pending, invalid URL, browser-only, provider-guide, and secret-redaction states.
-- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Connections at desktop and mobile widths: the Web AI registration guide renders three cards and neither viewport has page-level horizontal overflow.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. System Chrome/Playwright checked Connections at `1440px` and `390px`: the Web AI registration guide renders three provider cards, button labels stay compact, and neither viewport has page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental UX slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
 ### Product Review UX Closure Slice
