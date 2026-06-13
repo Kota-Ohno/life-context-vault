@@ -1083,11 +1083,11 @@ Last updated: 2026-06-13
 
 ### Hosted OAuth Smoke Completion Slice
 
-- Product fit: deployed Relay smoke can now verify the actual provider-facing OAuth happy path when staging admin credentials and a paired Agent are available.
-- Security/privacy: the hosted smoke still runs metadata/CORS/challenge checks without admin credentials. With `LCV_RELAY_ADMIN_TOKEN`, it additionally verifies that public browser approval remains owner-gated, then uses admin-authenticated approval to exercise DCR, `resource=<origin>/mcp`, S256 PKCE, authenticated MCP `initialize`/`tools/list`, and metadata-only `/relay/state`.
-- Technical design: `scripts/hosted-relay-smoke.mjs` keeps live endpoint OAuth checks opt-in because they require a real HTTPS Relay, owner/admin token, and online local Agent; `product:check` syntax-checks the script without requiring external infrastructure.
+- Product fit: deployed Relay smoke can now verify the provider-facing OAuth path before Agent pairing, then optionally require the paired Agent for a full end-to-end connector rehearsal.
+- Security/privacy: the hosted smoke still runs metadata/CORS/challenge checks without admin credentials. With `LCV_RELAY_ADMIN_TOKEN`, it verifies that public browser approval remains owner-gated, uses admin-authenticated approval to exercise DCR, `resource=<origin>/mcp`, S256 PKCE, token exchange, pending-agent handling, and metadata-only `/relay/state`, and asserts state output excludes OAuth tokens, authorization codes, and PKCE verifiers.
+- Technical design: `scripts/hosted-relay-smoke.mjs` treats `pending_agent_offline` as a valid OAuth-readiness result unless `LCV_HOSTED_RELAY_REQUIRE_AGENT=1` is set. Full Agent-backed `initialize`/`tools/list` remains available for staging connector rehearsals without making early public endpoint checks brittle.
 - Verification: `node --check scripts/hosted-relay-smoke.mjs`, `npm run hosted-relay:check -- --example`, and `npm run product:check -- --include-sse-soak` are run before commit. Live hosted OAuth smoke remains pending until a real staging endpoint exists.
-- SubAgent disposition: closes the remaining P2 release-gate gap in code by adding the staging smoke path. Real public-provider readiness still requires provisioning the HTTPS Relay and running this smoke against that environment.
+- SubAgent disposition: closes the remaining P2 release-gate gap in code by adding the staging smoke path and separating OAuth readiness from Agent readiness. Real public-provider readiness still requires provisioning the HTTPS Relay and running this smoke against that environment.
 
 ### Hosted Relay Registration UX Slice
 

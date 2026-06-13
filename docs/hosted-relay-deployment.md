@@ -99,7 +99,9 @@ LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token> \
 npm run hosted-relay:smoke
 ```
 
-`LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also runs a staging OAuth path against the deployed HTTPS Relay: dynamic client registration, public owner-approval page, admin-authenticated approval, Authorization Code + S256 PKCE token exchange, authenticated MCP `initialize`/`tools/list`, and metadata-only `/relay/state` checks. This requires the local Agent to be paired and online for the hosted Relay.
+`LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also runs a staging OAuth path against the deployed HTTPS Relay: dynamic client registration, public owner-approval page, admin-authenticated approval, Authorization Code + S256 PKCE token exchange, authenticated MCP readiness, and metadata-only `/relay/state` checks.
+
+If the local Agent is not paired yet, the same admin smoke still verifies the hosted OAuth path through token exchange and accepts the expected `pending_agent_offline` MCP response. Set `LCV_HOSTED_RELAY_REQUIRE_AGENT=1` when validating a full end-to-end connector rehearsal; in that mode the smoke requires the paired Agent to answer MCP `initialize` and `tools/list`.
 
 ```bash
 curl -fsS https://relay.example.com/health

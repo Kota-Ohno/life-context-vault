@@ -6,6 +6,7 @@ const baseUrl = process.env.LCV_HOSTED_RELAY_URL;
 const adminToken = process.env.LCV_RELAY_ADMIN_TOKEN;
 const trustedOrigin = process.env.LCV_HOSTED_RELAY_TRUSTED_ORIGIN ?? "https://chatgpt.com";
 const untrustedOrigin = process.env.LCV_HOSTED_RELAY_UNTRUSTED_ORIGIN ?? "https://untrusted.example";
+const requireAgent = process.env.LCV_HOSTED_RELAY_REQUIRE_AGENT === "1";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -147,7 +148,7 @@ async function main() {
   );
 
   if (adminToken) {
-    await smokeHostedOAuth();
+    const oauthSmoke = await smokeHostedOAuth();
 
     const state = await request(baseUrl, {
       path: "/relay/state",
@@ -156,6 +157,9 @@ async function main() {
     assert(state.status === 200, `/relay/state with admin token must return 200, got ${state.status}`);
     assert(!state.body.includes("life_context.request_context_pack"), "/relay/state must not expose MCP response bodies");
     assert(!state.body.includes("Context Pack"), "/relay/state must not expose Context Pack bodies");
+    assert(!state.body.includes(oauthSmoke.accessToken), "/relay/state must not expose OAuth access tokens");
+    assert(!state.body.includes(oauthSmoke.authorizationCode), "/relay/state must not expose authorization codes");
+    assert(!state.body.includes(oauthSmoke.codeVerifier), "/relay/state must not expose PKCE verifiers");
   }
 
   console.log(`Hosted Relay smoke passed for ${baseUrl}`);
@@ -247,7 +251,24 @@ async function smokeHostedOAuth() {
     },
     body: { jsonrpc: "2.0", id: 2, method: "initialize", params: {} }
   });
-  assert(initialize.status === 200, `hosted OAuth bearer must initialize MCP: ${initialize.body}`);
+  if (initialize.status === 202 && !requireAgent) {
+    assert(
+      initialize.body.includes("pending_agent_offline"),
+      `hosted OAuth bearer without Agent must return pending_agent_offline: ${initialize.body}`
+    );
+    return {
+      accessToken: tokenBody.access_token,
+      authorizationCode,
+      codeVerifier,
+      agentPath: "pending_agent_offline"
+    };
+  }
+  assert(
+    initialize.status === 200,
+    requireAgent
+      ? `hosted OAuth bearer must initialize MCP when LCV_HOSTED_RELAY_REQUIRE_AGENT=1: ${initialize.body}`
+      : `hosted OAuth bearer must initialize MCP or return pending_agent_offline: ${initialize.body}`
+  );
   const sessionId = headerValue(initialize.headers, "mcp-session-id");
   assert(sessionId.startsWith("mcp_session_"), "hosted initialize must return MCP-Session-Id");
 
@@ -266,6 +287,12 @@ async function smokeHostedOAuth() {
   });
   assert(tools.status === 200, `hosted OAuth bearer must authorize tools/list: ${tools.body}`);
   assert(tools.body.includes("life_context.request_context_pack"), "hosted tools/list must expose Life Context tools");
+  return {
+    accessToken: tokenBody.access_token,
+    authorizationCode,
+    codeVerifier,
+    agentPath: "fulfilled"
+  };
 }
 
 main().catch((error) => {
