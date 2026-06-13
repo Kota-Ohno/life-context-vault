@@ -193,6 +193,16 @@ interface ConnectionDiagnostic {
   items: ConnectionDiagnosticItem[];
 }
 
+interface HomeCaptureSafetySummary {
+  tone: "ready" | "attention";
+  title: string;
+  body: string;
+  allowedSitesLabel: string;
+  lastCaptureLabel: string;
+  lastPreview: string | null;
+  purgeableCount: number;
+}
+
 type OnboardingStep = {
   title: string;
   body: string;
@@ -1868,6 +1878,7 @@ export function App() {
             candidates={activeCandidates}
             connectors={state.connectorSessions}
             captureSettings={state.passiveCaptureSettings}
+            captureEvents={state.passiveCaptureEvents}
             sources={state.sources}
             requests={state.contextPackRequests}
             nativePath={nativePath}
@@ -1877,6 +1888,8 @@ export function App() {
             setSetup={setSetup}
             submitBackground={submitBackground}
             startAiAccess={startAiAccess}
+            updateCapture={updateCapture}
+            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
             seedDemo={seedDemo}
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
@@ -2102,6 +2115,7 @@ function HomeView({
   candidates,
   connectors,
   captureSettings,
+  captureEvents,
   sources,
   requests,
   nativePath,
@@ -2111,6 +2125,8 @@ function HomeView({
   setSetup,
   submitBackground,
   startAiAccess,
+  updateCapture,
+  purgeAllPassiveCaptures,
   seedDemo,
   goInbox,
   goSources,
@@ -2121,6 +2137,7 @@ function HomeView({
   candidates: MemoryCandidate[];
   connectors: ConnectorSession[];
   captureSettings: PassiveCaptureSettings;
+  captureEvents: PassiveCaptureEvent[];
   sources: VaultState["sources"];
   requests: ContextPackRequest[];
   nativePath: string | null;
@@ -2130,6 +2147,8 @@ function HomeView({
   setSetup: (input: BackgroundSetupInput) => void;
   submitBackground: () => void;
   startAiAccess: () => void;
+  updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
+  purgeAllPassiveCaptures: () => void;
   seedDemo: () => void;
   goInbox: () => void;
   goSources: () => void;
@@ -2155,6 +2174,7 @@ function HomeView({
   const requestTried = requests.length > 0;
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
   const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request)).length;
+  const captureSafety = homeCaptureSafetySummary(captureSettings, captureEvents, sources);
   const nextActionKind = homeNextActionKind({
     candidateCount: candidates.length,
     backgroundStarted,
@@ -2351,9 +2371,44 @@ function HomeView({
             </div>
           ))}
         </div>
-        <div className={captureSettings.enabled ? "capture-strip enabled" : "capture-strip"}>
-          {captureSettings.enabled ? <Radio size={16} /> : <PauseCircle size={16} />}
-          <span>{captureSettings.enabled ? "Passive Capture is on" : "Passive Capture is paused"}</span>
+        <div className={`home-capture-safety ${captureSafety.tone}`}>
+          <div className="home-capture-safety-heading">
+            <div>
+              <span>Capture safety</span>
+              <strong>{captureSafety.title}</strong>
+            </div>
+            {captureSettings.enabled ? <Radio size={18} /> : <PauseCircle size={18} />}
+          </div>
+          <p>{captureSafety.body}</p>
+          <div className="home-capture-meta">
+            <Metric label="許可サイト" value={captureSafety.allowedSitesLabel} />
+            <Metric label="直近Capture" value={captureSafety.lastCaptureLabel} />
+            <Metric label="消去できる本文" value={`${captureSafety.purgeableCount}件`} />
+          </div>
+          {captureSafety.lastPreview ? <p className="home-capture-preview">{captureSafety.lastPreview}</p> : null}
+          <div className="service-actions">
+            <button
+              className={captureSettings.enabled ? "danger-button" : "primary-button"}
+              onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
+              type="button"
+            >
+              {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
+              {captureSettings.enabled ? "Captureを一時停止" : "Captureを開始"}
+            </button>
+            <button className="secondary-button" onClick={goConnections} type="button">
+              <Settings size={16} />
+              Capture詳細
+            </button>
+            <button
+              className="danger-button"
+              disabled={captureSafety.purgeableCount === 0}
+              onClick={purgeAllPassiveCaptures}
+              type="button"
+            >
+              <Trash2 size={16} />
+              全本文を消去
+            </button>
+          </div>
         </div>
       </div>
 
@@ -5945,6 +6000,52 @@ function passiveCaptureSourceIdsForEvents(
     }
   }
   return [...sourceIds];
+}
+
+export function homeCaptureSafetySummary(
+  settings: PassiveCaptureSettings,
+  events: PassiveCaptureEvent[],
+  sources: VaultState["sources"]
+): HomeCaptureSafetySummary {
+  const purgeableCount = passiveCaptureSourceIdsForEvents(events, sources).length;
+  const [lastEvent] = [...events].sort(
+    (left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt)
+  );
+  const lastSourceId = lastEvent ? passiveCaptureSourceId(lastEvent) : null;
+  const lastSource = lastSourceId ? sources.find((source) => source.id === lastSourceId) : undefined;
+  const allowedSitesLabel = captureAllowedSitesLabel(settings.allowedSites);
+  const lastCaptureLabel = lastEvent ? formatDateTime(lastEvent.capturedAt) : "まだありません";
+  const lastPreview = lastEvent ? capturePreviewText(lastSource) : null;
+
+  if (settings.enabled) {
+    return {
+      tone: "ready",
+      title: "許可サイトだけをローカルで候補化中",
+      body:
+        "Captureは未承認候補を作るだけです。Fact化とAI送信は、Memory InboxとContext Pack確認を通ります。",
+      allowedSitesLabel,
+      lastCaptureLabel,
+      lastPreview,
+      purgeableCount
+    };
+  }
+
+  return {
+    tone: "attention",
+    title: "Passive Captureは停止中",
+    body:
+      "停止中はブラウザ拡張や手動Captureから書き込みません。必要なときだけ開始できます。",
+    allowedSitesLabel,
+    lastCaptureLabel,
+    lastPreview,
+    purgeableCount
+  };
+}
+
+function captureAllowedSitesLabel(sites: string[]): string {
+  if (sites.length === 0) return "未設定";
+  if (sites.length <= 2) return sites.join(", ");
+  return `${sites.slice(0, 2).join(", ")} +${sites.length - 2}`;
 }
 
 function connectorKindLabel(kind: ConnectorKind): string {

@@ -1671,6 +1671,82 @@ button:focus-visible {
   color: #25482f;
 }
 
+.home-capture-safety {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e2d5bd;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.home-capture-safety.ready {
+  border-color: #b7d0bd;
+  background: #f0f8ef;
+}
+
+.home-capture-safety-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.home-capture-safety-heading div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-capture-safety-heading span,
+.home-capture-meta span {
+  color: #667267;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.home-capture-safety-heading strong,
+.home-capture-meta strong,
+.home-capture-preview {
+  overflow-wrap: anywhere;
+}
+
+.home-capture-safety p {
+  margin: 0;
+  color: #56645c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.home-capture-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.home-capture-meta div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.home-capture-meta strong {
+  font-size: 13px;
+}
+
+.home-capture-preview {
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .toggle-row {
   display: flex;
   align-items: center;
@@ -2584,6 +2660,7 @@ button:focus-visible {
   .connection-wizard-grid,
   .connection-diagnostic-main,
   .connection-diagnostic-status-grid,
+  .home-capture-meta,
   .hosted-relay-grid,
   .hosted-relay-status,
   .hosted-relay-steps,
@@ -2634,6 +2711,7 @@ button:focus-visible {
   .topbar-actions,
   .panel-heading,
   .panel-summary,
+  .home-capture-safety-heading,
   .automation-card-heading,
   .search-mode-row,
   .policy-domain-heading,

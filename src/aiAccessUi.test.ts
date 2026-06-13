@@ -8,6 +8,7 @@ import {
   canCopyAiMcpEndpoint,
   factInventoryCounts,
   factSourceNames,
+  homeCaptureSafetySummary,
   homeNextActionKind,
   InboxView,
   isHostedRelayConfirmed,
@@ -16,7 +17,7 @@ import {
   sourceReviewCandidates,
   webAiMcpEndpoint
 } from "./App";
-import type { AuditEvent } from "./types";
+import type { AuditEvent, PassiveCaptureEvent, PassiveCaptureSettings, RawSource } from "./types";
 import type { AiAccessServiceStatus } from "./nativeStorage";
 
 describe("AI access UI safety", () => {
@@ -178,6 +179,91 @@ describe("AI access UI safety", () => {
     expect(manualCopyPayloadForPack(payload, { id: "pack_2" })).toBeNull();
     expect(manualCopyPayloadForPack(null, { id: "pack_1" })).toBeNull();
     expect(manualCopyPayloadForPack(payload, null)).toBeNull();
+  });
+
+  it("summarizes Home passive capture safety without treating captures as facts", () => {
+    const settings: PassiveCaptureSettings = {
+      enabled: true,
+      retentionDays: 14,
+      allowedSites: ["chatgpt.com", "claude.ai", "gemini.google.com"]
+    };
+    const event: PassiveCaptureEvent = {
+      id: "capture_1",
+      sourceClient: "chatgpt",
+      conversationId: "thread_1",
+      urlHash: "urlhash_1",
+      textFragmentRef: "source_capture_1:0-48",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      sensitivityGuess: "personal",
+      processingStatus: "candidate_generated",
+      sourceId: "source_capture_1",
+      candidateIds: ["candidate_1"]
+    };
+    const source: RawSource = {
+      id: "source_capture_1",
+      kind: "passive_capture",
+      title: "Passive capture from ChatGPT",
+      origin: "passive_browser",
+      body: "来月引っ越す予定。住所変更が必要な契約を確認したい。",
+      createdAt: "2026-06-13T00:00:00.000Z",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      defaultSensitivity: "personal",
+      processingStatus: "ready",
+      deletionState: "active"
+    };
+
+    const summary = homeCaptureSafetySummary(settings, [event], [source]);
+
+    expect(summary.tone).toBe("ready");
+    expect(summary.allowedSitesLabel).toBe("chatgpt.com, claude.ai +1");
+    expect(summary.lastPreview).toContain("来月引っ越す予定");
+    expect(summary.purgeableCount).toBe(1);
+    expect(summary.body).toContain("未承認候補");
+    expect(summary.body).toContain("Context Pack確認");
+  });
+
+  it("shows paused capture safety as non-writing and keeps purged bodies out of purge count", () => {
+    const settings: PassiveCaptureSettings = {
+      enabled: false,
+      retentionDays: 14,
+      allowedSites: []
+    };
+    const event: PassiveCaptureEvent = {
+      id: "capture_1",
+      sourceClient: "claude_remote",
+      conversationId: "thread_1",
+      urlHash: "urlhash_1",
+      textFragmentRef: "source_capture_1:0-48",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      sensitivityGuess: "personal",
+      processingStatus: "purged",
+      sourceId: "source_capture_1",
+      candidateIds: []
+    };
+    const source: RawSource = {
+      id: "source_capture_1",
+      kind: "passive_capture",
+      title: "Purged passive capture",
+      origin: "passive_browser",
+      body: "",
+      createdAt: "2026-06-13T00:00:00.000Z",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      defaultSensitivity: "personal",
+      processingStatus: "deleted",
+      deletionState: "purged"
+    };
+
+    const summary = homeCaptureSafetySummary(settings, [event], [source]);
+
+    expect(summary.tone).toBe("attention");
+    expect(summary.title).toBe("Passive Captureは停止中");
+    expect(summary.body).toContain("書き込みません");
+    expect(summary.allowedSitesLabel).toBe("未設定");
+    expect(summary.purgeableCount).toBe(0);
   });
 
   it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {

@@ -141,6 +141,7 @@ Last updated: 2026-06-13
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
   - Connections now includes a compact connection diagnostics receipt that shows Desktop Vault, Relay, Local Agent, and Web AI readiness with the next action in one place
   - Hosted Relay diagnostic errors are redacted before display so pairing codes and bearer tokens do not appear in the Control Center
+  - Home now exposes Capture safety status, allowed-site summary, recent Capture state, one-click Pause/Start, and purge/detail actions without leaving the first daily control surface
   - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
 - Added Claude Desktop setup installer:
   - Connections can install the `life-context-vault` stdio MCP server into Claude Desktop config from the desktop app
@@ -1014,6 +1015,14 @@ Last updated: 2026-06-13
 - Security/privacy: the diagnostic uses metadata-only service status. It does not display Vault content, Context Pack body text, Raw Source text, unapproved candidates, pairing codes, or bearer tokens; hosted connection errors are redacted before display.
 - Review fallback: Product fit review flagged Connections as too fragmented for general users to recover from setup issues. Security/privacy review added UI-level redaction even though Rust already redacts Agent logs. UI/UX review checked desktop/mobile layout and button sizing. Maintainability review put the state classification in `aiConnectionDiagnostic` so Hosted/Local/offline behavior has unit coverage.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. In-app Browser checked Connections at desktop `1280x900` and mobile `390x900`: the diagnostics card renders the next action and four readiness states, buttons stay at usable touch size, and there is no page-level horizontal overflow. Browser screenshot capture timed out in this environment, so verification used rendered DOM dimensions and text checks.
+
+### Home Capture Safety Slice
+
+- Product fit: Home now shows Passive Capture as a daily safety control rather than a hidden Connections-only setting. Users can see whether Capture is paused or active, which sites are allowed, whether anything was recently captured, and how many stored transcript bodies can be purged.
+- UX/design: the card keeps the existing compact Control Center style and adds one-click `Captureを開始` / `Captureを一時停止`, `Capture詳細`, and `全本文を消去` actions. Long site allowlists are summarized as the first two sites plus a count so Home stays scannable.
+- Security/privacy: the card states that Capture only creates unapproved candidates and that Fact creation plus AI sending still require Inbox and Context Pack confirmation. Purge counts only active passive-browser Sources, not already purged bodies.
+- Review fallback: Product fit review flagged Home as missing the "am I currently recording AI conversations?" answer. Security/privacy review checked that no new automatic Fact creation or AI sending path was added. UI/UX review found and fixed a narrow-column wrapping issue in the site summary. Maintainability review added `homeCaptureSafetySummary` coverage for active, paused, and purged states.
+- Verification: `npm test`, `npm run build`, and in-app Browser QA passed before the product check. Browser checked Home at desktop `1280x900` and mobile `390x900`: the Capture Safety card renders Pause/Start, detail, and purge actions, mobile buttons remain 44px tall, long site lists collapse to `first, second +N`, one-click Start changes the card to `Captureを一時停止`, and there is no page-level horizontal overflow.
 
 ## SubAgent Completion Review Disposition
 
