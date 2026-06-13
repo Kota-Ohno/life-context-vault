@@ -548,12 +548,12 @@ export function App() {
         setAiServiceStatus(status);
         setNotice(
           status?.agentConnected
-            ? "設定に従ってAI Access Serviceを自動起動しました。"
-            : "AI Access Serviceの自動起動を開始しました。"
+            ? "設定に従ってAI連携を自動起動しました。"
+            : "AI連携の自動起動を開始しました。"
         );
       } catch (error) {
         if (!cancelled) {
-          setNotice(error instanceof Error ? error.message : "AI Access Serviceの自動起動に失敗しました。");
+          setNotice(error instanceof Error ? error.message : "AI連携の自動起動に失敗しました。");
           void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
         }
       } finally {
@@ -1752,9 +1752,9 @@ export function App() {
     try {
       const status = await getAiAccessServiceStatus();
       setAiServiceStatus(status);
-      setNotice(status ? "AI Access Serviceの状態を更新しました。" : "Desktop appでのみAI Access Serviceを管理できます。");
+      setNotice(status ? "AI連携の状態を更新しました。" : "Desktop appでのみAI連携を管理できます。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI Access Serviceの状態確認に失敗しました。");
+      setNotice(error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。");
     }
   }
 
@@ -1763,9 +1763,9 @@ export function App() {
     try {
       const status = await startAiAccessServices();
       setAiServiceStatus(status);
-      setNotice(status?.agentConnected ? "AI Access Serviceを起動しました。" : "AI Access Serviceの起動を開始しました。");
+      setNotice(status?.agentConnected ? "AI連携を起動しました。" : "AI連携の起動を開始しました。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI Access Serviceの起動に失敗しました。");
+      setNotice(error instanceof Error ? error.message : "AI連携の起動に失敗しました。");
       void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
     } finally {
       setAiServiceBusy(false);
@@ -1803,9 +1803,9 @@ export function App() {
     try {
       const status = await stopAiAccessServices();
       setAiServiceStatus(status);
-      setNotice("AI Access Serviceを停止しました。");
+      setNotice("AI連携を停止しました。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI Access Serviceの停止に失敗しました。");
+      setNotice(error instanceof Error ? error.message : "AI連携の停止に失敗しました。");
       void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
     } finally {
       setAiServiceBusy(false);
@@ -3376,6 +3376,7 @@ function ConnectionsView({
     hostedAgentWebsocketUrl,
     webMcpEndpoint
   );
+  const connectionDiagnosticSummary = connectionDiagnosticSummaryBadge(connectionDiagnostic);
   const hostedRelayReadiness = hostedRelayRegistrationReadiness(
     aiServiceStatus,
     nativePath,
@@ -3444,7 +3445,7 @@ function ConnectionsView({
             type="button"
           >
             <PlayCircle size={16} />
-            Start AI Access
+            AI連携を開始
           </button>
           <button
             className="secondary-button"
@@ -3453,7 +3454,7 @@ function ConnectionsView({
             type="button"
           >
             <RefreshCw size={16} />
-            Refresh
+            状態を更新
           </button>
           <button
             className="secondary-button"
@@ -3462,7 +3463,7 @@ function ConnectionsView({
             type="button"
           >
             <Clipboard size={16} />
-            Copy URL
+            MCP URLをコピー
           </button>
           <button
             className="danger-button"
@@ -3471,19 +3472,24 @@ function ConnectionsView({
             type="button"
           >
             <PauseCircle size={16} />
-            Stop managed
+            管理中の連携を停止
           </button>
         </div>
       </div>
 
-      <div className={`panel wide connection-diagnostics ${connectionDiagnostic.tone}`}>
-        <div className="panel-heading">
+      <details className={`panel wide connection-diagnostics setup-disclosure ${connectionDiagnostic.tone}`}>
+        <summary className="panel-summary">
           <div>
             <p className="eyebrow">Connection Diagnostics</p>
             <h3>AIからVaultを呼べる状態を確認</h3>
+            <span>Relay、Agent、Web AI登録の詳しい状態を必要な時だけ確認します。</span>
           </div>
-          <Activity size={18} />
-        </div>
+          <div className="panel-summary-status">
+            <Badge>{connectionDiagnosticSummary.label}</Badge>
+            <span>{connectionDiagnosticSummary.detail}</span>
+            <Activity size={18} />
+          </div>
+        </summary>
         <div className="connection-diagnostic-main">
           <div className="connection-diagnostic-copy">
             <div className="connection-diagnostic-icon">
@@ -3519,7 +3525,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <PlayCircle size={16} />
-                  Start AI Access
+                  AI連携を開始
                 </button>
               ) : null}
               {connectionDiagnostic.primaryAction === "start_hosted_agent" ? (
@@ -3561,7 +3567,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <RefreshCw size={16} />
-                  Refresh
+                  状態を更新
                 </button>
               ) : null}
               {nativePath && connectionDiagnostic.primaryAction !== "refresh" ? (
@@ -3572,7 +3578,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <RefreshCw size={16} />
-                  Refresh
+                  状態を更新
                 </button>
               ) : null}
             </div>
@@ -3589,7 +3595,7 @@ function ConnectionsView({
             </div>
           ))}
         </div>
-      </div>
+      </details>
 
       <div className="panel wide ai-connection-guide">
         <div className="panel-heading">
@@ -3910,7 +3916,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy URL
+                MCP URLをコピー
               </button>
               <button
                 className="secondary-button"
@@ -3922,7 +3928,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy connector info
+                接続情報をコピー
               </button>
               <button
                 className="secondary-button"
@@ -3931,7 +3937,7 @@ function ConnectionsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                Copy SSE ready check
+                SSE診断をコピー
               </button>
             </div>
           </div>
@@ -4088,7 +4094,7 @@ function ConnectionsView({
       <details className="panel wide setup-disclosure">
         <summary className="panel-summary">
           <div>
-            <p className="eyebrow">AI Access Service</p>
+            <p className="eyebrow">AI Access</p>
             <h3>普段使うAIへVaultを開く</h3>
             <span>Relay/Agentの状態、ログイン起動、常駐動作を管理します。</span>
           </div>
@@ -4113,7 +4119,7 @@ function ConnectionsView({
               type="button"
             >
               <PlayCircle size={16} />
-              Start AI Access
+              AI連携を開始
             </button>
             <button
               className="secondary-button"
@@ -4122,7 +4128,7 @@ function ConnectionsView({
               type="button"
             >
               <RefreshCw size={16} />
-              Refresh
+              状態を更新
             </button>
             <button
               className="danger-button"
@@ -4131,7 +4137,7 @@ function ConnectionsView({
               type="button"
             >
               <PauseCircle size={16} />
-              Stop managed
+              管理中の連携を停止
             </button>
           </div>
           <div className="automation-grid">
@@ -4408,7 +4414,7 @@ function ConnectionsView({
                   type="button"
                 >
                   <Clipboard size={16} />
-                  Copy SSE ready check
+                  SSE診断をコピー
                 </button>
               </div>
               <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
@@ -7457,10 +7463,10 @@ function aiAccessReadinessCopy(
   if (!nativePath) {
     return {
       badge: "Desktop required",
-      title: "Desktop appでAI Accessを管理できます",
-      body: "ブラウザ表示ではVault Agentを起動できません。",
+      title: "Desktop版でAI連携を管理できます",
+      body: "ブラウザ表示だけでは、AIからVaultを呼ぶ常駐処理を起動できません。",
       detail:
-        "Vault本体とAgentはローカルで動く前提です。Desktop appを開くと、RelayとAgentをここから起動できます。",
+        "Vault本体とAgentはローカルで動く前提です。Desktop版を開くと、RelayとAgentをここから起動できます。",
       tone: "neutral"
     };
   }
@@ -7513,7 +7519,7 @@ function aiAccessReadinessCopy(
       title: "外部Relayを検知しています",
       body: "アプリは自分が起動していないRelayへAgentを自動接続しません。",
       detail:
-        "手動で起動したRelayを使う場合は手動pairingを続けてください。アプリ管理にしたい場合は外部Relayを停止してからStart AI Accessを押します。",
+        "手動で起動したRelayを使う場合は手動pairingを続けてください。アプリ管理にしたい場合は外部Relayを停止してからAI連携を開始します。",
       tone: "attention"
     };
   }
@@ -7529,8 +7535,8 @@ function aiAccessReadinessCopy(
   }
   return {
     badge: "Not started",
-    title: "AI Access Serviceはまだ停止しています",
-    body: "Start AI AccessでRelayとLocal Agentをまとめて起動します。閉じた後はmenu bar/trayから戻せます。",
+    title: "AI連携はまだ停止しています",
+    body: "AI連携を開始するとRelayとLocal Agentをまとめて起動します。閉じた後はmenu bar/trayから戻せます。",
     detail:
       "最初は背景情報を承認してから起動すると、AIに渡すContext Packの確認まで一気に試せます。",
     tone: "neutral"
@@ -7668,7 +7674,7 @@ export function aiConnectionDiagnostic(
       title: "外部Relayを検知しています",
       summary:
         "アプリが起動していないRelayには自動でAgentを接続しません。手動pairingか、外部Relay停止後のアプリ管理起動を選びます。",
-      nextStep: "self-host運用なら手動pairingを続け、通常利用なら外部Relayを止めてStartします。",
+      nextStep: "self-host運用なら手動pairingを続け、通常利用なら外部Relayを止めてAI連携を開始します。",
       issue,
       primaryAction: "refresh",
       items
@@ -7681,7 +7687,7 @@ export function aiConnectionDiagnostic(
       title: "Relayは起動していますがAgent待ちです",
       summary:
         "AIからの要求入口は応答しています。Local Agentが接続すると、Vault検索とContext Pack生成をこの端末で実行できます。",
-      nextStep: "Start AI Accessを再実行してAgent接続を戻します。",
+      nextStep: "AI連携をもう一度開始してAgent接続を戻します。",
       issue,
       primaryAction: "start_ai_access",
       items
@@ -7694,7 +7700,7 @@ export function aiConnectionDiagnostic(
       title: "AI Accessの直近エラーがあります",
       summary:
         "RelayまたはAgentの起動確認で問題が出ています。Context Pack本文やVault本文は診断表示には含めません。",
-      nextStep: "Refreshで状態を確認し、必要ならStart AI Accessを再実行します。",
+      nextStep: "状態を更新し、必要ならAI連携をもう一度開始します。",
       issue,
       primaryAction: "refresh",
       items
@@ -7703,14 +7709,34 @@ export function aiConnectionDiagnostic(
 
   return {
     tone: "neutral",
-    title: "AI Access Serviceは停止中です",
+    title: "AI連携は停止中です",
     summary:
       "普段使うAIから呼び出すにはRelayとAgentを起動します。保存済みFactは、確認済みContext PackになるまでAIへ渡りません。",
-    nextStep: "Start AI AccessでLocal MCP用のRelayとAgentを起動します。",
+    nextStep: "AI連携を開始してLocal MCP用のRelayとAgentを起動します。",
     issue: null,
     primaryAction: "start_ai_access",
     items
   };
+}
+
+export function connectionDiagnosticSummaryBadge(
+  diagnostic: Pick<ConnectionDiagnostic, "tone" | "items">
+): { label: string; detail: string } {
+  const readyCount = diagnostic.items.filter((item) => item.state === "ready").length;
+  const blockedCount = diagnostic.items.filter((item) => item.state === "blocked").length;
+  const totalCount = diagnostic.items.length;
+  const detail = `${readyCount}/${totalCount} ready`;
+
+  if (diagnostic.tone === "ready") {
+    return { label: "Ready", detail };
+  }
+  if (diagnostic.tone === "blocked" || blockedCount > 0) {
+    return { label: "利用不可", detail };
+  }
+  if (diagnostic.tone === "attention") {
+    return { label: "要確認", detail };
+  }
+  return { label: "確認中", detail };
 }
 
 export function hostedRelayRegistrationReadiness(
@@ -7893,7 +7919,7 @@ export function aiAccessChecklistItems(
           : "pairing確認後にAIへ登録できます。今は確認待ちです。"
         : status?.relayReachable
         ? "Remote MCPのHTTPS/HTTP入口が応答しています。"
-        : "Start AI AccessでMCP endpointを起動します。",
+        : "AI連携を開始してMCP endpointを起動します。",
       state: status?.relayMode === "hosted_agent" ? status.agentConnected ? "ready" : "pending" : status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
     },
     {

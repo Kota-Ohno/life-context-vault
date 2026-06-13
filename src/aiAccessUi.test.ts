@@ -7,6 +7,7 @@ import {
   auditReceiptBody,
   canCopyAiMcpEndpoint,
   clearVaultImpactSections,
+  connectionDiagnosticSummaryBadge,
   contextPackDeliveryState,
   contextPackBoundaryReceipt,
   documentIngestionReadiness,
@@ -101,6 +102,11 @@ describe("AI access UI safety", () => {
     expect(diagnostic.issue).not.toContain("secret-code");
     expect(diagnostic.issue).not.toContain("secret-token");
     expect(diagnostic.items.find((item) => item.label === "Web AI")?.state).toBe("pending");
+
+    const summary = connectionDiagnosticSummaryBadge(diagnostic);
+    expect(summary).toEqual({ label: "要確認", detail: "1/4 ready" });
+    expect(JSON.stringify(summary)).not.toContain("secret-code");
+    expect(JSON.stringify(summary)).not.toContain("secret-token");
   });
 
   it("marks confirmed hosted relay diagnostics ready for Web AI connector setup", () => {
@@ -129,6 +135,14 @@ describe("AI access UI safety", () => {
     expect(diagnostic.tone).toBe("ready");
     expect(diagnostic.primaryAction).toBe("copy_web_connector");
     expect(diagnostic.items.find((item) => item.label === "Web AI")?.value).toBe("Remote MCP登録可");
+    expect(connectionDiagnosticSummaryBadge(diagnostic)).toEqual({ label: "Ready", detail: "4/4 ready" });
+  });
+
+  it("keeps the connection diagnostic summary useful when desktop is unavailable", () => {
+    const diagnostic = aiConnectionDiagnostic(null, null, "", null);
+
+    expect(diagnostic.tone).toBe("blocked");
+    expect(connectionDiagnosticSummaryBadge(diagnostic)).toEqual({ label: "利用不可", detail: "0/4 ready" });
   });
 
   it("marks hosted relay registration ready only after confirmed public HTTPS pairing", () => {

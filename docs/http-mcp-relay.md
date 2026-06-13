@@ -25,7 +25,7 @@ For hosted use from the desktop app, the Control Center can now start the local 
 
 ## App-Managed Service
 
-In the Tauri desktop app, open **Connections** and use **Start AI Access**. The app will:
+In the Tauri desktop app, open **Connections** and use **AI連携を開始**. The app will:
 
 - Start the bundled `lcv-relay` on `127.0.0.1:8765` if no local relay is reachable.
 - Request a pairing code from `/pairing/start`.
@@ -34,9 +34,9 @@ In the Tauri desktop app, open **Connections** and use **Start AI Access**. The 
 
 If another relay is already running on the same port, the app treats it as external: it shows status but will not automatically attach the local Agent to that process. Use the manual pairing commands for that relay, or stop it before starting the app-managed service.
 
-**Stop managed** only stops processes started by the app and does not kill external relay processes.
+**管理中の連携を停止** only stops processes started by the app and does not kill external relay processes.
 
-Closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent processes running. Use **Stop managed** to stop AI Access, or **Quit Life Context Vault** from the menu bar/system tray to stop managed processes and exit the app.
+Closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent processes running. Use **管理中の連携を停止** to stop AI Access, or **Quit Life Context Vault** from the menu bar/system tray to stop managed processes and exit the app.
 
 For day-to-day use, the same **Connections** screen can install a macOS LaunchAgent login item and toggle **起動時にAI Accessを自動開始**. The login item only starts the app binary at user login; Relay and Agent still start from the local app process, and external AI still receives Context Packs only after the normal local approval path.
 

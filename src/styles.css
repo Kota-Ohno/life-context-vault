@@ -540,6 +540,25 @@ button {
   flex: 0 0 auto;
 }
 
+.panel-summary-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  color: #58655c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.panel-summary-status span:not(.badge) {
+  white-space: nowrap;
+}
+
+.panel-summary-status svg {
+  flex: 0 0 auto;
+}
+
 .panel h3 {
   margin-top: 4px;
   font-size: 18px;
@@ -3228,6 +3247,10 @@ button:focus-visible {
 
   .panel-summary::after {
     align-self: flex-start;
+  }
+
+  .panel-summary-status {
+    justify-content: flex-start;
   }
 
   .policy-domain-actions {

@@ -116,14 +116,14 @@ Last updated: 2026-06-13
   - relay state persistence and metadata backups still exclude Context Pack bodies
 - Added Connections UI setup guidance for OAuth relay, pairing, local Agent, connector URLs, and Remote MCP diagnostics.
 - Added app-managed AI Access Service in the Tauri Control Center:
-  - `Start AI Access` launches bundled `lcv-relay` and `lcv-agent`
+  - `AI連携を開始` launches bundled `lcv-relay` and `lcv-agent`
   - app requests a pairing code and connects Agent automatically
   - status shows Relay reachability, Agent connection, managed process state, and MCP URL
   - the top AI Access panel exposes a copyable MCP URL for connector setup
   - the Remote Relay setup section exposes copyable health and Streamable HTTP `/mcp` smoke-test commands
   - diagnostics distinguish reachable Relay, expected OAuth `401`, and header-contract `406/415` failures
   - external relays are status-only; the app does not automatically attach the local Agent to a relay it did not start
-  - `Stop managed` only stops processes started by the app
+  - `管理中の連携を停止` only stops processes started by the app
   - closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent running
   - `Quit Life Context Vault` from the menu bar/system tray stops app-managed Relay and Agent before process exit
   - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
@@ -566,7 +566,7 @@ Last updated: 2026-06-13
 - Security/privacy: app-managed startup preserves the same Relay boundary. The app does not add raw Vault reads or new externally exposed tools.
 - Technical design: helper binaries are prepared as Tauri external binaries and resolved from the app bundle, while manual target/release binaries still work in development.
 - UX: Connections now leads with service status and direct controls, keeping manual commands as fallback.
-- Lifecycle: app-managed Relay and Agent are stopped by **Stop managed** and on app window close; external relays are observed but not killed or auto-attached.
+- Lifecycle: app-managed Relay and Agent are stopped by **管理中の連携を停止** and on app window close; external relays are observed but not killed or auto-attached.
 - Verification: bundled Relay and Agent launched from `Life Context Vault.app/Contents/MacOS` and served MCP `tools/list` through the Agent WebSocket path.
 
 ### Cross-Platform Startup Helper Slice
@@ -721,7 +721,7 @@ Last updated: 2026-06-13
 - Product fit: Connections now puts the AI Access quick start at the top of the page, so everyday AI connectivity is no longer buried below policy details.
 - UX: Context Requests keeps the Context Pack panel beside the incoming request on desktop, and on narrow screens moves the active Pack before the request form so the user reviews the AI-bound payload first.
 - UX: Pack risk, maximum sensitivity, confirmation status, and the approve/copy/local-answer/deny actions now sit at the top of the Pack panel. The copy action is labeled as copying the Context Pack body, separating "saved" from "AI-bound or copied."
-- Verification: in-app Browser checks at `1280x900` and `390x844` confirmed no horizontal overflow. Connections shows `Start AI Access` in the first viewport; Requests shows the Pack approval actions in the first viewport after selecting a request on both desktop and mobile.
+- Verification: in-app Browser checks at `1280x900` and `390x844` confirmed no horizontal overflow. Connections shows `AI連携を開始` in the first viewport; Requests shows the Pack approval actions in the first viewport after selecting a request on both desktop and mobile.
 
 ### Control Center Relay Handoff Slice
 
@@ -1054,7 +1054,7 @@ Last updated: 2026-06-13
 - Product fit: Connections and Relay diagnostics now separate "SSE ready channel works" from "event replay/resume is supported." This avoids misleading hosted-client setup during provider certification and gives operators a precise `/relay/state` signal.
 - Security/privacy: the Relay still does not persist `Last-Event-ID` values, MCP bodies, Context Pack bodies, Raw Sources, or tool responses. The SSE ready event and `/relay/state` expose only `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`.
 - Technical design: `GET /mcp` ready payloads and `/relay/state` now carry the same replay policy. Connections labels the command as an SSE ready check and states that event replay is not advertised, so future true resumability work has a clear contract to update.
-- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed. The UI helper test confirms the readiness checklist mentions `GET SSE ready`, unadvertised replay, and non-storage of `Last-Event-ID` values. System Chrome headless rendered Connections at desktop `1280x900` and mobile `390x844`: `Copy SSE ready check` is visible, buttons do not overflow, and there is no page-level horizontal overflow.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed. The UI helper test confirms the readiness checklist mentions `GET SSE ready`, unadvertised replay, and non-storage of `Last-Event-ID` values. System Chrome headless rendered Connections at desktop `1280x900` and mobile `390x844`: `SSE診断をコピー` is visible, buttons do not overflow, and there is no page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental protocol/UX slice; the main thread ran protocol compatibility, security/privacy, product, and maintainability passes.
 
 ### Hosted Relay Readiness Gate Slice
@@ -1184,6 +1184,14 @@ Last updated: 2026-06-13
 - Accessibility/product polish: app notifications now use `role="status"`/`aria-live="polite"` with a separate close button, active navigation exposes `aria-current="page"`, and visible product identity no longer says PoC in the browser title/package metadata.
 - Verification: `npm test -- --run src/vault.test.ts src/aiAccessUi.test.ts`, `cargo test --manifest-path src-tauri/Cargo.toml native_context_pack_item_visibility_minimizes_ai_bound_pack -- --nocapture`, `cargo test --manifest-path src-tauri/Cargo.toml confirmed_context_pack -- --nocapture`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. Browser verified Home next action returns to `Context Packを試す` with expired history, Requests shows `MCPなしでContext Packを作る` despite existing Request history, Source purge confirmation renders at desktop `1280px` and mobile `390px`, and neither viewport has page-level horizontal overflow.
 - SubAgent disposition: fixed the Security P0/P1 final-delivery revalidation blocker, Security P2 excluded-item id leakage, the UI/UX destructive-action confirmation blocker, Product-fit P1 first-value routing, P2 copy-fallback discoverability, and P3 PoC naming. Hosted public Relay provisioning/certification remains a deployment/product-operations milestone outside this local repository slice; this repo now labels that path as needing Hosted Relay/desktop pairing rather than pretending browser dev mode is the finished Web AI product.
+
+### Connections General-User Labeling Slice
+
+- Product fit: Connections now presents the ordinary path as `AI連携を開始`, `状態を更新`, `MCP URLをコピー`, and `管理中の連携を停止` instead of operator-flavored English labels. The detailed Relay/Agent/Web AI diagnostic panel is collapsed by default so first-time users see connection choices before protocol internals.
+- UX/design: the change keeps the existing card and disclosure system, but separates "what should I press?" from "how do I debug MCP/SSE/Agent state?" without adding a new screen. The collapsed diagnostic summary still shows a compact readiness badge such as `利用不可 0/4 ready`.
+- Security/privacy: no data path changed. The collapsed diagnostic summary is readiness metadata only and does not include runtime errors, pairing URLs, bearer tokens, Context Pack text, Source bodies, or candidate text. The opened diagnostic still exposes only operational status and redacted error text.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and in-app Browser checks passed. Browser verified Connections at desktop `1280px` and mobile `390px`: Japanese primary labels render, old `Start AI Access`/`Copy URL` labels are absent from the visible page, the diagnostic disclosure is closed by default with a summary readiness badge, expanding reveals four status cards, and neither viewport has page-level horizontal overflow.
+- Review fallback: SubAgents were not re-run for this small follow-up slice; it directly addresses prior Product Design/Product-fit findings about English operational labels and Connections complexity.
 
 ## SubAgent Completion Review Disposition
 
