@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { createHash, randomBytes } from "node:crypto";
 
 const baseUrl = process.env.LCV_HOSTED_RELAY_URL;
 const adminToken = process.env.LCV_RELAY_ADMIN_TOKEN;
@@ -13,6 +14,26 @@ function assert(condition, message) {
 function headerValue(headers, name) {
   const value = headers[name.toLowerCase()];
   return Array.isArray(value) ? value.join(", ") : value ?? "";
+}
+
+function base64Url(buffer) {
+  return buffer
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function pkceChallenge(verifier) {
+  return base64Url(createHash("sha256").update(verifier).digest());
+}
+
+function formBody(entries) {
+  return new URLSearchParams(entries).toString();
+}
+
+function locationHeader(response) {
+  return headerValue(response.headers, "location");
 }
 
 async function request(base, { method = "GET", path = "/", headers = {}, body = "" }) {
@@ -126,6 +147,8 @@ async function main() {
   );
 
   if (adminToken) {
+    await smokeHostedOAuth();
+
     const state = await request(baseUrl, {
       path: "/relay/state",
       headers: { Authorization: `Bearer ${adminToken}` }
@@ -136,6 +159,113 @@ async function main() {
   }
 
   console.log(`Hosted Relay smoke passed for ${baseUrl}`);
+}
+
+async function smokeHostedOAuth() {
+  const redirectUri = process.env.LCV_HOSTED_RELAY_TEST_REDIRECT_URI ?? "https://example.com/lcv-oauth-callback";
+  const registration = await request(baseUrl, {
+    method: "POST",
+    path: "/oauth/register",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: {
+      client_name: "Hosted Relay Smoke OAuth Client",
+      redirect_uris: [redirectUri]
+    }
+  });
+  assert(registration.status === 201, `hosted dynamic OAuth registration must succeed: ${registration.body}`);
+  const registeredClient = registration.json();
+  assert(registeredClient.client_id?.startsWith("client_"), "hosted registration must return a client id");
+
+  const codeVerifier = base64Url(randomBytes(32));
+  const codeChallenge = pkceChallenge(codeVerifier);
+  const requestedScope = "context_pack.request memory.propose policy.read request.status";
+  const authorizeParams = new URLSearchParams({
+    response_type: "code",
+    client_id: registeredClient.client_id,
+    redirect_uri: redirectUri,
+    scope: requestedScope,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    resource: `${baseUrl.replace(/\/$/, "")}/mcp`,
+    state: "hosted-relay-smoke-state"
+  });
+  const authorize = await request(baseUrl, {
+    path: `/oauth/authorize?${authorizeParams.toString()}`
+  });
+  assert(authorize.status === 200, `hosted OAuth authorize must show approval page: ${authorize.body}`);
+  assert(authorize.body.includes("Hosted Relay Smoke OAuth Client"), "hosted approval page must name the OAuth client");
+  assert(
+    authorize.body.includes("cannot approve OAuth grants from this browser page") ||
+      authorize.body.includes("Control Center"),
+    "public hosted approval page must require owner approval"
+  );
+  const approvalSessionId = authorize.body.match(/oauth_session_[A-Za-z0-9_-]+/)?.[0];
+  assert(approvalSessionId, "hosted approval page must expose a pending owner approval session");
+
+  const approve = await request(baseUrl, {
+    path: `/oauth/approve?session=${encodeURIComponent(approvalSessionId)}`,
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert(approve.status === 302, `hosted owner approval must redirect with code: ${approve.body}`);
+  const approvedLocation = locationHeader(approve);
+  assert(approvedLocation.startsWith(`${redirectUri}?code=`), "hosted owner approval redirect must return an authorization code");
+  const approvedUrl = new URL(approvedLocation);
+  const authorizationCode = approvedUrl.searchParams.get("code");
+  assert(authorizationCode?.startsWith("code_"), "hosted owner approval must include an authorization code");
+  assert(approvedUrl.searchParams.get("state") === "hosted-relay-smoke-state", "hosted owner approval must preserve state");
+
+  const tokenResponse = await request(baseUrl, {
+    method: "POST",
+    path: "/oauth/token",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: formBody({
+      grant_type: "authorization_code",
+      code: authorizationCode,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+      resource: `${baseUrl.replace(/\/$/, "")}/mcp`
+    })
+  });
+  assert(tokenResponse.status === 200, `hosted token exchange must succeed: ${tokenResponse.body}`);
+  const tokenBody = tokenResponse.json();
+  assert(tokenBody.access_token?.startsWith("lcv_at_"), "hosted token exchange must issue an access token");
+  assert(tokenBody.scope === requestedScope, "hosted token exchange must preserve requested scopes");
+
+  const initialize = await request(baseUrl, {
+    method: "POST",
+    path: "/mcp",
+    headers: {
+      Origin: trustedOrigin,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2025-11-25",
+      Authorization: `Bearer ${tokenBody.access_token}`
+    },
+    body: { jsonrpc: "2.0", id: 2, method: "initialize", params: {} }
+  });
+  assert(initialize.status === 200, `hosted OAuth bearer must initialize MCP: ${initialize.body}`);
+  const sessionId = headerValue(initialize.headers, "mcp-session-id");
+  assert(sessionId.startsWith("mcp_session_"), "hosted initialize must return MCP-Session-Id");
+
+  const tools = await request(baseUrl, {
+    method: "POST",
+    path: "/mcp",
+    headers: {
+      Origin: trustedOrigin,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2025-11-25",
+      "MCP-Session-Id": sessionId,
+      Authorization: `Bearer ${tokenBody.access_token}`
+    },
+    body: { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }
+  });
+  assert(tools.status === 200, `hosted OAuth bearer must authorize tools/list: ${tools.body}`);
+  assert(tools.body.includes("life_context.request_context_pack"), "hosted tools/list must expose Life Context tools");
 }
 
 main().catch((error) => {

@@ -99,7 +99,7 @@ LCV_RELAY_ADMIN_TOKEN=<long-random-admin-token> \
 npm run hosted-relay:smoke
 ```
 
-`LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also checks that `/relay/state` is reachable through admin auth and does not expose MCP or Context Pack bodies.
+`LCV_RELAY_ADMIN_TOKEN` is optional for the smoke. When present, the script also runs a staging OAuth path against the deployed HTTPS Relay: dynamic client registration, public owner-approval page, admin-authenticated approval, Authorization Code + S256 PKCE token exchange, authenticated MCP `initialize`/`tools/list`, and metadata-only `/relay/state` checks. This requires the local Agent to be paired and online for the hosted Relay.
 
 ```bash
 curl -fsS https://relay.example.com/health

@@ -268,7 +268,7 @@ Last updated: 2026-06-13
   - `deploy/relay/Dockerfile` builds a relay-only container with direct Vault sidecar fallback disabled
   - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
   - `scripts/check-hosted-relay-config.mjs` validates the hosted Relay environment boundary: public HTTPS origin, no direct sidecar/Vault settings, no static bearer fallback, no hosted auto-approve, long admin/handoff secrets, exact HTTPS CORS origins, tenant id, durable metadata path, and hosted handoff TTL at or below 600 seconds
-  - `scripts/hosted-relay-smoke.mjs` verifies a deployed HTTPS Relay health, OAuth metadata, protected-resource metadata, trusted/untrusted CORS behavior, OAuth challenge behavior, and optional metadata-only `/relay/state`
+  - `scripts/hosted-relay-smoke.mjs` verifies a deployed HTTPS Relay health, OAuth metadata, protected-resource metadata, trusted/untrusted CORS behavior, OAuth challenge behavior, optional staging OAuth registration/owner-approval/PKCE/authenticated MCP when an admin token is supplied, and metadata-only `/relay/state`
   - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, automated/manual smoke tests, token rotation, and incident runbooks
   - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
 - Added release-gated HTTP Relay smoke:
@@ -1080,6 +1080,14 @@ Last updated: 2026-06-13
 - Technical design: Relay MCP authorization now distinguishes missing/invalid bearer tokens from insufficient scopes, returning `401` OAuth challenges for unauthenticated clients and `403 insufficient_scope` for under-scoped tokens. Hosted deployment docs now call out auto-approve, redirect URI, and handoff TTL boundaries.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm run hosted-relay:check -- --example`, `npm run relay:smoke`, and `npm run product:check -- --include-sse-soak` passed.
 - Review fallback: SubAgents were not used for this incremental security slice; the main thread ran protocol compatibility, security/privacy, operations, and maintainability passes.
+
+### Hosted OAuth Smoke Completion Slice
+
+- Product fit: deployed Relay smoke can now verify the actual provider-facing OAuth happy path when staging admin credentials and a paired Agent are available.
+- Security/privacy: the hosted smoke still runs metadata/CORS/challenge checks without admin credentials. With `LCV_RELAY_ADMIN_TOKEN`, it additionally verifies that public browser approval remains owner-gated, then uses admin-authenticated approval to exercise DCR, `resource=<origin>/mcp`, S256 PKCE, authenticated MCP `initialize`/`tools/list`, and metadata-only `/relay/state`.
+- Technical design: `scripts/hosted-relay-smoke.mjs` keeps live endpoint OAuth checks opt-in because they require a real HTTPS Relay, owner/admin token, and online local Agent; `product:check` syntax-checks the script without requiring external infrastructure.
+- Verification: `node --check scripts/hosted-relay-smoke.mjs`, `npm run hosted-relay:check -- --example`, and `npm run product:check -- --include-sse-soak` are run before commit. Live hosted OAuth smoke remains pending until a real staging endpoint exists.
+- SubAgent disposition: closes the remaining P2 release-gate gap in code by adding the staging smoke path. Real public-provider readiness still requires provisioning the HTTPS Relay and running this smoke against that environment.
 
 ### Hosted Relay Registration UX Slice
 
