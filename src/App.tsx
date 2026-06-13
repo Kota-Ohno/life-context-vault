@@ -307,6 +307,12 @@ type RestorePreview = {
     detail: string;
     tone: "ready" | "attention";
   }>;
+  aiBoundarySections: Array<{
+    label: string;
+    value: string;
+    detail: string;
+    tone: "ready" | "attention";
+  }>;
   overwriteSections: Array<{
     label: string;
     value: string;
@@ -5170,7 +5176,7 @@ function SettingsView({
   const legacyOfficeInstallGuides = legacyOfficeInstallGuidesForPlatform();
   return (
     <section className="view-grid">
-      <div className="panel">
+      <div className="panel wide">
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Backup</p>
@@ -5230,6 +5236,18 @@ function SettingsView({
                   <p className="eyebrow">Will replace current Vault</p>
                   <div className="restore-receipt-list">
                     {restorePreview.overwriteSections.map((section) => (
+                      <div className={`restore-receipt ${section.tone}`} key={section.label}>
+                        <strong>{section.label}</strong>
+                        <span>{section.value}</span>
+                        <small>{section.detail}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="eyebrow">AI boundary after restore</p>
+                  <div className="restore-receipt-list">
+                    {restorePreview.aiBoundarySections.map((section) => (
                       <div className={`restore-receipt ${section.tone}`} key={section.label}>
                         <strong>{section.label}</strong>
                         <span>{section.value}</span>
@@ -6276,6 +6294,7 @@ export function makeRestorePreview(restored: VaultState, currentState: VaultStat
     event.processingStatus !== "purged" && hasDatePassed(event.retentionUntil)
   ).length;
   const promotedSourceCount = restored.sources.filter((source) => source.promotedToLongTerm).length;
+  const aiBoundarySummary = restoreAiBoundarySummary(restored);
   const newestSourceAt = newestIso(restored.sources.map((source) => source.createdAt));
   const oldestAuditAt = oldestIso(restored.auditEvents.map((event) => event.occurredAt));
   const highestSensitivity = maxVaultSensitivity(restored);
@@ -6300,6 +6319,7 @@ export function makeRestorePreview(restored: VaultState, currentState: VaultStat
       promotedSourceCount,
       highestSensitivity
     }),
+    aiBoundarySections: restoreAiBoundarySections(aiBoundarySummary),
     overwriteSections: restoreOverwriteSections(counts, currentCounts)
   };
 }
@@ -6369,6 +6389,70 @@ function restoreReceiptSections(input: {
           ? "最高感度に送信禁止データを含みます。Context Pack境界とPolicyを確認してください。"
           : "AIに渡った事実の本文ではなく、配達先・件数・感度などの監査メタデータです。",
       tone: input.highestSensitivity === "secret_never_send" ? "attention" : "ready"
+    }
+  ];
+}
+
+function restoreAiBoundarySummary(state: VaultState): {
+  deliverablePackCount: number;
+  expiredPackCount: number;
+  pendingRequestCount: number;
+  pairedConnectorCount: number;
+} {
+  const requestsById = new Map(state.contextPackRequests.map((request) => [request.id, request]));
+  const packStates = state.contextPacks.map((pack) =>
+    contextPackDeliveryState(pack, pack.requestId ? requestsById.get(pack.requestId) ?? null : null)
+  );
+  return {
+    deliverablePackCount: packStates.filter((packState) => packState.canDeliver).length,
+    expiredPackCount: packStates.filter((packState) => packState.expired).length,
+    pendingRequestCount: state.contextPackRequests.filter((request) => {
+      const status = effectiveRequestStatus(request);
+      return status === "pending_user_confirmation" || status === "approved";
+    }).length,
+    pairedConnectorCount: state.connectorSessions.filter((session) =>
+      session.status === "connected" || Boolean(session.oauthSubject || session.deviceId)
+    ).length
+  };
+}
+
+function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySummary>): RestorePreview["aiBoundarySections"] {
+  return [
+    {
+      label: "取得可能Pack",
+      value: `${input.deliverablePackCount}件`,
+      detail:
+        input.deliverablePackCount > 0
+          ? "復元後も期限内の確認済みPackがあります。Requestsで内容と期限を確認してください。"
+          : "復元後すぐ外部AIへ返せるPackはありません。必要なら新しいContext Packを作成します。",
+      tone: input.deliverablePackCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "期限切れPack",
+      value: `${input.expiredPackCount}件`,
+      detail:
+        input.expiredPackCount > 0
+          ? "期限切れPackは復元されても外部AIへ返せません。履歴としてRequests/Auditで確認できます。"
+          : "短命Packの期限切れによる復元後の整理対象はありません。",
+      tone: input.expiredPackCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "確認/返却待ち",
+      value: `${input.pendingRequestCount}件`,
+      detail:
+        input.pendingRequestCount > 0
+          ? "復元後に確認待ちまたは返却待ちRequestがあります。送信前にRequestsで再確認してください。"
+          : "復元後に即対応が必要なContext Requestはありません。",
+      tone: input.pendingRequestCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "AI接続メタデータ",
+      value: `${input.pairedConnectorCount}件`,
+      detail:
+        input.pairedConnectorCount > 0
+          ? "ペアリング済み接続メタデータを含みます。復元後にConnectionsで接続状態とPolicyを確認してください。"
+          : "ペアリング済み接続メタデータは含まれていません。",
+      tone: input.pairedConnectorCount > 0 ? "attention" : "ready"
     }
   ];
 }

@@ -1132,6 +1132,15 @@ Last updated: 2026-06-13
 - Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Requests at desktop and mobile widths: an expired fulfilled request is labeled `期限切れ`, all Pack action buttons are disabled, the receipt confirmation state says expired, and neither viewport has page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental expiry consistency slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
+### Restore AI Boundary Preview Slice
+
+- Product fit: Settings restore preview now shows what the restored Vault means for AI access before the user replaces their current Vault. This covers deliverable short-lived Packs, expired Packs, pending/return-waiting requests, and paired connector metadata.
+- UX/design: Backup/Restore is now a full-width Settings panel so the three restore receipt columns remain readable on desktop and stack on mobile. The new `AI boundary after restore` column follows the existing restore receipt card language.
+- Security/privacy: the restore preview still does not echo Source body, Fact text, Context Pack item text, request task text, or Pack snippets. It summarizes only counts and operational state, keeping restore review metadata-only.
+- Technical design: `restoreAiBoundarySummary` reuses the same effective expiry/delivery-state helpers as Requests, so restored expired Packs are described consistently with the active review UI.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Settings restore preview at desktop and mobile widths: the AI boundary section is visible, desktop cards have readable column width, mobile stacks to one column, and neither viewport has page-level horizontal overflow.
+- Review fallback: SubAgents were not used for this incremental restore preview slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
+
 ### Document Ingestion Readiness UX Slice
 
 - Product fit: Sources now shows a compact document-ingestion readiness receipt before users upload files, separating always-local PDF/DOCX-style extraction from optional image OCR and legacy DOC/XLS/PPT conversion providers.

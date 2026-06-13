@@ -588,6 +588,74 @@ describe("AI access UI safety", () => {
         lastUsedAt: "2026-06-11T00:00:00.000Z"
       }
     ];
+    restored.contextPackRequests = [
+      {
+        id: "request_live",
+        clientId: "conn_chatgpt",
+        clientName: "ChatGPT",
+        taskText: "A live restored request whose text should not appear in restore receipt",
+        purpose: "planning",
+        requestedDomains: ["contracts_and_policies"],
+        sensitivityCeiling: "sensitive",
+        approvalMode: "always_review",
+        createdAt: "2099-06-10T00:00:00.000Z",
+        expiresAt: "2099-06-10T00:10:00.000Z",
+        status: "fulfilled"
+      },
+      {
+        id: "request_expired_restore",
+        clientId: "conn_chatgpt",
+        clientName: "ChatGPT",
+        taskText: "An expired restored request whose text should not appear in restore receipt",
+        purpose: "planning",
+        requestedDomains: ["contracts_and_policies"],
+        sensitivityCeiling: "sensitive",
+        approvalMode: "always_review",
+        createdAt: "2000-01-01T00:00:00.000Z",
+        expiresAt: "2000-01-01T00:10:00.000Z",
+        status: "fulfilled"
+      }
+    ];
+    restored.contextPacks = [
+      {
+        id: "pack_live",
+        requestId: "request_live",
+        taskText: "A live restored pack whose task should not appear in restore receipt",
+        taskDomain: "contracts_and_policies",
+        riskLevel: "medium",
+        generatedAt: "2099-06-10T00:00:00.000Z",
+        expiresAt: "2099-06-10T00:10:00.000Z",
+        maxSensitivityIncluded: "sensitive",
+        confirmationStatus: "confirmed",
+        items: [
+          {
+            id: "item_live",
+            factId: "fact_backup",
+            itemText: "Restored pack body text must not appear in restore receipt.",
+            reasonIncluded: "Relevant backup fact",
+            sensitivity: "sensitive",
+            sourceTitles: ["Backup insurance document"],
+            confidence: "source_backed"
+          }
+        ],
+        excludedItems: [],
+        warnings: []
+      },
+      {
+        id: "pack_expired_restore",
+        requestId: "request_expired_restore",
+        taskText: "An expired restored pack whose task should not appear in restore receipt",
+        taskDomain: "contracts_and_policies",
+        riskLevel: "medium",
+        generatedAt: "2000-01-01T00:00:00.000Z",
+        expiresAt: "2000-01-01T00:10:00.000Z",
+        maxSensitivityIncluded: "sensitive",
+        confirmationStatus: "confirmed",
+        items: [],
+        excludedItems: [],
+        warnings: []
+      }
+    ];
     restored.passiveCaptureEvents = [
       {
         id: "capture_expired",
@@ -625,6 +693,8 @@ describe("AI access UI safety", () => {
       facts: 1,
       connectorSessions: 1,
       policies: 4,
+      requests: 2,
+      packs: 2,
       captureEvents: 1,
       auditEvents: 1
     });
@@ -636,10 +706,17 @@ describe("AI access UI safety", () => {
     expect(preview.promotedSourceCount).toBe(1);
     expect(preview.receiptSections.map((section) => section.label)).toContain("AI接続とPolicy");
     expect(preview.receiptSections.find((section) => section.label === "Capture履歴")?.detail).toContain("TTL切れCapture");
+    expect(preview.aiBoundarySections.find((section) => section.label === "取得可能Pack")?.value).toBe("1件");
+    expect(preview.aiBoundarySections.find((section) => section.label === "期限切れPack")?.value).toBe("1件");
+    expect(preview.aiBoundarySections.find((section) => section.label === "AI接続メタデータ")?.detail).toContain(
+      "Connections"
+    );
     expect(preview.overwriteSections.find((section) => section.label === "生活コンテキスト")?.value).toContain(
       "1 Sources / 1 Facts -> 1 Sources / 1 Facts"
     );
     expect(JSON.stringify(preview)).not.toContain("must not appear");
+    expect(JSON.stringify(preview)).not.toContain("Restored pack body text");
+    expect(JSON.stringify(preview)).not.toContain("live restored request");
   });
 
   it("summarizes Home passive capture safety without treating captures as facts", () => {
