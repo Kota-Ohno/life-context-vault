@@ -219,6 +219,15 @@ type ContextPackBoundaryReceiptItem = {
   detail: string;
 };
 
+type ContextPackDeliveryState = {
+  canDeliver: boolean;
+  closed: boolean;
+  expired: boolean;
+  confirmed: boolean;
+  requiresApproval: boolean;
+  awaitingReturn: boolean;
+};
+
 interface HomeCaptureSafetySummary {
   tone: "ready" | "attention";
   title: string;
@@ -4555,13 +4564,10 @@ function ContextRequestsView({
   recordManualCopyDelivery: (packId: string) => void;
   clearManualCopyPayload: () => void;
 }) {
-  const aiReady =
-    currentPack?.confirmationStatus === "confirmed" ||
-    currentRequest?.status === "fulfilled";
-  const requestClosed =
-    currentRequest?.status === "denied" ||
-    currentRequest?.status === "expired" ||
-    currentPack?.confirmationStatus === "cancelled";
+  const nowMs = Date.now();
+  const currentDeliveryState = currentPack ? contextPackDeliveryState(currentPack, currentRequest, nowMs) : null;
+  const aiReady = Boolean(currentDeliveryState?.canDeliver);
+  const requestClosed = Boolean(currentDeliveryState?.closed);
   const hiddenExcludedFacts = currentPack
     ? currentPack.excludedItems
         .filter((item) => item.reason === "user_hidden")
@@ -4571,13 +4577,18 @@ function ContextRequestsView({
         }))
     : [];
   const activeManualCopyPayload = manualCopyPayloadForPack(manualCopyPayload, currentPack);
-  const pendingReviewRequests = requests.filter((request) => request.status === "pending_user_confirmation");
-  const unreturnedLowRiskRequests = requests.filter((request) => request.status === "approved");
-  const actionableRequests = requests.filter((request) => requestNeedsUserAction(request));
-  const readyRequests = requests.filter((request) => request.status === "fulfilled");
-  const closedRequests = requests.filter((request) => request.status === "denied" || request.status === "expired");
+  const pendingReviewRequests = requests.filter(
+    (request) => effectiveRequestStatus(request, nowMs) === "pending_user_confirmation"
+  );
+  const unreturnedLowRiskRequests = requests.filter((request) => effectiveRequestStatus(request, nowMs) === "approved");
+  const actionableRequests = requests.filter((request) => requestNeedsUserAction(request, nowMs));
+  const readyRequests = requests.filter((request) => effectiveRequestStatus(request, nowMs) === "fulfilled");
+  const closedRequests = requests.filter((request) => {
+    const status = effectiveRequestStatus(request, nowMs);
+    return status === "denied" || status === "expired";
+  });
   const showCopyFallbackStarter = shouldShowCopyFallbackStarter(requests, currentPack);
-  const boundaryReceiptItems = currentPack ? contextPackBoundaryReceipt(currentPack, currentRequest) : [];
+  const boundaryReceiptItems = currentPack ? contextPackBoundaryReceipt(currentPack, currentRequest, nowMs) : [];
   const requestQueueTitle =
     pendingReviewRequests.length > 0
       ? `${pendingReviewRequests.length}件の確認待ち`
@@ -4649,13 +4660,13 @@ function ContextRequestsView({
         <div className="request-list">
           {requests.slice(0, 8).map((request) => (
             <button
-              className={`request-row ${requestStatusTone(request.status)}${currentRequest?.id === request.id ? " active" : ""}`}
+              className={`request-row ${requestStatusTone(effectiveRequestStatus(request, nowMs))}${currentRequest?.id === request.id ? " active" : ""}`}
               key={request.id}
               onClick={() => setActiveRequest(request)}
               type="button"
             >
               <span>{request.clientName}</span>
-              <strong>{requestStatusLabel(request.status)}</strong>
+              <strong>{requestStatusLabel(effectiveRequestStatus(request, nowMs))}</strong>
               <small>{request.taskText}</small>
               <small>{formatDateTime(request.createdAt)} / {formatDateTime(request.expiresAt)}まで</small>
             </button>
@@ -4713,7 +4724,7 @@ function ContextRequestsView({
                 type="button"
               >
                 <CheckCircle2 size={16} />
-                この内容だけAIへ許可
+                {currentDeliveryState?.requiresApproval ? "この内容だけAIへ許可" : "この内容だけAIへ返す"}
               </button>
               <button
                 className="secondary-button"
@@ -4745,7 +4756,7 @@ function ContextRequestsView({
             <Metric label="目的" value={currentRequest.purpose} />
             <Metric label="期限" value={formatDateTime(currentRequest.expiresAt)} />
             <Metric label="感度上限" value={<SensitivityBadge sensitivity={currentRequest.sensitivityCeiling} />} />
-            <Metric label="状態" value={requestStatusLabel(currentRequest.status)} />
+            <Metric label="状態" value={requestStatusLabel(effectiveRequestStatus(currentRequest, nowMs))} />
           </div>
         )}
         {!currentPack ? (
@@ -4755,11 +4766,9 @@ function ContextRequestsView({
             <div className={aiReady ? "pack-delivery ready" : "pack-delivery attention"}>
               {aiReady ? <CheckCircle2 size={18} /> : <Clock size={18} />}
               <div>
-                <strong>{aiReady ? "AIへ返せる状態です" : "AIへ返す前に確認が必要です"}</strong>
+                <strong>{packDeliveryTitle(currentDeliveryState)}</strong>
                 <span>
-                  {aiReady
-                    ? "外部AIはget_request_statusで、このContext Packだけを取得できます。"
-                    : "承認するまで、外部AIにはPack本文を返しません。"}
+                  {packDeliveryBody(currentDeliveryState)}
                 </span>
               </div>
             </div>
@@ -5997,16 +6006,21 @@ export function contextPackBoundaryReceipt(
     ContextPack,
     "items" | "sourceSnippets" | "excludedItems" | "expiresAt" | "confirmationStatus" | "maxSensitivityIncluded"
   >,
-  request: Pick<ContextPackRequest, "clientName" | "sensitivityCeiling" | "expiresAt" | "status"> | null
+  request: Pick<ContextPackRequest, "clientName" | "sensitivityCeiling" | "expiresAt" | "status"> | null,
+  nowMs = Date.now()
 ): ContextPackBoundaryReceiptItem[] {
   const snippetCount = pack.sourceSnippets?.length ?? 0;
   const expiry = pack.expiresAt ?? request?.expiresAt ?? null;
   const expiresAt = expiry ? Date.parse(expiry) : NaN;
   const minutesLeft = Number.isFinite(expiresAt)
-    ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 60_000))
+    ? Math.max(0, Math.ceil((expiresAt - nowMs) / 60_000))
     : null;
   const clientName = request?.clientName ?? "このAI";
-  const isConfirmed = pack.confirmationStatus === "confirmed" || request?.status === "fulfilled";
+  const deliveryState = contextPackDeliveryState(pack, request, nowMs);
+  const waitingDetail =
+    pack.confirmationStatus === "not_required"
+      ? "返却またはコピーするまでPack本文は外部AIへ返しません。"
+      : "承認するまでPack本文は外部AIへ返しません。";
   const excludedReasons = Array.from(new Set(pack.excludedItems.map((item) => exclusionReasonLabel(item.reason))));
   const exclusionDetail =
     excludedReasons.length > 0
@@ -6034,11 +6048,13 @@ export function contextPackBoundaryReceipt(
     },
     {
       label: "確認状態",
-      tone: isConfirmed ? "ready" : "attention",
-      value: packConfirmationLabel(pack.confirmationStatus),
-      detail: isConfirmed
-        ? "承認済みのため、外部AIはこのPack境界内だけを取得できます。"
-        : "承認するまでPack本文は外部AIへ返しません。"
+      tone: deliveryState.canDeliver ? "ready" : "attention",
+      value: deliveryState.expired ? "期限切れ" : packConfirmationLabel(pack.confirmationStatus),
+      detail: deliveryState.expired
+        ? "期限切れのため、外部AIへPack本文を返しません。"
+        : deliveryState.canDeliver
+          ? "承認済みのため、外部AIはこのPack境界内だけを取得できます。"
+          : waitingDetail
     }
   ];
 }
@@ -6109,6 +6125,69 @@ function SensitivityBadge({ sensitivity }: { sensitivity: SensitivityTier }) {
   return <span className={`badge sensitivity ${sensitivity}`}>{sensitivityLabel(sensitivity)}</span>;
 }
 
+export function isIsoExpired(value: string | null | undefined, nowMs = Date.now()): boolean {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp <= nowMs;
+}
+
+export function effectiveRequestStatus(
+  request: Pick<ContextPackRequest, "status" | "expiresAt">,
+  nowMs = Date.now()
+): ContextPackRequest["status"] {
+  if (request.status !== "denied" && request.status !== "expired" && isIsoExpired(request.expiresAt, nowMs)) {
+    return "expired";
+  }
+  return request.status;
+}
+
+export function contextPackDeliveryState(
+  pack: Pick<ContextPack, "confirmationStatus" | "expiresAt">,
+  request: Pick<ContextPackRequest, "status" | "expiresAt"> | null,
+  nowMs = Date.now()
+): ContextPackDeliveryState {
+  const expired = isIsoExpired(pack.expiresAt ?? request?.expiresAt, nowMs);
+  const confirmed = pack.confirmationStatus === "confirmed" || request?.status === "fulfilled";
+  const requestStatus = request ? effectiveRequestStatus(request, nowMs) : null;
+  const requiresApproval =
+    pack.confirmationStatus === "pending_user_confirmation" ||
+    pack.confirmationStatus === "edited_by_user";
+  const closed =
+    expired ||
+    pack.confirmationStatus === "cancelled" ||
+    requestStatus === "denied" ||
+    requestStatus === "expired";
+  const awaitingReturn = pack.confirmationStatus === "not_required" && requestStatus === "approved" && !closed;
+  return {
+    canDeliver: confirmed && !closed,
+    closed,
+    expired,
+    confirmed,
+    requiresApproval,
+    awaitingReturn
+  };
+}
+
+function packDeliveryTitle(state: ContextPackDeliveryState | null): string {
+  if (state?.expired) return "期限切れのためAIへ返せません";
+  if (state?.canDeliver) return "AIへ返せる状態です";
+  if (state?.awaitingReturn) return "AIへ返す操作待ちです";
+  return "AIへ返す前に確認が必要です";
+}
+
+function packDeliveryBody(state: ContextPackDeliveryState | null): string {
+  if (state?.expired) {
+    return "この短命Context Packは期限切れです。再度Context Packを作成すると、現在のPolicyで確認できます。";
+  }
+  if (state?.canDeliver) {
+    return "外部AIはget_request_statusで、このContext Packだけを取得できます。";
+  }
+  if (state?.awaitingReturn) {
+    return "確認不要ですが、返却またはコピーするまで外部AIにはPack本文を返しません。";
+  }
+  return "承認するまで、外部AIにはPack本文を返しません。";
+}
+
 function requestStatusLabel(status: ContextPackRequest["status"]): string {
   const labels: Record<ContextPackRequest["status"], string> = {
     draft: "下書き",
@@ -6121,8 +6200,9 @@ function requestStatusLabel(status: ContextPackRequest["status"]): string {
   return labels[status];
 }
 
-function requestNeedsUserAction(request: ContextPackRequest): boolean {
-  return request.status === "pending_user_confirmation" || request.status === "approved";
+function requestNeedsUserAction(request: ContextPackRequest, nowMs = Date.now()): boolean {
+  const status = effectiveRequestStatus(request, nowMs);
+  return status === "pending_user_confirmation" || status === "approved";
 }
 
 function requestStatusTone(status: ContextPackRequest["status"]): "pending" | "ready" | "closed" | "neutral" {

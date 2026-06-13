@@ -1117,11 +1117,20 @@ Last updated: 2026-06-13
 ### Context Pack Boundary Receipt UX Slice
 
 - Product fit: Requests now shows a compact delivery-boundary receipt for the active Context Pack, separating what will be sent to the AI, what will not be sent, Pack expiry, and confirmation state before users approve or copy the payload.
-- UX/design: the receipt reuses the existing dense card language from restore/audit receipts, making the core promise visible at the exact decision point instead of relying on scattered explanatory copy.
+- UX/design: the receipt reuses the existing dense card language from restore/audit receipts, making the core promise visible at the exact decision point instead of relying on scattered explanatory copy. Low-risk `確認不要` Packs say they are waiting for return/copy rather than user approval, so the status language matches the action model.
 - Security/privacy: the receipt is generated from Pack metadata only. It summarizes counts, sensitivity, exclusions, TTL, and confirmation state without copying Fact text, Source snippet text, Raw Source body, or unapproved MemoryCandidate content into a new surface.
 - Technical design: `contextPackBoundaryReceipt` is a pure UI helper covered by unit tests. It does not change Context Pack generation, confirmation, Relay handoff, manual copy payloads, or Audit persistence.
-- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Requests at desktop and mobile widths: the boundary receipt renders four cards and neither viewport has page-level horizontal overflow.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. System Chrome/Playwright checked Requests at `1280px` and `390px`: the boundary receipt renders four cards and neither viewport has page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental boundary receipt slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
+
+### Expired Context Pack UI Consistency Slice
+
+- Product fit: Requests now treats expired short-lived Context Packs as expired everywhere in the review UI, even if the persisted request status was previously `fulfilled`. Users no longer see `AI返却可` on a Pack that the boundary receipt says is expired.
+- UX/design: request rows, request metrics, detail status, delivery banner, receipt confirmation state, and Pack action buttons now share one effective expiry calculation. Expired Packs show a clear retry message instead of a contradictory ready state.
+- Security/privacy: expiry is enforced as a UI-visible send boundary. Expired confirmed Packs cannot be copied, approved, drafted locally from the active Pack controls, or presented as externally retrievable from Requests.
+- Technical design: `effectiveRequestStatus`, `contextPackDeliveryState`, and `isIsoExpired` centralize the display-time status calculation without mutating persisted request history. Unit tests cover fulfilled-but-expired requests and expired confirmed Packs.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Requests at desktop and mobile widths: an expired fulfilled request is labeled `期限切れ`, all Pack action buttons are disabled, the receipt confirmation state says expired, and neither viewport has page-level horizontal overflow.
+- Review fallback: SubAgents were not used for this incremental expiry consistency slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
 ### Document Ingestion Readiness UX Slice
 

@@ -6,8 +6,10 @@ import {
   aiMcpEndpointDisplay,
   auditReceiptBody,
   canCopyAiMcpEndpoint,
+  contextPackDeliveryState,
   contextPackBoundaryReceipt,
   documentIngestionReadiness,
+  effectiveRequestStatus,
   factInventoryCounts,
   factSourceNames,
   homeCaptureSafetySummary,
@@ -430,13 +432,82 @@ describe("AI access UI safety", () => {
     expect(JSON.stringify(receipt)).not.toContain("Approved fact text that may be sent");
     expect(JSON.stringify(receipt)).not.toContain("Short approved snippet");
 
+    const noApprovalRequired = contextPackBoundaryReceipt(
+      { ...pack, confirmationStatus: "not_required" },
+      { ...request, status: "approved" }
+    );
+
+    expect(noApprovalRequired.find((item) => item.label === "確認状態")?.value).toBe("確認不要");
+    expect(noApprovalRequired.find((item) => item.label === "確認状態")?.detail).toContain("返却またはコピーするまでPack本文");
+    expect(
+      contextPackDeliveryState(
+        { ...pack, confirmationStatus: "not_required" },
+        { ...request, status: "approved" },
+        Date.parse("2026-06-13T00:05:00.000Z")
+      )
+    ).toMatchObject({
+      canDeliver: false,
+      closed: false,
+      expired: false,
+      confirmed: false,
+      requiresApproval: false,
+      awaitingReturn: true
+    });
+
     const confirmed = contextPackBoundaryReceipt(
       { ...pack, confirmationStatus: "confirmed", expiresAt: "2000-01-01T00:00:00.000Z" },
       { ...request, status: "fulfilled", expiresAt: "2000-01-01T00:00:00.000Z" }
     );
 
-    expect(confirmed.find((item) => item.label === "確認状態")?.tone).toBe("ready");
+    expect(confirmed.find((item) => item.label === "確認状態")?.tone).toBe("attention");
+    expect(confirmed.find((item) => item.label === "確認状態")?.value).toBe("期限切れ");
     expect(confirmed.find((item) => item.label === "有効期限")?.value).toBe("期限切れ");
+  });
+
+  it("treats expired fulfilled requests as not deliverable in UI state", () => {
+    const nowMs = Date.parse("2026-06-13T12:00:00.000Z");
+    const request: ContextPackRequest = {
+      id: "request_expired",
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "期限切れPackを確認",
+      purpose: "planning",
+      requestedDomains: ["routines_and_logistics"],
+      sensitivityCeiling: "personal",
+      approvalMode: "always_review",
+      createdAt: "2026-06-13T11:00:00.000Z",
+      expiresAt: "2026-06-13T11:10:00.000Z",
+      status: "fulfilled"
+    };
+    const pack: ContextPack = {
+      id: "pack_expired",
+      requestId: "request_expired",
+      taskText: "期限切れPackを確認",
+      taskDomain: "routines_and_logistics",
+      riskLevel: "low",
+      generatedAt: "2026-06-13T11:00:00.000Z",
+      expiresAt: "2026-06-13T11:10:00.000Z",
+      maxSensitivityIncluded: "personal",
+      confirmationStatus: "confirmed",
+      items: [],
+      excludedItems: [],
+      warnings: []
+    };
+
+    expect(effectiveRequestStatus(request, nowMs)).toBe("expired");
+    expect(contextPackDeliveryState(pack, request, nowMs)).toMatchObject({
+      canDeliver: false,
+      closed: true,
+      expired: true,
+      confirmed: true,
+      requiresApproval: false,
+      awaitingReturn: false
+    });
+
+    const receipt = contextPackBoundaryReceipt(pack, request, nowMs);
+
+    expect(receipt.find((item) => item.label === "確認状態")?.value).toBe("期限切れ");
+    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("Pack本文を返しません");
   });
 
   it("builds a restore receipt that explains backup contents and current Vault replacement", () => {
