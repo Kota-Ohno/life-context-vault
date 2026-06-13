@@ -236,9 +236,41 @@ type RestorePreview = {
     requests: number;
     packs: number;
     captureEvents: number;
+    connectorSessions: number;
+    policies: number;
+    auditEvents: number;
+  };
+  currentCounts: {
+    sources: number;
+    candidates: number;
+    facts: number;
+    requests: number;
+    packs: number;
+    captureEvents: number;
+    connectorSessions: number;
+    policies: number;
+    auditEvents: number;
   };
   sensitivitySummary: string;
   newestSourceAt?: string;
+  oldestAuditAt?: string;
+  sourceBodyBytes: number;
+  activeConnectorCount: number;
+  pairedConnectorCount: number;
+  expiredCaptureCount: number;
+  promotedSourceCount: number;
+  receiptSections: Array<{
+    label: string;
+    value: string;
+    detail: string;
+    tone: "ready" | "attention";
+  }>;
+  overwriteSections: Array<{
+    label: string;
+    value: string;
+    detail: string;
+    tone: "ready" | "attention";
+  }>;
 };
 
 type ManualCopyPayload = {
@@ -1598,9 +1630,9 @@ export function App() {
   async function previewRestoreBackup() {
     try {
       const restored = await importEncryptedBackup(backupText, backupPassphrase);
-      setRestorePreview(makeRestorePreview(restored));
+      setRestorePreview(makeRestorePreview(restored, state));
       setRestoreConfirmText("");
-      setNotice("バックアップを読み取りました。件数を確認し、復元する場合はRESTOREと入力してください。");
+      setNotice("バックアップを読み取りました。移行内容と上書き範囲を確認し、復元する場合はRESTOREと入力してください。");
     } catch (error) {
       setRestorePreview(null);
       setRestoreConfirmText("");
@@ -5028,12 +5060,43 @@ function SettingsView({
                 <Metric label="Context Packs" value={restorePreview.counts.packs} />
                 <Metric label="Requests" value={restorePreview.counts.requests} />
                 <Metric label="Captures" value={restorePreview.counts.captureEvents} />
+                <Metric label="AI接続" value={restorePreview.counts.connectorSessions} />
+                <Metric label="Policies" value={restorePreview.counts.policies} />
+                <Metric label="Audit" value={restorePreview.counts.auditEvents} />
+              </div>
+              <div className="restore-receipt-grid">
+                <div>
+                  <p className="eyebrow">Backup contains</p>
+                  <div className="restore-receipt-list">
+                    {restorePreview.receiptSections.map((section) => (
+                      <div className={`restore-receipt ${section.tone}`} key={section.label}>
+                        <strong>{section.label}</strong>
+                        <span>{section.value}</span>
+                        <small>{section.detail}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="eyebrow">Will replace current Vault</p>
+                  <div className="restore-receipt-list">
+                    {restorePreview.overwriteSections.map((section) => (
+                      <div className={`restore-receipt ${section.tone}`} key={section.label}>
+                        <strong>{section.label}</strong>
+                        <span>{section.value}</span>
+                        <small>{section.detail}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div className="trust-note attention-note">
                 <ShieldAlert size={16} />
                 <span>
-                  復元すると現在のVault全体をこのバックアップで置き換えます。内容の感度は{restorePreview.sensitivitySummary}です。
+                  復元すると現在のVault全体をこのバックアップで置き換えます。内容の最高感度は{restorePreview.sensitivitySummary}です。
                   {restorePreview.newestSourceAt ? ` 最新Source: ${formatDateTime(restorePreview.newestSourceAt)}。` : ""}
+                  {restorePreview.oldestAuditAt ? ` Auditは${formatDateTime(restorePreview.oldestAuditAt)}以降を含みます。` : ""}
+                  {restorePreview.expiredCaptureCount > 0 ? ` TTL切れCaptureが${restorePreview.expiredCaptureCount}件あります。` : ""}
                 </span>
               </div>
               <Input
@@ -5926,25 +5989,170 @@ function sourceLifecycleNotice(
   return `Sourceを使用停止しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
 }
 
-function makeRestorePreview(restored: VaultState): RestorePreview {
-  const newestSourceAt = restored.sources
-    .map((source) => source.createdAt)
-    .filter(Boolean)
-    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+type RestoreRecordCounts = RestorePreview["counts"];
+
+export function makeRestorePreview(restored: VaultState, currentState: VaultState = createEmptyVault()): RestorePreview {
+  const counts = vaultRecordCounts(restored);
+  const currentCounts = vaultRecordCounts(currentState);
+  const sourceBodyBytes = restored.sources.reduce((total, source) => total + textByteLength(source.body), 0);
+  const activeConnectorCount = restored.connectorSessions.filter((session) =>
+    ["available", "connected"].includes(session.status)
+  ).length;
+  const pairedConnectorCount = restored.connectorSessions.filter((session) =>
+    session.status === "connected" || Boolean(session.oauthSubject || session.deviceId)
+  ).length;
+  const expiredCaptureCount = restored.passiveCaptureEvents.filter((event) =>
+    event.processingStatus !== "purged" && hasDatePassed(event.retentionUntil)
+  ).length;
+  const promotedSourceCount = restored.sources.filter((source) => source.promotedToLongTerm).length;
+  const newestSourceAt = newestIso(restored.sources.map((source) => source.createdAt));
+  const oldestAuditAt = oldestIso(restored.auditEvents.map((event) => event.occurredAt));
   const highestSensitivity = maxVaultSensitivity(restored);
   return {
     generatedAt: new Date().toISOString(),
-    counts: {
-      sources: restored.sources.length,
-      candidates: restored.candidates.length,
-      facts: restored.facts.length,
-      requests: restored.contextPackRequests.length,
-      packs: restored.contextPacks.length,
-      captureEvents: restored.passiveCaptureEvents.length
-    },
+    counts,
+    currentCounts,
     sensitivitySummary: highestSensitivity ? sensitivityLabel(highestSensitivity) : "空のVault",
-    newestSourceAt
+    newestSourceAt,
+    oldestAuditAt,
+    sourceBodyBytes,
+    activeConnectorCount,
+    pairedConnectorCount,
+    expiredCaptureCount,
+    promotedSourceCount,
+    receiptSections: restoreReceiptSections({
+      counts,
+      sourceBodyBytes,
+      activeConnectorCount,
+      pairedConnectorCount,
+      expiredCaptureCount,
+      promotedSourceCount,
+      highestSensitivity
+    }),
+    overwriteSections: restoreOverwriteSections(counts, currentCounts)
   };
+}
+
+function vaultRecordCounts(state: VaultState): RestoreRecordCounts {
+  return {
+    sources: state.sources.length,
+    candidates: state.candidates.length,
+    facts: state.facts.length,
+    requests: state.contextPackRequests.length,
+    packs: state.contextPacks.length,
+    captureEvents: state.passiveCaptureEvents.length,
+    connectorSessions: state.connectorSessions.length,
+    policies: state.accessPolicies.length,
+    auditEvents: state.auditEvents.length
+  };
+}
+
+function restoreReceiptSections(input: {
+  counts: RestoreRecordCounts;
+  sourceBodyBytes: number;
+  activeConnectorCount: number;
+  pairedConnectorCount: number;
+  expiredCaptureCount: number;
+  promotedSourceCount: number;
+  highestSensitivity: SensitivityTier | null;
+}): RestorePreview["receiptSections"] {
+  return [
+    {
+      label: "Source本文",
+      value: `${input.counts.sources}件 / ${formatFileSize(input.sourceBodyBytes)}`,
+      detail:
+        input.promotedSourceCount > 0
+          ? `${input.promotedSourceCount}件は長期保存Sourceです。復元しても自動でAIへ送信されません。`
+          : "保存されたSource本文は復元されます。AIへ渡るのは承認済みContext Packだけです。",
+      tone: input.counts.sources > 0 ? "attention" : "ready"
+    },
+    {
+      label: "Approved Facts",
+      value: `${input.counts.facts}件`,
+      detail: "ユーザ承認済みFactとして戻ります。未承認候補はInboxに残り、Factとしては使われません。",
+      tone: input.counts.facts > 0 ? "ready" : "attention"
+    },
+    {
+      label: "AI接続とPolicy",
+      value: `${input.activeConnectorCount} active / ${input.counts.policies} policies`,
+      detail:
+        input.pairedConnectorCount > 0
+          ? `${input.pairedConnectorCount}件のペアリング済み接続メタデータを含みます。復元後に接続状態を確認してください。`
+          : "接続先ごとの許可範囲と感度上限を含みます。外部AIへ自動送信はしません。",
+      tone: input.pairedConnectorCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "Capture履歴",
+      value: `${input.counts.captureEvents}件`,
+      detail:
+        input.expiredCaptureCount > 0
+          ? `TTL切れCaptureが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
+          : "Passive Captureイベントを含みます。承認前の候補はAI回答に使いません。",
+      tone: input.expiredCaptureCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "Auditレシート",
+      value: `${input.counts.auditEvents}件`,
+      detail:
+        input.highestSensitivity === "secret_never_send"
+          ? "最高感度に送信禁止データを含みます。Context Pack境界とPolicyを確認してください。"
+          : "AIに渡った事実の本文ではなく、配達先・件数・感度などの監査メタデータです。",
+      tone: input.highestSensitivity === "secret_never_send" ? "attention" : "ready"
+    }
+  ];
+}
+
+function restoreOverwriteSections(
+  nextCounts: RestoreRecordCounts,
+  currentCounts: RestoreRecordCounts
+): RestorePreview["overwriteSections"] {
+  return [
+    {
+      label: "生活コンテキスト",
+      value: `${currentCounts.sources} Sources / ${currentCounts.facts} Facts -> ${nextCounts.sources} Sources / ${nextCounts.facts} Facts`,
+      detail: "現在のSource、Fact、Inbox候補はバックアップ側の内容へ置き換わります。",
+      tone: currentCounts.sources + currentCounts.facts > 0 ? "attention" : "ready"
+    },
+    {
+      label: "Context Requests",
+      value: `${currentCounts.requests} Requests / ${currentCounts.packs} Packs -> ${nextCounts.requests} Requests / ${nextCounts.packs} Packs`,
+      detail: "確認待ちRequest、生成済みPack、TTL情報もバックアップ側へ戻ります。",
+      tone: currentCounts.requests + currentCounts.packs > 0 ? "attention" : "ready"
+    },
+    {
+      label: "AI接続設定",
+      value: `${currentCounts.connectorSessions} Connections / ${currentCounts.policies} Policies -> ${nextCounts.connectorSessions} Connections / ${nextCounts.policies} Policies`,
+      detail: "Claude、ChatGPT、ブラウザCapture、コピーFallbackの接続メタデータとPolicyが置き換わります。",
+      tone: "attention"
+    },
+    {
+      label: "監査とCapture",
+      value: `${currentCounts.auditEvents} Audit / ${currentCounts.captureEvents} Captures -> ${nextCounts.auditEvents} Audit / ${nextCounts.captureEvents} Captures`,
+      detail: "何を保存したか、どのAIへ渡したかの履歴もバックアップ側の履歴に置き換わります。",
+      tone: currentCounts.auditEvents + currentCounts.captureEvents > 0 ? "attention" : "ready"
+    }
+  ];
+}
+
+function newestIso(values: Array<string | undefined>): string | undefined {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
+function oldestIso(values: Array<string | undefined>): string | undefined {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => Date.parse(left) - Date.parse(right))[0];
+}
+
+function hasDatePassed(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function textByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 function maxVaultSensitivity(state: VaultState): SensitivityTier | null {

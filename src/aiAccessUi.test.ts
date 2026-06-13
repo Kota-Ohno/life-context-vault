@@ -13,11 +13,13 @@ import {
   HomeView,
   InboxView,
   isHostedRelayConfirmed,
+  makeRestorePreview,
   manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
   webAiMcpEndpoint
 } from "./App";
+import { createEmptyVault } from "./vault";
 import type { AuditEvent, PassiveCaptureEvent, PassiveCaptureSettings, RawSource } from "./types";
 import type { AiAccessServiceStatus } from "./nativeStorage";
 
@@ -180,6 +182,138 @@ describe("AI access UI safety", () => {
     expect(manualCopyPayloadForPack(payload, { id: "pack_2" })).toBeNull();
     expect(manualCopyPayloadForPack(null, { id: "pack_1" })).toBeNull();
     expect(manualCopyPayloadForPack(payload, null)).toBeNull();
+  });
+
+  it("builds a restore receipt that explains backup contents and current Vault replacement", () => {
+    const current = createEmptyVault();
+    current.sources = [
+      {
+        id: "source_current",
+        kind: "manual_note",
+        title: "Current note",
+        origin: "manual_entry",
+        body: "Current source body",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        capturedAt: "2026-06-01T00:00:00.000Z",
+        defaultSensitivity: "personal",
+        processingStatus: "ready",
+        deletionState: "active"
+      }
+    ];
+    current.facts = [
+      {
+        id: "fact_current",
+        factText: "Current approved fact",
+        domain: "routines_and_logistics",
+        factType: "note",
+        sourceIds: ["source_current"],
+        sensitivity: "personal",
+        confidence: "user_asserted",
+        status: "active",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        approvedAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        supersedesFactIds: []
+      }
+    ];
+
+    const restored = createEmptyVault();
+    restored.sources = [
+      {
+        id: "source_backup",
+        kind: "document",
+        title: "Backup insurance document",
+        origin: "user_upload",
+        body: "A backup source body that must not appear in the restore receipt.",
+        createdAt: "2026-06-10T00:00:00.000Z",
+        capturedAt: "2026-06-10T00:00:00.000Z",
+        promotedToLongTerm: true,
+        defaultSensitivity: "sensitive",
+        processingStatus: "ready",
+        deletionState: "active"
+      }
+    ];
+    restored.facts = [
+      {
+        id: "fact_backup",
+        factText: "Backup approved fact",
+        domain: "contracts_and_policies",
+        factType: "contract_term",
+        sourceIds: ["source_backup"],
+        sensitivity: "sensitive",
+        confidence: "source_backed",
+        status: "active",
+        createdAt: "2026-06-10T00:00:00.000Z",
+        approvedAt: "2026-06-10T00:00:00.000Z",
+        updatedAt: "2026-06-10T00:00:00.000Z",
+        supersedesFactIds: []
+      }
+    ];
+    restored.connectorSessions = [
+      {
+        id: "conn_chatgpt",
+        clientKind: "chatgpt",
+        clientName: "ChatGPT",
+        transport: "remote_mcp_relay",
+        oauthSubject: "oauth_subject_hash",
+        scopes: ["context_pack.request"],
+        status: "connected",
+        createdAt: "2026-06-10T00:00:00.000Z",
+        lastUsedAt: "2026-06-11T00:00:00.000Z"
+      }
+    ];
+    restored.passiveCaptureEvents = [
+      {
+        id: "capture_expired",
+        sourceClient: "chatgpt",
+        conversationId: "conversation_1",
+        urlHash: "hash_1",
+        textFragmentRef: "fragment_ref",
+        capturedAt: "2020-01-01T00:00:00.000Z",
+        retentionUntil: "2020-01-15T00:00:00.000Z",
+        sensitivityGuess: "personal",
+        processingStatus: "captured",
+        candidateIds: []
+      }
+    ];
+    restored.auditEvents = [
+      {
+        id: "audit_1",
+        eventType: "context_pack_delivered",
+        actor: "user",
+        subjectType: "context_pack",
+        subjectId: "pack_1",
+        occurredAt: "2026-06-12T00:00:00.000Z",
+        sensitivity: "sensitive",
+        metadata: {
+          clientName: "ChatGPT",
+          itemCount: 1
+        }
+      }
+    ];
+
+    const preview = makeRestorePreview(restored, current);
+
+    expect(preview.counts).toMatchObject({
+      sources: 1,
+      facts: 1,
+      connectorSessions: 1,
+      policies: 4,
+      captureEvents: 1,
+      auditEvents: 1
+    });
+    expect(preview.currentCounts.sources).toBe(1);
+    expect(preview.sensitivitySummary).toBe("センシティブ");
+    expect(preview.activeConnectorCount).toBe(1);
+    expect(preview.pairedConnectorCount).toBe(1);
+    expect(preview.expiredCaptureCount).toBe(1);
+    expect(preview.promotedSourceCount).toBe(1);
+    expect(preview.receiptSections.map((section) => section.label)).toContain("AI接続とPolicy");
+    expect(preview.receiptSections.find((section) => section.label === "Capture履歴")?.detail).toContain("TTL切れCapture");
+    expect(preview.overwriteSections.find((section) => section.label === "生活コンテキスト")?.value).toContain(
+      "1 Sources / 1 Facts -> 1 Sources / 1 Facts"
+    );
+    expect(JSON.stringify(preview)).not.toContain("must not appear");
   });
 
   it("summarizes Home passive capture safety without treating captures as facts", () => {

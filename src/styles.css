@@ -1384,6 +1384,68 @@ button:focus-visible {
   gap: 8px;
 }
 
+.restore-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.restore-receipt-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.restore-receipt-list {
+  display: grid;
+  gap: 8px;
+}
+
+.restore-receipt {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dde5dc;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.restore-receipt.ready {
+  border-color: #bfd4bf;
+  background: #f6fbf4;
+}
+
+.restore-receipt.attention {
+  border-color: #dfc28d;
+  background: #fffaf0;
+}
+
+.restore-receipt strong,
+.restore-receipt span,
+.restore-receipt small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.restore-receipt strong {
+  color: #26352b;
+  font-size: 13px;
+}
+
+.restore-receipt span {
+  color: #1f2d25;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.restore-receipt small {
+  color: #667267;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .ai-connection-guide {
   display: grid;
   gap: 14px;
@@ -2671,6 +2733,7 @@ button:focus-visible {
   .service-status-grid,
   .automation-grid,
   .restore-preview-grid,
+  .restore-receipt-grid,
   .setup-grid,
   .setup-grid.remote-relay-setup,
   .search-controls {
