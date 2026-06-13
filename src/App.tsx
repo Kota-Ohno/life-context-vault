@@ -244,6 +244,13 @@ type UploadFeedback = {
   body: string;
 };
 
+type DocumentIngestionReadinessItem = {
+  label: string;
+  state: "ready" | "attention";
+  value: string;
+  detail: string;
+};
+
 type RestorePreview = {
   generatedAt: string;
   counts: {
@@ -2728,6 +2735,12 @@ function SourcesView({
 }) {
   const [isDragActive, setIsDragActive] = useState(false);
   const pendingSourceCandidates = sourceReviewCandidates(candidates);
+  const documentReadiness = documentIngestionReadiness(
+    ocrExtractionAvailable,
+    ocrProviderLabel,
+    legacyOfficeConversionAvailable,
+    legacyOfficeProviderLabel
+  );
   function handleDropZoneDrag(event: React.DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -2822,6 +2835,18 @@ function SourcesView({
               ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Legacy Office Provider"} でローカル変換してから抽出します。`
               : " 旧Office形式は、誤記憶を避けるため変換Provider接続までSource化しません。"}
           </span>
+        </div>
+        <div className="document-readiness-grid" aria-label="Document ingestion readiness">
+          {documentReadiness.map((item) => (
+            <div className={`document-readiness-card ${item.state}`} key={item.label}>
+              {item.state === "ready" ? <CheckCircle2 size={16} /> : <ShieldAlert size={16} />}
+              <div>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.detail}</small>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -6505,6 +6530,40 @@ function sourceLabelForCapabilities(
   if (ocrExtractionAvailable) return SUPPORTED_SOURCE_LABEL_WITH_OCR;
   if (legacyOfficeConversionAvailable) return "TXT, PDF, Office, OpenDocument";
   return SUPPORTED_SOURCE_LABEL;
+}
+
+export function documentIngestionReadiness(
+  ocrExtractionAvailable: boolean,
+  ocrProviderLabel: string | null,
+  legacyOfficeConversionAvailable: boolean,
+  legacyOfficeProviderLabel: string | null
+): DocumentIngestionReadinessItem[] {
+  return [
+    {
+      label: "PDF / DOCX等",
+      state: "ready",
+      value: "Desktopでローカル抽出",
+      detail: "本文はSourceとInbox候補になり、Fact化とAI送信は別確認です。"
+    },
+    {
+      label: "画像OCR",
+      state: ocrExtractionAvailable ? "ready" : "attention",
+      value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR Provider"} 接続済み` : "Provider未接続",
+      detail: ocrExtractionAvailable
+        ? "画像はこの端末のOCRだけで抽出します。"
+        : "画像はSource化せず、SettingsでLocal OCRを設定するまで手入力を使います。"
+    },
+    {
+      label: "旧DOC / XLS / PPT",
+      state: legacyOfficeConversionAvailable ? "ready" : "attention",
+      value: legacyOfficeConversionAvailable
+        ? `${legacyOfficeProviderLabel ?? "Legacy Office Provider"} 接続済み`
+        : "変換Provider未接続",
+      detail: legacyOfficeConversionAvailable
+        ? "旧Officeはこの端末で新形式へ変換してから抽出します。"
+        : "旧OfficeはSource化せず、SettingsでLibreOffice等を設定してから追加します。"
+    }
+  ];
 }
 
 function normalizedOcrTimeout(value: number, defaultValue = 30): number {

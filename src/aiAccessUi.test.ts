@@ -6,6 +6,7 @@ import {
   aiMcpEndpointDisplay,
   auditReceiptBody,
   canCopyAiMcpEndpoint,
+  documentIngestionReadiness,
   factInventoryCounts,
   factSourceNames,
   homeCaptureSafetySummary,
@@ -316,6 +317,21 @@ describe("AI access UI safety", () => {
       { id: "candidate_detail", sourceIds: ["source_1"], status: "needs_user_detail" },
       { id: "candidate_sensitive", sourceIds: ["source_2"], status: "blocked_sensitive" }
     ]);
+  });
+
+  it("summarizes document ingestion readiness without widening storage or AI send boundaries", () => {
+    const disconnected = documentIngestionReadiness(false, null, false, null);
+
+    expect(disconnected.find((item) => item.label === "PDF / DOCX等")?.state).toBe("ready");
+    expect(disconnected.find((item) => item.label === "画像OCR")?.state).toBe("attention");
+    expect(disconnected.find((item) => item.label === "画像OCR")?.detail).toContain("Source化せず");
+    expect(disconnected.find((item) => item.label === "旧DOC / XLS / PPT")?.detail).toContain("Source化せず");
+
+    const connected = documentIngestionReadiness(true, "Tesseract OCR", true, "LibreOffice");
+
+    expect(connected.find((item) => item.label === "画像OCR")?.value).toBe("Tesseract OCR 接続済み");
+    expect(connected.find((item) => item.label === "旧DOC / XLS / PPT")?.value).toBe("LibreOffice 接続済み");
+    expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("Fact化とAI送信は別確認");
   });
 
   it("shows the copy fallback starter only on an empty Context Requests inbox", () => {

@@ -2583,6 +2583,68 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.document-readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.document-readiness-card {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.document-readiness-card.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.document-readiness-card.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.document-readiness-card.ready svg {
+  color: #2f7f4f;
+}
+
+.document-readiness-card.attention svg {
+  color: #9a6b16;
+}
+
+.document-readiness-card div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.document-readiness-card span {
+  color: #596255;
+  font-size: 0.78rem;
+}
+
+.document-readiness-card strong,
+.document-readiness-card small {
+  overflow-wrap: anywhere;
+}
+
+.document-readiness-card strong {
+  font-size: 0.9rem;
+}
+
+.document-readiness-card small {
+  color: #56645c;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .ask-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.7fr) minmax(0, 1.3fr);
@@ -2933,6 +2995,7 @@ button:focus-visible {
   .hosted-relay-steps,
   .hosted-relay-boundary,
   .web-ai-registration-guide,
+  .document-readiness-grid,
   .ai-access-quickstart,
   .ai-access-map-grid,
   .ai-access-checklist,
