@@ -1033,6 +1033,123 @@ button:focus-visible {
   justify-content: flex-end;
 }
 
+.connection-diagnostics {
+  display: grid;
+  gap: 14px;
+}
+
+.connection-diagnostics.ready {
+  border-color: #b7d0bd;
+  background: #f5fbf2;
+}
+
+.connection-diagnostics.attention {
+  border-color: #e0c796;
+  background: #fffaf0;
+}
+
+.connection-diagnostics.blocked {
+  border-color: #d9b7a9;
+  background: #fff7f3;
+}
+
+.connection-diagnostic-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.connection-diagnostic-copy {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+
+.connection-diagnostic-copy strong,
+.connection-diagnostic-copy p,
+.connection-diagnostic-next strong {
+  overflow-wrap: anywhere;
+}
+
+.connection-diagnostic-copy p {
+  margin: 6px 0 0;
+  color: #56645c;
+  line-height: 1.45;
+}
+
+.connection-diagnostic-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid #cbd8ca;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.connection-diagnostic-next {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.connection-diagnostic-next span {
+  color: #667267;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.connection-diagnostic-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.connection-diagnostic-status {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e0e5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.connection-diagnostic-status.ready svg {
+  color: #4f8156;
+}
+
+.connection-diagnostic-status.pending svg {
+  color: #b07a26;
+}
+
+.connection-diagnostic-status.blocked svg {
+  color: #a5422e;
+}
+
+.connection-diagnostic-status div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connection-diagnostic-status span {
+  color: #667267;
+  font-size: 12px;
+}
+
+.connection-diagnostic-status strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 .ai-access-map {
   display: grid;
   gap: 14px;
@@ -2465,6 +2582,8 @@ button:focus-visible {
   .policy-controls,
   .policy-domain-list,
   .connection-wizard-grid,
+  .connection-diagnostic-main,
+  .connection-diagnostic-status-grid,
   .hosted-relay-grid,
   .hosted-relay-status,
   .hosted-relay-steps,

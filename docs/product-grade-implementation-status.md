@@ -139,6 +139,8 @@ Last updated: 2026-06-13
   - Guided background setup appears before the long Background Snapshot so first-time users can start adding life context without scrolling through existing memories
   - mobile navigation switches to icon-first controls with accessible labels, hiding secondary stats so the first action and setup form appear much earlier
   - Connections now shows a natural-language readiness panel explaining whether the desktop app, Relay, Agent, and Context Pack boundary are ready
+  - Connections now includes a compact connection diagnostics receipt that shows Desktop Vault, Relay, Local Agent, and Web AI readiness with the next action in one place
+  - Hosted Relay diagnostic errors are redacted before display so pairing codes and bearer tokens do not appear in the Control Center
   - the same readiness logic is reused across Home and Connections to avoid contradictory user guidance
 - Added Claude Desktop setup installer:
   - Connections can install the `life-context-vault` stdio MCP server into Claude Desktop config from the desktop app
@@ -1004,6 +1006,14 @@ Last updated: 2026-06-13
 - Security/privacy: the payload is shown only after the user explicitly asks to copy the Pack. It is not stored as a new persisted object; before recording the manual delivery receipt, the app re-checks the current Pack policy and Audit still stores only metadata.
 - Review fallback: Product fit review flagged the old Clipboard failure notice as dishonest because no content was actually displayed. Security/privacy review confirmed the fallback does not bypass Pack confirmation or add body text to Audit. UI/UX review checked desktop/mobile fallback layout and close behavior. Maintainability review added `manualCopyPayloadForPack` coverage so stale payloads cannot appear for another Pack.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright forced `navigator.clipboard.writeText` failure at desktop `1280x900` and mobile `390x900`: copy fallback displayed a readonly `ContextPack only` payload for the active Pack, `手動コピー済みとしてAudit記録` closed the panel and added the delivery receipt, Audit still stated that Raw Source body and unapproved candidates were not included, and there was no page-level horizontal overflow.
+
+### Connection Diagnostics Slice
+
+- Product fit: Connections now gives users a single diagnostic receipt for whether their Desktop Vault, Relay, Local Agent, and Web AI route are usable. This turns scattered status metrics into one next action, which is important when the product promise is "your usual AI can call your life context."
+- UX/design: the new card keeps the existing quiet Control Center style, adds one primary action based on the current state, and stacks its four readiness checks into one column on mobile. It avoids exposing advanced Relay commands unless the user opens the existing advanced section.
+- Security/privacy: the diagnostic uses metadata-only service status. It does not display Vault content, Context Pack body text, Raw Source text, unapproved candidates, pairing codes, or bearer tokens; hosted connection errors are redacted before display.
+- Review fallback: Product fit review flagged Connections as too fragmented for general users to recover from setup issues. Security/privacy review added UI-level redaction even though Rust already redacts Agent logs. UI/UX review checked desktop/mobile layout and button sizing. Maintainability review put the state classification in `aiConnectionDiagnostic` so Hosted/Local/offline behavior has unit coverage.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. In-app Browser checked Connections at desktop `1280x900` and mobile `390x900`: the diagnostics card renders the next action and four readiness states, buttons stay at usable touch size, and there is no page-level horizontal overflow. Browser screenshot capture timed out in this environment, so verification used rendered DOM dimensions and text checks.
 
 ## SubAgent Completion Review Disposition
 

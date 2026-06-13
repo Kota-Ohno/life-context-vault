@@ -165,6 +165,34 @@ type View =
   | "audit"
   | "settings";
 
+type ConnectionDiagnosticTone = "ready" | "attention" | "blocked" | "neutral";
+
+type ConnectionDiagnosticAction =
+  | "open_desktop"
+  | "start_ai_access"
+  | "start_hosted_agent"
+  | "copy_web_connector"
+  | "open_requests"
+  | "refresh";
+
+type ConnectionDiagnosticState = "ready" | "pending" | "blocked";
+
+interface ConnectionDiagnosticItem {
+  label: string;
+  value: string;
+  state: ConnectionDiagnosticState;
+}
+
+interface ConnectionDiagnostic {
+  tone: ConnectionDiagnosticTone;
+  title: string;
+  summary: string;
+  nextStep: string;
+  issue: string | null;
+  primaryAction: ConnectionDiagnosticAction;
+  items: ConnectionDiagnosticItem[];
+}
+
 type OnboardingStep = {
   title: string;
   body: string;
@@ -3058,6 +3086,12 @@ function ConnectionsView({
   const webMcpEndpoint = webAiMcpEndpoint(aiServiceStatus, mcpEndpoint);
   const webConnectorInfo = webMcpEndpoint ? makeRemoteConnectorInfo(webMcpEndpoint) : null;
   const currentConnectorInfo = canCopyMcpEndpoint ? makeRemoteConnectorInfo(mcpEndpoint) : null;
+  const connectionDiagnostic = aiConnectionDiagnostic(
+    aiServiceStatus,
+    nativePath,
+    hostedAgentWebsocketUrl,
+    webMcpEndpoint
+  );
   const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
   const recentCaptures = [...passiveCaptureEvents]
     .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
@@ -3147,6 +3181,121 @@ function ConnectionsView({
             <PauseCircle size={16} />
             Stop managed
           </button>
+        </div>
+      </div>
+
+      <div className={`panel wide connection-diagnostics ${connectionDiagnostic.tone}`}>
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Connection Diagnostics</p>
+            <h3>AIからVaultを呼べる状態を確認</h3>
+          </div>
+          <Activity size={18} />
+        </div>
+        <div className="connection-diagnostic-main">
+          <div className="connection-diagnostic-copy">
+            <div className="connection-diagnostic-icon">
+              {connectionDiagnostic.tone === "ready" ? (
+                <ShieldCheck size={20} />
+              ) : connectionDiagnostic.tone === "blocked" ? (
+                <ShieldAlert size={20} />
+              ) : (
+                <Clock size={20} />
+              )}
+            </div>
+            <div>
+              <strong>{connectionDiagnostic.title}</strong>
+              <p>{connectionDiagnostic.summary}</p>
+              {connectionDiagnostic.issue ? <p className="warning-text">{connectionDiagnostic.issue}</p> : null}
+            </div>
+          </div>
+          <div className="connection-diagnostic-next">
+            <span>次にやること</span>
+            <strong>{connectionDiagnostic.nextStep}</strong>
+            <div className="service-actions">
+              {connectionDiagnostic.primaryAction === "open_desktop" ? (
+                <button className="secondary-button" disabled type="button">
+                  <Plug size={16} />
+                  Desktop appで開く
+                </button>
+              ) : null}
+              {connectionDiagnostic.primaryAction === "start_ai_access" ? (
+                <button
+                  className="primary-button"
+                  disabled={!nativePath || aiServiceBusy}
+                  onClick={startAiAccess}
+                  type="button"
+                >
+                  <PlayCircle size={16} />
+                  Start AI Access
+                </button>
+              ) : null}
+              {connectionDiagnostic.primaryAction === "start_hosted_agent" ? (
+                <button
+                  className="primary-button"
+                  disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}
+                  onClick={startHostedRelayAgent}
+                  type="button"
+                >
+                  <Plug size={16} />
+                  Hosted RelayへAgent接続
+                </button>
+              ) : null}
+              {connectionDiagnostic.primaryAction === "copy_web_connector" ? (
+                <button
+                  className="primary-button"
+                  disabled={!webConnectorInfo}
+                  onClick={() => {
+                    if (!webConnectorInfo) return;
+                    copyText(JSON.stringify(webConnectorInfo, null, 2), "Web AI用のRemote MCP connector情報をコピーしました。");
+                  }}
+                  type="button"
+                >
+                  <Clipboard size={16} />
+                  Web AI接続情報をコピー
+                </button>
+              ) : null}
+              {connectionDiagnostic.primaryAction === "open_requests" ? (
+                <button className="primary-button" onClick={goRequests} type="button">
+                  <MessageSquare size={16} />
+                  Requestsで試す
+                </button>
+              ) : null}
+              {connectionDiagnostic.primaryAction === "refresh" ? (
+                <button
+                  className="primary-button"
+                  disabled={!nativePath || aiServiceBusy}
+                  onClick={refreshAiAccess}
+                  type="button"
+                >
+                  <RefreshCw size={16} />
+                  Refresh
+                </button>
+              ) : null}
+              {nativePath && connectionDiagnostic.primaryAction !== "refresh" ? (
+                <button
+                  className="secondary-button"
+                  disabled={aiServiceBusy}
+                  onClick={refreshAiAccess}
+                  type="button"
+                >
+                  <RefreshCw size={16} />
+                  Refresh
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className="connection-diagnostic-status-grid" aria-label="AI connection diagnostic status">
+          {connectionDiagnostic.items.map((item) => (
+            <div className={`connection-diagnostic-status ${item.state}`} key={item.label}>
+              {item.state === "ready" ? <CheckCircle2 size={16} /> : item.state === "blocked" ? <ShieldAlert size={16} /> : <Clock size={16} />}
+              <div>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -6290,7 +6439,7 @@ function hostedPairingCopy(status: AiAccessServiceStatus | null): string {
 
 function hostedLastErrorCopy(status: AiAccessServiceStatus | null): string {
   if (status?.relayMode !== "hosted_agent") return "なし";
-  return status.agentRuntimeStatus?.lastError ?? "なし";
+  return redactConnectionDiagnosticText(status.agentRuntimeStatus?.lastError) ?? "なし";
 }
 
 function aiAccessReadinessCopy(
@@ -6324,13 +6473,14 @@ function aiAccessReadinessCopy(
     };
   }
   if (status?.relayMode === "hosted_agent" && status.agentManagedRunning) {
+    const hostedError = redactConnectionDiagnosticText(status.agentRuntimeStatus?.lastError);
     return {
       badge: "Pairing check",
       title: "Hosted Relayへのpairingを待っています",
       body: "この端末のアプリは起動中です。Relay側の確認が取れるまでReady扱いにしません。",
       detail:
-        status.agentRuntimeStatus?.lastError
-          ? `直近の接続エラー: ${status.agentRuntimeStatus.lastError}`
+        hostedError
+          ? `直近の接続エラー: ${hostedError}`
           : "Relayは短命Context Packの受け渡しだけを扱います。Vault本文、Raw Source、未承認候補はHosted Relayへ保存しません。",
       tone: "attention"
     };
@@ -6382,6 +6532,182 @@ function aiAccessReadinessCopy(
     detail:
       "最初は背景情報を承認してから起動すると、AIに渡すContext Packの確認まで一気に試せます。",
     tone: "neutral"
+  };
+}
+
+export function redactConnectionDiagnosticText(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const redacted = value
+    .replace(/([?&](?:pairing_code|token|access_token|refresh_token|code)=)[^&\s]+/gi, "$1...")
+    .replace(/\b(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1...")
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1...")
+    .replace(/\b(Authorization:\s*)(?!Bearer\s)[^\s]+/gi, "$1...")
+    .trim();
+  return redacted.length > 180 ? `${redacted.slice(0, 177)}...` : redacted;
+}
+
+export function aiConnectionDiagnostic(
+  status: AiAccessServiceStatus | null,
+  nativePath: string | null,
+  hostedAgentWebsocketUrl: string,
+  webMcpEndpoint: string | null
+): ConnectionDiagnostic {
+  const hostedMode = status?.relayMode === "hosted_agent";
+  const hostedUrlEntered = hostedAgentWebsocketUrl.trim().length > 0;
+  const webReady = Boolean(webMcpEndpoint);
+  const localReady = Boolean(status?.agentConnected && !hostedMode);
+  const issue = redactConnectionDiagnosticText(status?.agentRuntimeStatus?.lastError ?? status?.lastError);
+  const items: ConnectionDiagnosticItem[] = [
+    {
+      label: "Desktop Vault",
+      value: nativePath ? "この端末で利用中" : "Desktop appが必要",
+      state: nativePath ? "ready" : "blocked"
+    },
+    {
+      label: "Relay",
+      value: hostedMode
+        ? status?.agentConnected
+          ? "Hosted pairing済み"
+          : status?.agentManagedRunning
+          ? "Hosted確認待ち"
+          : "Hosted停止中"
+        : status?.relayReachable
+        ? "endpoint応答あり"
+        : "offline",
+      state: hostedMode
+        ? status?.agentConnected
+          ? "ready"
+          : "pending"
+        : status?.relayReachable
+        ? "ready"
+        : nativePath
+        ? "pending"
+        : "blocked"
+    },
+    {
+      label: "Local Agent",
+      value: status?.agentConnected
+        ? "Vaultへ接続済み"
+        : status?.agentManagedRunning
+        ? "起動中"
+        : "offline",
+      state: status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
+    },
+    {
+      label: "Web AI",
+      value: webReady
+        ? "Remote MCP登録可"
+        : hostedMode
+        ? "pairing確認待ち"
+        : "Hosted Relay未設定",
+      state: webReady ? "ready" : nativePath ? "pending" : "blocked"
+    }
+  ];
+
+  if (!nativePath) {
+    return {
+      tone: "blocked",
+      title: "Desktop appでVaultを開く必要があります",
+      summary:
+        "ブラウザ表示ではRelayとAgentを起動できません。Vault本体はローカルに置き、AIへは確認済みContext Packだけを返します。",
+      nextStep: "Desktop版を開いて暗号化Vaultを読み込みます。",
+      issue: null,
+      primaryAction: "open_desktop",
+      items
+    };
+  }
+
+  if (hostedMode && status?.agentConnected) {
+    return {
+      tone: "ready",
+      title: "Web AIからContext Packを要求できます",
+      summary:
+        "Hosted Relayとのpairingを確認済みです。Relayは本文を保持せず、この端末のAgentが検索と承認待ちを処理します。",
+      nextStep: "ChatGPTやClaude WebへRemote MCP connector情報を登録します。",
+      issue: null,
+      primaryAction: "copy_web_connector",
+      items
+    };
+  }
+
+  if (hostedMode) {
+    return {
+      tone: "attention",
+      title: status?.agentManagedRunning
+        ? "Hosted Relayのpairing確認待ちです"
+        : "Hosted Relayへ接続するAgentが停止しています",
+      summary:
+        "Web上のAIが使う公開HTTPS入口は、pairing確認後だけ表示・コピーできます。短命URLはVaultに保存しません。",
+      nextStep: hostedUrlEntered
+        ? "Agent接続を再実行し、pairingが確認されたらWeb AIへ登録します。"
+        : "Hosted Relayで短命Agent WebSocket URLを発行して貼り付けます。",
+      issue,
+      primaryAction: hostedUrlEntered ? "start_hosted_agent" : "refresh",
+      items
+    };
+  }
+
+  if (localReady) {
+    return {
+      tone: "ready",
+      title: "同じ端末のAIからVaultを呼べます",
+      summary:
+        "Local MCP/Agentは接続済みです。Web AIで使う場合はHosted Relayをpairingし、普段使うAIにはContext Pack境界だけを登録します。",
+      nextStep: "まずRequestsでContext Pack確認とコピーfallbackを試します。",
+      issue: null,
+      primaryAction: "open_requests",
+      items
+    };
+  }
+
+  if (status?.relayReachable && !status.relayManagedRunning) {
+    return {
+      tone: "attention",
+      title: "外部Relayを検知しています",
+      summary:
+        "アプリが起動していないRelayには自動でAgentを接続しません。手動pairingか、外部Relay停止後のアプリ管理起動を選びます。",
+      nextStep: "self-host運用なら手動pairingを続け、通常利用なら外部Relayを止めてStartします。",
+      issue,
+      primaryAction: "refresh",
+      items
+    };
+  }
+
+  if (status?.relayReachable) {
+    return {
+      tone: "attention",
+      title: "Relayは起動していますがAgent待ちです",
+      summary:
+        "AIからの要求入口は応答しています。Local Agentが接続すると、Vault検索とContext Pack生成をこの端末で実行できます。",
+      nextStep: "Start AI Accessを再実行してAgent接続を戻します。",
+      issue,
+      primaryAction: "start_ai_access",
+      items
+    };
+  }
+
+  if (issue) {
+    return {
+      tone: "attention",
+      title: "AI Accessの直近エラーがあります",
+      summary:
+        "RelayまたはAgentの起動確認で問題が出ています。Context Pack本文やVault本文は診断表示には含めません。",
+      nextStep: "Refreshで状態を確認し、必要ならStart AI Accessを再実行します。",
+      issue,
+      primaryAction: "refresh",
+      items
+    };
+  }
+
+  return {
+    tone: "neutral",
+    title: "AI Access Serviceは停止中です",
+    summary:
+      "普段使うAIから呼び出すにはRelayとAgentを起動します。保存済みFactは、確認済みContext PackになるまでAIへ渡りません。",
+    nextStep: "Start AI AccessでLocal MCP用のRelayとAgentを起動します。",
+    issue: null,
+    primaryAction: "start_ai_access",
+    items
   };
 }
 

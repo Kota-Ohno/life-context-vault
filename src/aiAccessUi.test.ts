@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  aiConnectionDiagnostic,
   aiMcpEndpointDisplay,
   auditReceiptBody,
   canCopyAiMcpEndpoint,
@@ -16,6 +17,7 @@ import {
   webAiMcpEndpoint
 } from "./App";
 import type { AuditEvent } from "./types";
+import type { AiAccessServiceStatus } from "./nativeStorage";
 
 describe("AI access UI safety", () => {
   it("blocks public MCP endpoint copying while hosted relay pairing is unconfirmed", () => {
@@ -39,6 +41,74 @@ describe("AI access UI safety", () => {
     expect(aiMcpEndpointDisplay(localRelay, "http://127.0.0.1:8765/mcp")).toBe("http://127.0.0.1:8765/mcp");
     expect(webAiMcpEndpoint(localRelay, "http://127.0.0.1:8765/mcp")).toBeNull();
     expect(webAiMcpEndpoint(localRelay, "https://relay.example.com/mcp")).toBe("https://relay.example.com/mcp");
+  });
+
+  it("summarizes connection diagnostics without leaking hosted pairing secrets", () => {
+    const hostedStatus = {
+      managedByApp: true,
+      relayMode: "hosted_agent",
+      relayReachable: true,
+      relayManagedRunning: false,
+      agentManagedRunning: true,
+      agentConnected: false,
+      relayUrl: "https://relay.example.com",
+      mcpServerUrl: "https://relay.example.com/mcp",
+      relayStateStatusUrl: "https://relay.example.com/relay/state",
+      agentRuntimeStatus: {
+        state: "connecting",
+        relayBaseUrl: "https://relay.example.com",
+        updatedAt: 1781280000,
+        lastConnectedAt: null,
+        lastError: "failed wss://relay.example.com/agent/ws?pairing_code=secret-code Authorization: Bearer secret-token",
+        statusToken: null,
+        processId: null
+      },
+      pairingCode: null,
+      lastError: null
+    } satisfies AiAccessServiceStatus;
+
+    const diagnostic = aiConnectionDiagnostic(
+      hostedStatus,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
+      null
+    );
+
+    expect(diagnostic.tone).toBe("attention");
+    expect(diagnostic.primaryAction).toBe("start_hosted_agent");
+    expect(diagnostic.issue).toContain("pairing_code=...");
+    expect(diagnostic.issue).toContain("Bearer ...");
+    expect(diagnostic.issue).not.toContain("secret-code");
+    expect(diagnostic.issue).not.toContain("secret-token");
+    expect(diagnostic.items.find((item) => item.label === "Web AI")?.state).toBe("pending");
+  });
+
+  it("marks confirmed hosted relay diagnostics ready for Web AI connector setup", () => {
+    const hostedStatus = {
+      managedByApp: true,
+      relayMode: "hosted_agent",
+      relayReachable: true,
+      relayManagedRunning: false,
+      agentManagedRunning: true,
+      agentConnected: true,
+      relayUrl: "https://relay.example.com",
+      mcpServerUrl: "https://relay.example.com/mcp",
+      relayStateStatusUrl: "https://relay.example.com/relay/state",
+      agentRuntimeStatus: null,
+      pairingCode: null,
+      lastError: null
+    } satisfies AiAccessServiceStatus;
+
+    const diagnostic = aiConnectionDiagnostic(
+      hostedStatus,
+      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
+      "",
+      "https://relay.example.com/mcp"
+    );
+
+    expect(diagnostic.tone).toBe("ready");
+    expect(diagnostic.primaryAction).toBe("copy_web_connector");
+    expect(diagnostic.items.find((item) => item.label === "Web AI")?.value).toBe("Remote MCP登録可");
   });
 
   it("shows source titles for source-backed facts", () => {
