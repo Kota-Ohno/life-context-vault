@@ -26,6 +26,8 @@ import {
 } from "./types";
 
 export const STORAGE_KEY = "life-context-vault-poc";
+const BACKUP_KDF_ITERATIONS = 600000;
+const LEGACY_BACKUP_KDF_ITERATIONS = 120000;
 
 const sensitivityRank: Record<SensitivityTier, number> = {
   public: 0,
@@ -2116,10 +2118,10 @@ export async function exportEncryptedBackup(
   state: VaultState,
   passphrase: string
 ): Promise<string> {
-  if (!passphrase.trim()) throw new Error("Passphrase is required.");
+  validateBackupPassphrase(passphrase);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(passphrase, salt);
+  const key = await deriveKey(passphrase, salt, BACKUP_KDF_ITERATIONS);
   const encoded = new TextEncoder().encode(JSON.stringify(state));
   const cipher = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: toArrayBuffer(iv) },
@@ -2129,7 +2131,7 @@ export async function exportEncryptedBackup(
   const payload = {
     version: 1,
     kdf: "PBKDF2-SHA256",
-    iterations: 120000,
+    iterations: BACKUP_KDF_ITERATIONS,
     salt: toBase64(salt),
     iv: toBase64(iv),
     cipherText: toBase64(new Uint8Array(cipher))
@@ -2143,15 +2145,20 @@ export async function importEncryptedBackup(
 ): Promise<VaultState> {
   const payload = JSON.parse(backupText) as {
     version: number;
+    iterations?: number;
     salt: string;
     iv: string;
     cipherText: string;
   };
   if (payload.version !== 1) throw new Error("Unsupported backup version.");
+  const iterations =
+    Number.isFinite(payload.iterations) && payload.iterations && payload.iterations > 0
+      ? payload.iterations
+      : LEGACY_BACKUP_KDF_ITERATIONS;
   const salt = fromBase64(payload.salt);
   const iv = fromBase64(payload.iv);
   const cipherText = fromBase64(payload.cipherText);
-  const key = await deriveKey(passphrase, salt);
+  const key = await deriveKey(passphrase, salt, iterations);
   const clear = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: toArrayBuffer(iv) },
     key,
@@ -2535,7 +2542,21 @@ function stableHash(text: string): string {
   return `hash_${(hash >>> 0).toString(16)}`;
 }
 
-async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+function validateBackupPassphrase(passphrase: string) {
+  const trimmed = passphrase.trim();
+  if (!trimmed) throw new Error("Passphrase is required.");
+  const classes = [
+    /[a-z]/.test(trimmed),
+    /[A-Z]/.test(trimmed),
+    /\d/.test(trimmed),
+    /[^A-Za-z0-9]/.test(trimmed)
+  ].filter(Boolean).length;
+  if (trimmed.length < 12 || classes < 3) {
+    throw new Error("バックアップのパスフレーズは12文字以上で、英大文字・英小文字・数字・記号のうち3種類以上を含めてください。");
+  }
+}
+
+async function deriveKey(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
   const base = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(passphrase),
@@ -2547,7 +2568,7 @@ async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKe
     {
       name: "PBKDF2",
       salt: toArrayBuffer(salt),
-      iterations: 120000,
+      iterations,
       hash: "SHA-256"
     },
     base,

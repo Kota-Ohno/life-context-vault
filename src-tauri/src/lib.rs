@@ -48,6 +48,8 @@ const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
 const AGENT_STATUS_FRESH_SECONDS: u64 = 30;
+const SOURCE_CHUNK_TARGET_CHARS: usize = 4_000;
+const SOURCE_CHUNK_OVERLAP_CHARS: usize = 300;
 
 struct AiAccessSupervisor {
   relay: Option<Child>,
@@ -825,20 +827,24 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
       )
       .map_err(|error| format!("failed to sync source {source_id}: {error}"))?;
 
-    transaction
-      .execute(
-        "INSERT INTO source_chunks (
-          id, source_id, chunk_index, text, detected_sensitivity, created_at
-        ) VALUES (?1, ?2, 0, ?3, ?4, ?5)",
-        params![
-          format!("chunk_{source_id}_0"),
-          source_id,
-          body,
-          str_field(source, "defaultSensitivity"),
-          str_field(source, "createdAt")
-        ],
-      )
-      .map_err(|error| format!("failed to sync source chunk for {source_id}: {error}"))?;
+    let source_chunks = source_chunks_for_text(&body);
+    for (chunk_index, chunk_text) in source_chunks.iter().enumerate() {
+      transaction
+        .execute(
+          "INSERT INTO source_chunks (
+            id, source_id, chunk_index, text, detected_sensitivity, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+          params![
+            format!("chunk_{source_id}_{chunk_index}"),
+            source_id,
+            chunk_index as i64,
+            chunk_text,
+            str_field(source, "defaultSensitivity"),
+            str_field(source, "createdAt")
+          ],
+        )
+        .map_err(|error| format!("failed to sync source chunk {chunk_index} for {source_id}: {error}"))?;
+    }
   }
 
   for candidate in value_array(&vault, "candidates") {
@@ -1037,6 +1043,39 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
   transaction
     .commit()
     .map_err(|error| format!("failed to commit vault sync transaction: {error}"))
+}
+
+fn source_chunks_for_text(text: &str) -> Vec<String> {
+  if text.is_empty() {
+    return vec![String::new()];
+  }
+
+  let chars: Vec<char> = text.chars().collect();
+  let mut chunks = Vec::new();
+  let mut start = 0;
+  while start < chars.len() {
+    let hard_end = (start + SOURCE_CHUNK_TARGET_CHARS).min(chars.len());
+    let mut end = hard_end;
+    if hard_end < chars.len() {
+      let search_start = start + SOURCE_CHUNK_TARGET_CHARS.saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS);
+      if let Some(boundary) = (search_start..hard_end)
+        .rev()
+        .find(|index| chars[*index].is_whitespace() || matches!(chars[*index], '.' | '。' | '\n'))
+      {
+        if boundary > start {
+          end = boundary + 1;
+        }
+      }
+    }
+
+    chunks.push(chars[start..end].iter().collect::<String>().trim().to_string());
+    if end >= chars.len() {
+      break;
+    }
+    start = end.saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS).max(start + 1);
+  }
+
+  chunks
 }
 
 fn sync_normalized_tables_if_stale(connection: &mut Connection) -> Result<(), String> {
@@ -9028,6 +9067,61 @@ mod tests {
     assert_eq!(candidate_count, 1);
     assert_eq!(fact_count, 1);
     assert_eq!(fts_count, 1);
+  }
+
+  #[test]
+  fn sync_projection_splits_large_source_bodies_into_deterministic_chunks() {
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_vault_schema(&connection).expect("schema");
+    let repeated = "Insurance renewal address update evidence. ".repeat(260);
+    let payload = json!({
+      "version": 2,
+      "sources": [{
+        "id": "src_large",
+        "kind": "document",
+        "title": "Large policy document",
+        "origin": "user_upload",
+        "body": repeated,
+        "createdAt": "2026-06-12T00:00:00.000Z",
+        "capturedAt": "2026-06-12T00:00:00.000Z",
+        "defaultSensitivity": "personal",
+        "processingStatus": "ready",
+        "deletionState": "active"
+      }],
+      "candidates": [],
+      "facts": [],
+      "accessPolicies": [],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    })
+    .to_string();
+
+    sync_normalized_tables(&mut connection, &payload).expect("sync");
+
+    let chunk_count: i64 = connection
+      .query_row("SELECT COUNT(*) FROM source_chunks WHERE source_id = 'src_large'", [], |row| row.get(0))
+      .expect("chunk count");
+    let first_chunk: String = connection
+      .query_row(
+        "SELECT text FROM source_chunks WHERE source_id = 'src_large' AND chunk_index = 0",
+        [],
+        |row| row.get(0),
+      )
+      .expect("first chunk");
+    let second_chunk: String = connection
+      .query_row(
+        "SELECT text FROM source_chunks WHERE source_id = 'src_large' AND chunk_index = 1",
+        [],
+        |row| row.get(0),
+      )
+      .expect("second chunk");
+
+    assert!(chunk_count > 1);
+    assert!(first_chunk.len() < repeated.len());
+    assert!(second_chunk.starts_with("Insurance renewal") || second_chunk.contains("Insurance renewal"));
   }
 
   #[test]

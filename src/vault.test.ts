@@ -11,6 +11,8 @@ import {
   confirmContextPack,
   createContextPackRequest,
   createEmptyVault,
+  exportEncryptedBackup,
+  importEncryptedBackup,
   makeAiContextPackPayload,
   normalizeVaultState,
   purgeExpiredPassiveCaptures,
@@ -35,6 +37,25 @@ describe("vault flow", () => {
     expect(state.candidates.length).toBeGreaterThan(0);
     expect(state.facts).toHaveLength(0);
     expect(state.candidates.some((candidate) => candidate.candidateType === "deadline")).toBe(true);
+  });
+
+  it("requires stronger backup passphrases and records KDF cost", async () => {
+    const state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Backup note",
+      body: "Preferred name: Kota"
+    });
+
+    await expect(exportEncryptedBackup(state, "short")).rejects.toThrow("12文字以上");
+    const backup = await exportEncryptedBackup(state, "LongBackup-2026!");
+    const payload = JSON.parse(backup) as { iterations: number; kdf: string };
+    expect(payload.kdf).toBe("PBKDF2-SHA256");
+    expect(payload.iterations).toBeGreaterThanOrEqual(600000);
+    const restored = await importEncryptedBackup(backup, "LongBackup-2026!");
+
+    expect(restored.sources[0].title).toBe("Backup note");
+    expect(restored.candidates.length).toBeGreaterThan(0);
   });
 
   it("turns an approved candidate into a canonical fact", () => {
@@ -820,6 +841,40 @@ describe("vault flow", () => {
     expect(purged.passiveCaptureEvents[0].processingStatus).toBe("purged");
     expect(purged.candidates.length).toBeGreaterThan(0);
   });
+
+  it("exports encrypted backups with a stronger KDF and rejects weak passphrases", async () => {
+    const state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Backup note",
+      body: "Backup should include life context only after local encryption."
+    });
+
+    await expect(exportEncryptedBackup(state, "short")).rejects.toThrow("12文字以上");
+
+    const backup = await exportEncryptedBackup(state, "StrongPassphrase1!");
+    const payload = JSON.parse(backup) as { iterations: number; cipherText: string };
+    const restored = await importEncryptedBackup(backup, "StrongPassphrase1!");
+
+    expect(payload.iterations).toBe(600000);
+    expect(payload.cipherText).not.toContain("Backup should include");
+    expect(restored.sources[0].title).toBe("Backup note");
+  });
+
+  it("imports legacy encrypted backups that omitted the iteration count", async () => {
+    const state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Legacy backup note",
+      body: "Legacy backup import should remain compatible."
+    });
+    const backup = await makeEncryptedBackupForTest(state, "LegacyPassphrase1!", 120000, false);
+
+    const restored = await importEncryptedBackup(backup, "LegacyPassphrase1!");
+
+    expect(restored.sources[0].title).toBe("Legacy backup note");
+    expect(restored.sources[0].body).toContain("Legacy backup import");
+  });
 });
 
 function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: ReturnType<typeof buildContextPack>) {
@@ -827,4 +882,66 @@ function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: Retur
     ...state,
     contextPacks: [pack, ...state.contextPacks]
   };
+}
+
+async function makeEncryptedBackupForTest(
+  state: VaultState,
+  passphrase: string,
+  iterations: number,
+  includeIterations: boolean
+): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveBackupKeyForTest(passphrase, salt, iterations);
+  const encoded = new TextEncoder().encode(JSON.stringify(state));
+  const cipher = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: typedArrayBuffer(iv) },
+    key,
+    encoded
+  );
+  const payload: Record<string, unknown> = {
+    version: 1,
+    kdf: "PBKDF2-SHA256",
+    salt: bytesToBase64ForTest(salt),
+    iv: bytesToBase64ForTest(iv),
+    cipherText: bytesToBase64ForTest(new Uint8Array(cipher))
+  };
+  if (includeIterations) payload.iterations = iterations;
+  return JSON.stringify(payload);
+}
+
+async function deriveBackupKeyForTest(
+  passphrase: string,
+  salt: Uint8Array,
+  iterations: number
+): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: typedArrayBuffer(salt),
+      iterations,
+      hash: "SHA-256"
+    },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+function typedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function bytesToBase64ForTest(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
 }

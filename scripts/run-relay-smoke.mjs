@@ -119,6 +119,13 @@ function locationHeader(response) {
   return headerValue(response.headers, "location");
 }
 
+function sseEventIds(body) {
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.match(/^id:\s*(.+)$/)?.[1])
+    .filter(Boolean);
+}
+
 async function main() {
   assert(existsSync(relayPath), `missing ${relayPath}; run npm run relay:build first`);
   assert(existsSync(mcpPath), `missing ${mcpPath}; run npm run mcp:build first`);
@@ -277,13 +284,33 @@ async function main() {
     );
     assert(sseWithSession.body.includes("event: ready"), "SSE GET must emit a ready event");
     assert(/(^|\n)id: mcp_sse_/m.test(sseWithSession.body), "SSE GET must emit a stable event id");
-    assert(sseWithSession.body.includes("\"resumeSupported\":false"), "SSE GET must explicitly mark replay unsupported");
+    assert(sseWithSession.body.includes("\"resumeSupported\":true"), "SSE GET must advertise metadata-only resume support");
     assert(
-      sseWithSession.body.includes("\"replayPolicy\":\"metadata_only_no_event_replay\""),
+      sseWithSession.body.includes("\"replayPolicy\":\"metadata_only_per_stream_replay\""),
       "SSE GET must expose the replay policy"
     );
     assert(sseWithSession.body.includes("\"lastEventIdReceived\":true"), "SSE GET must acknowledge Last-Event-ID presence");
-    assert(sseWithSession.body.includes("\"lastEventIdStored\":false"), "SSE GET must state Last-Event-ID values are not stored");
+    assert(sseWithSession.body.includes("\"lastEventIdStored\":false"), "SSE GET must reject unknown client-provided cursors");
+    assert(!sseWithSession.body.includes("mcp_sse_previous"), "SSE GET must not echo unknown Last-Event-ID values");
+    const sseEventId = sseEventIds(sseWithSession.body)[0];
+    assert(sseEventId?.startsWith("mcp_sse_"), "SSE GET must expose a generated resumable event id");
+
+    const sseResume = await request(baseUrl, {
+      path: "/mcp",
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${token}`,
+        "MCP-Protocol-Version": "2025-11-25",
+        "MCP-Session-Id": sessionId,
+        "Last-Event-ID": sseEventId
+      }
+    });
+    assert(sseResume.status === 200, `GET /mcp SSE resume must succeed: ${sseResume.body}`);
+    assert(sseResume.body.includes("\"resumeSupported\":true"), "known SSE cursor must keep resume advertised");
+    assert(sseResume.body.includes("\"lastEventIdReceived\":true"), "SSE resume must acknowledge Last-Event-ID presence");
+    assert(sseResume.body.includes("\"lastEventIdStored\":true"), "SSE resume must recognize generated event ids");
+    assert(sseResume.body.includes("\"replayedEventCount\":0"), "SSE resume with no missed metadata events must report zero replay");
+    assert(!sseResume.body.includes(sseEventId), "SSE resume must not echo the cursor value");
 
     const missingSession = await request(baseUrl, {
       method: "POST",
@@ -512,16 +539,20 @@ async function main() {
     assert(stateBody.tenantId === "smoke", "relay state must expose configured tenant");
     assert(stateBody.registeredClientCount >= 1, "relay state must expose dynamic OAuth client metadata count");
     assert(typeof stateBody.mcpSessionCount === "number", "relay state must expose session count metadata");
-    assert(stateBody.sseResumeSupported === false, "relay state must expose SSE resume support status");
+    assert(stateBody.sseResumeSupported === true, "relay state must expose SSE resume support status");
     assert(
-      stateBody.sseReplayPolicy === "metadata_only_no_event_replay",
+      stateBody.sseReplayPolicy === "metadata_only_per_stream_replay",
       "relay state must expose the metadata-only SSE replay policy"
     );
-    assert(stateBody.sseLastEventIdStored === false, "relay state must not claim to store Last-Event-ID values");
+    assert(stateBody.sseLastEventIdStored === true, "relay state must expose generated SSE cursor availability");
     assert(stateBody.sseEventCount >= 1, "relay state must expose metadata-only SSE event count");
     assert(
       stateBody.recentSseEvents?.[0]?.id?.startsWith("mcp_sse_"),
       "relay state must expose metadata-only SSE event ids"
+    );
+    assert(
+      stateBody.recentSseEvents?.[0]?.replayable === true,
+      "relay state must mark generated SSE metadata events as replayable"
     );
     assert(
       stateBody.recentSseEvents?.[0]?.resumeRequested === true,

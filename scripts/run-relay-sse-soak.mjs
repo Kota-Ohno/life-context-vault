@@ -90,6 +90,13 @@ function mcpHeaders(extra = {}) {
   };
 }
 
+function firstSseEventId(body) {
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.match(/^id:\s*(.+)$/)?.[1])
+    .find(Boolean);
+}
+
 async function main() {
   assert(Number.isFinite(iterations) && iterations > 0, "LCV_SSE_SOAK_ITERATIONS must be a positive integer");
   assert(existsSync(relayPath), `missing ${relayPath}; run npm run relay:build first`);
@@ -137,8 +144,8 @@ async function main() {
     const sessionId = headerValue(initialize.headers, "mcp-session-id");
     assert(sessionId.startsWith("mcp_session_"), "initialize must return MCP-Session-Id");
 
+    let previousId = "client_previous_initial";
     for (let index = 0; index < iterations; index += 1) {
-      const previousId = `client_previous_${index}`;
       const sse = await request(baseUrl, {
         path: "/mcp",
         headers: {
@@ -151,17 +158,26 @@ async function main() {
       });
       assert(sse.status === 200, `SSE GET ${index} must succeed: ${sse.body}`);
       assert(sse.body.includes("event: ready"), `SSE GET ${index} must emit ready`);
-      assert(sse.body.includes("\"resumeSupported\":false"), `SSE GET ${index} must mark replay unsupported`);
-      assert(sse.body.includes("\"lastEventIdStored\":false"), `SSE GET ${index} must avoid cursor storage`);
+      assert(sse.body.includes("\"resumeSupported\":true"), `SSE GET ${index} must mark metadata-only replay supported`);
+      assert(sse.body.includes("\"replayPolicy\":\"metadata_only_per_stream_replay\""), `SSE GET ${index} must expose replay policy`);
+      if (index === 0) {
+        assert(sse.body.includes("\"lastEventIdStored\":false"), "unknown client cursor must not be treated as stored");
+      } else {
+        assert(sse.body.includes("\"lastEventIdStored\":true"), `SSE GET ${index} must resume from generated cursor`);
+        assert(sse.body.includes("\"replayedEventCount\":0"), `SSE GET ${index} must report no missed metadata events`);
+      }
       assert(!sse.body.includes(previousId), `SSE GET ${index} must not echo Last-Event-ID values`);
+      const nextId = firstSseEventId(sse.body);
+      assert(nextId?.startsWith("mcp_sse_"), `SSE GET ${index} must return generated event id`);
+      previousId = nextId;
     }
 
     const state = await request(baseUrl, { path: "/relay/state" });
     assert(state.status === 200, "relay state must be readable for loopback diagnostics");
     const stateBody = state.json();
-    assert(stateBody.sseResumeSupported === false, "relay state must keep SSE resume unsupported");
-    assert(stateBody.sseReplayPolicy === "metadata_only_no_event_replay", "relay state must keep replay policy");
-    assert(stateBody.sseLastEventIdStored === false, "relay state must not store Last-Event-ID values");
+    assert(stateBody.sseResumeSupported === true, "relay state must keep SSE resume support advertised");
+    assert(stateBody.sseReplayPolicy === "metadata_only_per_stream_replay", "relay state must keep replay policy");
+    assert(stateBody.sseLastEventIdStored === true, "relay state must expose generated SSE cursor availability");
     assert(stateBody.sseEventCount <= 200, "relay state must cap recent SSE diagnostics");
     assert(!state.body.includes("client_previous_"), "relay state must not expose Last-Event-ID values");
 

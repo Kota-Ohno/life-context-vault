@@ -31,13 +31,13 @@ The script refuses localhost, non-HTTPS URLs, userinfo, query strings, fragments
 
 ## ChatGPT
 
-Use the generated `chatgpt` section:
+Use the generated `chatgpt` section for the DCR connector path:
 
 - Connector name: `Life Context Vault`
 - Description: explain that the connector returns approved, source-backed Context Packs.
 - Connector URL: the public `https://.../mcp` endpoint.
 
-The OpenAI Apps SDK docs currently describe creating a ChatGPT connector from Settings -> Connectors -> Create, with a public HTTPS MCP server URL as the Connector URL. They also describe OAuth metadata, Dynamic Client Registration, `resource` binding, and Authorization Code + PKCE S256 expectations.
+The Relay currently supports Dynamic Client Registration (DCR): it publishes `registration_endpoint`, creates a client for the connector instance, and requires Authorization Code + PKCE S256 with `resource` binding. OpenAI's Apps SDK auth docs also describe Client ID Metadata Documents (CIMD) as the preferred client registration method when supported. CIMD support is not implemented in this Relay yet; use the DCR connector mode until `client_id_metadata_document_supported` and CIMD validation are added.
 
 ## Claude
 

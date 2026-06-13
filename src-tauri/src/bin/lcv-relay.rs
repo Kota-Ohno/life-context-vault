@@ -37,7 +37,7 @@ const MAX_RELAY_STATE_BACKUP_COUNT: usize = 20;
 const DEFAULT_RELAY_HANDOFF_TTL_SECONDS: u64 = 10 * 60;
 const DEFAULT_MCP_SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MCP_SSE_RETRY_MS: u64 = 5_000;
-const MCP_SSE_REPLAY_POLICY: &str = "metadata_only_no_event_replay";
+const MCP_SSE_REPLAY_POLICY: &str = "metadata_only_per_stream_replay";
 const HTTP_READ_TIMEOUT_SECONDS: u64 = 10;
 const MAX_HTTP_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -460,11 +460,22 @@ struct RelayRequestEvent {
 #[derive(Clone, Debug)]
 struct RelaySseEvent {
   id: String,
+  stream_id: String,
+  sequence: u64,
   client_id: String,
   session_id: Option<String>,
   event_type: String,
   resume_requested: bool,
+  payload: Value,
   occurred_at: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RelaySseReplayPlan {
+  stream_id: String,
+  next_sequence: u64,
+  last_event_id_stored: bool,
+  replay_events: Vec<RelaySseEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -784,23 +795,60 @@ impl RelayState {
     self.persist()
   }
 
-  fn record_sse_event(
+  fn sse_replay_plan(
     &self,
-    event_id: String,
-    client_id: String,
-    session_id: Option<String>,
-    event_type: &str,
-    resume_requested: bool,
-  ) {
+    client_id: &str,
+    session_id: Option<&str>,
+    last_event_id: Option<&str>,
+  ) -> RelaySseReplayPlan {
+    let inner = self.inner.lock().expect("relay state");
+    if let Some(last_event_id) = last_event_id {
+      if let Some(cursor) = inner.sse_events.iter().find(|event| {
+        event.id == last_event_id
+          && event.client_id == client_id
+          && event.session_id.as_deref() == session_id
+      }) {
+        let stream_id = cursor.stream_id.clone();
+        let cursor_sequence = cursor.sequence;
+        let mut replay_events: Vec<RelaySseEvent> = inner
+          .sse_events
+          .iter()
+          .filter(|event| {
+            event.stream_id == stream_id
+              && event.client_id == client_id
+              && event.session_id.as_deref() == session_id
+              && event.sequence > cursor_sequence
+          })
+          .cloned()
+          .collect();
+        replay_events.sort_by_key(|event| event.sequence);
+        let max_sequence = inner
+          .sse_events
+          .iter()
+          .filter(|event| event.stream_id == stream_id)
+          .map(|event| event.sequence)
+          .max()
+          .unwrap_or(cursor_sequence);
+        return RelaySseReplayPlan {
+          stream_id,
+          next_sequence: max_sequence.saturating_add(1),
+          last_event_id_stored: true,
+          replay_events,
+        };
+      }
+    }
+
+    RelaySseReplayPlan {
+      stream_id: random_token("mcp_sse_stream"),
+      next_sequence: 1,
+      last_event_id_stored: false,
+      replay_events: Vec::new(),
+    }
+  }
+
+  fn record_sse_event(&self, event: RelaySseEvent) {
     let mut inner = self.inner.lock().expect("relay state");
-    inner.sse_events.insert(0, RelaySseEvent {
-      id: event_id,
-      client_id,
-      session_id,
-      event_type: event_type.to_string(),
-      resume_requested,
-      occurred_at: system_time_seconds(SystemTime::now()),
-    });
+    inner.sse_events.insert(0, event);
     if inner.sse_events.len() > MAX_RELAY_SSE_EVENTS {
       inner.sse_events.truncate(MAX_RELAY_SSE_EVENTS);
     }
@@ -957,9 +1005,12 @@ impl RelayState {
       .map(|event| {
         json!({
           "id": event.id,
+          "streamId": event.stream_id,
+          "sequence": event.sequence,
           "clientId": event.client_id,
           "sessionId": event.session_id,
           "eventType": event.event_type,
+          "replayable": true,
           "resumeRequested": event.resume_requested,
           "occurredAt": event.occurred_at
         })
@@ -973,9 +1024,9 @@ impl RelayState {
       "handoffCount": inner.handoffs.len(),
       "mcpSessionCount": inner.mcp_sessions.len(),
       "sseEventCount": inner.sse_events.len(),
-      "sseResumeSupported": false,
+      "sseResumeSupported": true,
       "sseReplayPolicy": MCP_SSE_REPLAY_POLICY,
-      "sseLastEventIdStored": false,
+      "sseLastEventIdStored": !inner.sse_events.is_empty(),
       "retention": {
         "requestEventRetentionSeconds": self.retention.request_event_retention_seconds,
         "clientRegistrationRetentionSeconds": self.retention.client_registration_retention_seconds,
@@ -1449,7 +1500,11 @@ fn relay_handoff(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       "message": "handoff signature did not match the Context Pack payload."
     }));
   }
-  let handoff = state.store_handoff(validation.request_id.clone(), Some(client_id), mcp_response);
+  let handoff = state.store_handoff(
+    validation.request_id.clone(),
+    Some(client_id),
+    validation.canonical_response,
+  );
   HttpResponse::json(200, json!({
     "status": "stored",
     "requestId": validation.request_id,
@@ -2204,26 +2259,55 @@ fn handle_mcp_sse_get(
     return response;
   }
 
-  let event_id = random_token("mcp_sse");
   let session_id = mcp_session_id_header(request);
-  let resume_requested = last_event_id_present(request);
-  state.record_sse_event(
-    event_id.clone(),
-    client_id.clone(),
-    session_id,
-    "ready",
-    resume_requested,
+  let last_event_id = last_event_id_header(request);
+  let replay_plan = state.sse_replay_plan(
+    &client_id,
+    session_id.as_deref(),
+    last_event_id.as_deref(),
   );
+  let resume_requested = last_event_id.is_some();
+  let event_id = sse_event_id(&replay_plan.stream_id, replay_plan.next_sequence);
+  let payload = mcp_sse_ready_payload(
+    &client_id,
+    &replay_plan.stream_id,
+    replay_plan.next_sequence,
+    resume_requested,
+    replay_plan.last_event_id_stored,
+    replay_plan.replay_events.len(),
+  );
+  let event = RelaySseEvent {
+    id: event_id,
+    stream_id: replay_plan.stream_id,
+    sequence: replay_plan.next_sequence,
+    client_id: client_id.clone(),
+    session_id,
+    event_type: "ready".to_string(),
+    resume_requested,
+    payload,
+    occurred_at: system_time_seconds(SystemTime::now()),
+  };
+  state.record_sse_event(event.clone());
   record_relay_event(
     state,
     Some(client_id.clone()),
     "sse.listen",
     "GET",
     None,
-    "sse_ready",
+    if replay_plan.last_event_id_stored {
+      "sse_resumed"
+    } else {
+      "sse_ready"
+    },
     "http_sse",
   );
-  mcp_sse_ready_response(request, config, &protocol_version, &client_id, &event_id)
+  mcp_sse_response(
+    request,
+    config,
+    &protocol_version,
+    &event,
+    &replay_plan.replay_events,
+  )
 }
 
 fn handle_mcp_session_delete(
@@ -2459,30 +2543,41 @@ fn media_type_without_parameters(value: &str) -> Option<String> {
   }
 }
 
-fn mcp_sse_ready_response(
-  request: &HttpRequest,
-  config: &RelayConfig,
-  protocol_version: &str,
+fn mcp_sse_ready_payload(
   client_id: &str,
-  event_id: &str,
-) -> HttpResponse {
-  let last_event_id_received = last_event_id_present(request);
-  let data = json!({
+  stream_id: &str,
+  sequence: u64,
+  last_event_id_received: bool,
+  last_event_id_stored: bool,
+  replayed_event_count: usize,
+) -> Value {
+  json!({
     "status": "ready",
     "transport": "mcp_streamable_http_sse",
     "clientId": client_id,
-    "resumeSupported": false,
+    "resumeSupported": true,
     "replayPolicy": MCP_SSE_REPLAY_POLICY,
+    "streamId": stream_id,
+    "eventSequence": sequence,
     "lastEventIdReceived": last_event_id_received,
-    "lastEventIdStored": false,
-    "message": "SSE receive channel is available. Life Context Vault does not replay prior events from Relay memory."
-  });
-  let body = format!(
-    "retry: {DEFAULT_MCP_SSE_RETRY_MS}\n\
-     id: {event_id}\n\
-     event: ready\n\
-     data: {data}\n\n"
-  );
+    "lastEventIdStored": last_event_id_stored,
+    "replayedEventCount": replayed_event_count,
+    "message": "SSE receive channel is available. Life Context Vault replays only metadata-only Relay SSE events from memory; Context Pack, MCP response, Raw Source, and tool-result bodies are never persisted for replay."
+  })
+}
+
+fn mcp_sse_response(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  protocol_version: &str,
+  event: &RelaySseEvent,
+  replay_events: &[RelaySseEvent],
+) -> HttpResponse {
+  let mut body = format!("retry: {DEFAULT_MCP_SSE_RETRY_MS}\n");
+  for replay_event in replay_events {
+    body.push_str(&format_sse_event(replay_event));
+  }
+  body.push_str(&format_sse_event(event));
   HttpResponse::sse(200, body)
     .with_mcp_protocol_version(protocol_version)
     .with_header("Connection", "close")
@@ -2490,12 +2585,25 @@ fn mcp_sse_ready_response(
     .with_cors_for_request(request, config)
 }
 
-fn last_event_id_present(request: &HttpRequest) -> bool {
+fn format_sse_event(event: &RelaySseEvent) -> String {
+  format!(
+    "id: {}\n\
+     event: {}\n\
+     data: {}\n\n",
+    event.id, event.event_type, event.payload
+  )
+}
+
+fn sse_event_id(stream_id: &str, sequence: u64) -> String {
+  format!("{stream_id}_{sequence}")
+}
+
+fn last_event_id_header(request: &HttpRequest) -> Option<String> {
   request
     .header("Last-Event-ID")
     .map(str::trim)
     .filter(|value| !value.is_empty())
-    .is_some()
+    .map(str::to_string)
 }
 
 fn required_scope_for_mcp_body(body: &str) -> &'static str {
@@ -2560,6 +2668,7 @@ fn handoff_response_for_mcp_request(state: &RelayState, body: &str, client_id: &
 struct HandoffValidation {
   request_id: String,
   expires_at: String,
+  canonical_response: Value,
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -2614,10 +2723,54 @@ fn validate_handoff_mcp_response(
     .and_then(Value::as_str)
     .filter(|value| !value.trim().is_empty())
     .ok_or_else(|| "handoff contextPack must include expiresAt".to_string())?;
+  let canonical_response = canonical_handoff_mcp_response(response, structured, context_pack);
   Ok(HandoffValidation {
     request_id: request_id.to_string(),
     expires_at: expires_at.to_string(),
+    canonical_response,
   })
+}
+
+fn canonical_handoff_mcp_response(response: &Value, structured: &Value, context_pack: &Value) -> Value {
+  let canonical_context_pack = json!({
+    "trustBoundary": context_pack.get("trustBoundary").cloned().unwrap_or(Value::Null),
+    "id": context_pack.get("id").cloned().unwrap_or(Value::Null),
+    "requestId": context_pack.get("requestId").cloned().unwrap_or(Value::Null),
+    "clientId": context_pack.get("clientId").cloned().unwrap_or(Value::Null),
+    "generatedAt": context_pack.get("generatedAt").cloned().unwrap_or(Value::Null),
+    "expiresAt": context_pack.get("expiresAt").cloned().unwrap_or(Value::Null),
+    "items": context_pack.get("items").cloned().unwrap_or_else(|| json!([])),
+    "sourceSnippets": context_pack.get("sourceSnippets").cloned().unwrap_or_else(|| json!([])),
+    "warnings": context_pack.get("warnings").cloned().unwrap_or_else(|| json!([])),
+    "excludedItems": context_pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
+    "maxSensitivityIncluded": context_pack.get("maxSensitivityIncluded").cloned().unwrap_or(Value::Null),
+    "confirmationStatus": context_pack.get("confirmationStatus").cloned().unwrap_or(Value::Null),
+  });
+  let message = "The Context Pack has been confirmed and can be used for this answer.";
+  let canonical_structured = json!({
+    "mutated": structured.get("mutated").cloned().unwrap_or(Value::Bool(false)),
+    "status": "fulfilled",
+    "requestId": structured.get("requestId").cloned().unwrap_or(Value::Null),
+    "contextPack": canonical_context_pack,
+    "message": message
+  });
+  let canonical_result = json!({
+    "content": [{
+      "type": "text",
+      "text": message
+    }],
+    "structuredContent": canonical_structured,
+    "isError": false
+  });
+  if response.get("result").is_some() {
+    json!({
+      "jsonrpc": response.get("jsonrpc").cloned().unwrap_or_else(|| json!("2.0")),
+      "id": response.get("id").cloned().unwrap_or(Value::Null),
+      "result": canonical_result
+    })
+  } else {
+    canonical_structured
+  }
 }
 
 fn relay_handoff_signature(
@@ -3595,19 +3748,20 @@ mod tests {
     assert!(event_id.starts_with("mcp_sse_"));
     assert!(body.contains("event: ready"));
     assert!(body.contains("retry: 5000"));
-    assert!(body.contains("\"resumeSupported\":false"));
-    assert!(body.contains("\"replayPolicy\":\"metadata_only_no_event_replay\""));
+    assert!(body.contains("\"resumeSupported\":true"));
+    assert!(body.contains("\"replayPolicy\":\"metadata_only_per_stream_replay\""));
     assert!(body.contains("\"lastEventIdReceived\":false"));
     assert!(body.contains("\"lastEventIdStored\":false"));
+    assert!(body.contains("\"replayedEventCount\":0"));
     let status = state.store_status();
     assert_eq!(status.get("sseEventCount").and_then(Value::as_u64), Some(1));
     assert_eq!(
       status.get("sseReplayPolicy").and_then(Value::as_str),
-      Some("metadata_only_no_event_replay")
+      Some("metadata_only_per_stream_replay")
     );
     assert_eq!(
       status.get("sseLastEventIdStored").and_then(Value::as_bool),
-      Some(false)
+      Some(true)
     );
     assert_eq!(
       status
@@ -3617,6 +3771,25 @@ mod tests {
         .and_then(|event| event.get("id"))
         .and_then(Value::as_str),
       Some(event_id)
+    );
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("streamId"))
+        .and_then(Value::as_str)
+        .map(|stream_id| event_id.starts_with(stream_id)),
+      Some(true)
+    );
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("sequence"))
+        .and_then(Value::as_u64),
+      Some(1)
     );
     assert_eq!(
       status
@@ -3648,7 +3821,7 @@ mod tests {
   }
 
   #[test]
-  fn get_mcp_accepts_last_event_id_without_persisting_replay_body() {
+  fn get_mcp_accepts_unknown_last_event_id_without_persisting_client_cursor() {
     let state = RelayState::new();
     let session = state.start_mcp_session("static-dev-token".to_string());
     let mut headers = authorized_mcp_sse_headers("test-token");
@@ -3668,7 +3841,7 @@ mod tests {
     assert_eq!(response.status, 200);
     assert!(body.contains("\"lastEventIdReceived\":true"));
     assert!(body.contains("\"lastEventIdStored\":false"));
-    assert!(body.contains("\"replayPolicy\":\"metadata_only_no_event_replay\""));
+    assert!(body.contains("\"replayPolicy\":\"metadata_only_per_stream_replay\""));
     let status = state.store_status();
     assert_eq!(
       status
@@ -3689,6 +3862,134 @@ mod tests {
       Some(true)
     );
     assert!(!status.to_string().contains("mcp_sse_previous"));
+  }
+
+  #[test]
+  fn get_mcp_resumes_known_sse_event_id_without_echoing_cursor() {
+    let state = RelayState::new();
+    let session = state.start_mcp_session("static-dev-token".to_string());
+    let first = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: {
+        let mut headers = authorized_mcp_sse_headers("test-token");
+        headers.push(("MCP-Session-Id".to_string(), session.id.clone()));
+        headers
+      },
+      body: String::new(),
+    };
+
+    let first_response = route_request(&first, &test_config(), &state);
+    let first_body = String::from_utf8(first_response.body).expect("first sse body");
+    let first_event_id = first_body
+      .lines()
+      .find_map(|line| line.strip_prefix("id: "))
+      .expect("first event id")
+      .to_string();
+
+    let mut resume_headers = authorized_mcp_sse_headers("test-token");
+    resume_headers.push(("MCP-Session-Id".to_string(), session.id.clone()));
+    resume_headers.push(("Last-Event-ID".to_string(), first_event_id.clone()));
+    let resumed = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: resume_headers,
+      body: String::new(),
+    };
+
+    let response = route_request(&resumed, &test_config(), &state);
+    let body = String::from_utf8(response.body).expect("resumed sse body");
+
+    assert_eq!(response.status, 200);
+    assert!(body.contains("\"resumeSupported\":true"));
+    assert!(body.contains("\"lastEventIdReceived\":true"));
+    assert!(body.contains("\"lastEventIdStored\":true"));
+    assert!(body.contains("\"replayedEventCount\":0"));
+    assert!(!body.contains(&first_event_id));
+    let status = state.store_status();
+    assert_eq!(status.get("sseEventCount").and_then(Value::as_u64), Some(2));
+    assert_eq!(
+      status
+        .get("recentSseEvents")
+        .and_then(Value::as_array)
+        .and_then(|events| events.first())
+        .and_then(|event| event.get("sequence"))
+        .and_then(Value::as_u64),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn get_mcp_replays_metadata_only_sse_events_after_known_cursor() {
+    let state = RelayState::new();
+    let session = state.start_mcp_session("static-dev-token".to_string());
+    let first = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: {
+        let mut headers = authorized_mcp_sse_headers("test-token");
+        headers.push(("MCP-Session-Id".to_string(), session.id.clone()));
+        headers
+      },
+      body: String::new(),
+    };
+
+    let first_response = route_request(&first, &test_config(), &state);
+    let first_body = String::from_utf8(first_response.body).expect("first sse body");
+    let first_event_id = first_body
+      .lines()
+      .find_map(|line| line.strip_prefix("id: "))
+      .expect("first event id")
+      .to_string();
+    let stream_id = state
+      .store_status()
+      .get("recentSseEvents")
+      .and_then(Value::as_array)
+      .and_then(|events| events.first())
+      .and_then(|event| event.get("streamId"))
+      .and_then(Value::as_str)
+      .expect("stream id")
+      .to_string();
+    let diagnostic_event = RelaySseEvent {
+      id: sse_event_id(&stream_id, 2),
+      stream_id: stream_id.clone(),
+      sequence: 2,
+      client_id: "static-dev-token".to_string(),
+      session_id: Some(session.id.clone()),
+      event_type: "diagnostic".to_string(),
+      resume_requested: false,
+      payload: json!({
+        "status": "diagnostic",
+        "message": "metadata only"
+      }),
+      occurred_at: system_time_seconds(SystemTime::now()),
+    };
+    state.record_sse_event(diagnostic_event);
+
+    let mut resume_headers = authorized_mcp_sse_headers("test-token");
+    resume_headers.push(("MCP-Session-Id".to_string(), session.id.clone()));
+    resume_headers.push(("Last-Event-ID".to_string(), first_event_id.clone()));
+    let resumed = HttpRequest {
+      method: "GET".to_string(),
+      path: "/mcp".to_string(),
+      query: String::new(),
+      headers: resume_headers,
+      body: String::new(),
+    };
+
+    let response = route_request(&resumed, &test_config(), &state);
+    let body = String::from_utf8(response.body).expect("replay sse body");
+
+    assert_eq!(response.status, 200);
+    assert!(body.contains("event: diagnostic"));
+    assert!(body.contains("\"replayedEventCount\":1"));
+    assert!(body.contains("\"lastEventIdStored\":true"));
+    assert!(!body.contains(&first_event_id));
+    assert!(!body.contains("Approved handoff context"));
+    assert!(!body.contains("life_context.request_context_pack"));
   }
 
   #[test]
@@ -4535,6 +4836,56 @@ mod tests {
     };
     let invalid_response = relay_handoff(&invalid_request, &test_config(), &state);
     assert_eq!(invalid_response.status, 400);
+  }
+
+  #[test]
+  fn relay_handoff_canonicalizes_signed_response_before_caching() {
+    let state = RelayState::new();
+    let client_id = "client_chatgpt";
+    let request_id = "req_canonical";
+    let expires_at = (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
+    let mut mcp_response = test_handoff_response(request_id, &expires_at);
+    mcp_response["result"]["structuredContent"]["contextPack"]["rawSourceBody"] =
+      json!("raw source body must not be cached");
+    mcp_response["result"]["structuredContent"]["contextPack"]["vault"] =
+      json!({"facts": ["full vault must not be cached"]});
+    mcp_response["result"]["structuredContent"]["contextPack"]["unapprovedCandidates"] =
+      json!(["candidate must not be cached"]);
+    mcp_response["result"]["rawToolResult"] = json!("tool body must not be cached");
+    let signature = relay_handoff_signature(
+      "test-handoff-secret",
+      client_id,
+      request_id,
+      &expires_at,
+      &mcp_response,
+    )
+    .expect("handoff signature");
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/relay/handoff".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: json!({
+        "clientId": client_id,
+        "requestId": request_id,
+        "expiresAt": expires_at,
+        "mcpResponse": mcp_response,
+        "handoffSignature": signature
+      })
+      .to_string(),
+    };
+
+    let response = relay_handoff(&request, &test_config(), &state);
+    assert_eq!(response.status, 200);
+    let cached = state
+      .handoff_response(request_id, client_id)
+      .expect("cached handoff");
+    let cached_text = cached.to_string();
+    assert!(cached_text.contains("Approved handoff context"));
+    assert!(!cached_text.contains("raw source body must not be cached"));
+    assert!(!cached_text.contains("full vault must not be cached"));
+    assert!(!cached_text.contains("candidate must not be cached"));
+    assert!(!cached_text.contains("tool body must not be cached"));
   }
 
   #[test]

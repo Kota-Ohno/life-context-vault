@@ -1932,25 +1932,26 @@ export function App() {
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
-          <NavButton icon={<Home size={18} />} label="Home" active={view === "home"} onClick={() => setView("home")} />
-          <NavButton icon={<Inbox size={18} />} label="Inbox" active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
-          <NavButton icon={<FileText size={18} />} label="Sources" active={view === "sources"} onClick={() => setView("sources")} />
-          <NavButton icon={<Plug size={18} />} label="Connections" active={view === "connections"} onClick={() => setView("connections")} />
+          <NavButton icon={<Home size={18} />} label="Home" ariaLabel="Home画面を開く" active={view === "home"} onClick={() => setView("home")} />
+          <NavButton icon={<Inbox size={18} />} label="Inbox" ariaLabel="Inbox画面を開く" active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
+          <NavButton icon={<FileText size={18} />} label="Sources" ariaLabel="Sources画面を開く" active={view === "sources"} onClick={() => setView("sources")} />
+          <NavButton icon={<Plug size={18} />} label="Connections" ariaLabel="Connections画面を開く" active={view === "connections"} onClick={() => setView("connections")} />
           <NavButton
             icon={<MessageSquare size={18} />}
             label="Requests"
+            ariaLabel="Requests画面を開く"
             active={view === "requests"}
             onClick={() => setView("requests")}
             badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
           />
-          <NavButton icon={<Search size={18} />} label="Search" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Activity size={18} />} label="Audit" active={view === "audit"} onClick={() => setView("audit")} />
-          <NavButton icon={<Settings size={18} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
+          <NavButton icon={<Search size={18} />} label="Search" ariaLabel="Search画面を開く" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
+          <NavButton icon={<Activity size={18} />} label="Audit" ariaLabel="Audit画面を開く" active={view === "audit"} onClick={() => setView("audit")} />
+          <NavButton icon={<Settings size={18} />} label="Settings" ariaLabel="Settings画面を開く" active={view === "settings"} onClick={() => setView("settings")} />
         </nav>
         <div className="sidebar-stats">
-          <Metric label="Sources" value={state.sources.length} />
-          <Metric label="Facts" value={activeFacts.length} />
-          <Metric label="Requests" value={state.contextPackRequests.length} />
+          <Metric label="元データ" value={state.sources.length} />
+          <Metric label="Fact" value={activeFacts.length} />
+          <Metric label="依頼" value={state.contextPackRequests.length} />
         </div>
       </aside>
 
@@ -2190,19 +2191,21 @@ export function App() {
 function NavButton({
   icon,
   label,
+  ariaLabel,
   active,
   onClick,
   badge
 }: {
   icon: React.ReactNode;
   label: string;
+  ariaLabel?: string;
   active: boolean;
   onClick: () => void;
   badge?: number;
 }) {
   return (
     <button
-      aria-label={label}
+      aria-label={ariaLabel ?? label}
       aria-current={active ? "page" : undefined}
       className={active ? "nav-item active" : "nav-item"}
       onClick={onClick}
@@ -5224,7 +5227,7 @@ function SearchView({
           <span>{modeCopy.body}</span>
           {searchError && <span>{searchError}</span>}
         </div>
-        <Badge>{results.length} results</Badge>
+        <Badge>{results.length}件</Badge>
       </div>
       <div className="domain-list">
         {results.map((fact) => (
@@ -5353,7 +5356,11 @@ function SettingsView({
           <Lock size={18} />
         </div>
         <div className="form-stack">
-          <Input label="パスフレーズ" value={passphrase} onChange={setPassphrase} placeholder="復元にも同じ値が必要です" type="password" />
+          <Input label="パスフレーズ" value={passphrase} onChange={setPassphrase} placeholder="12文字以上・3種類以上の文字を含める" type="password" />
+          <div className="trust-note attention-note">
+            <ShieldAlert size={16} />
+            <span>バックアップにはVault内の生活コンテキスト全体が入ります。推測されにくい長いパスフレーズを使い、共有や保管場所に注意してください。</span>
+          </div>
           <button className="primary-button" onClick={exportBackup} type="button">
             <Download size={16} />
             バックアップを作成
@@ -5377,14 +5384,14 @@ function SettingsView({
           {restorePreview ? (
             <div className="restore-preview">
               <div className="restore-preview-grid">
-                <Metric label="Sources" value={restorePreview.counts.sources} />
-                <Metric label="Facts" value={restorePreview.counts.facts} />
+                <Metric label="元データ" value={restorePreview.counts.sources} />
+                <Metric label="保存済みFact" value={restorePreview.counts.facts} />
                 <Metric label="Inbox候補" value={restorePreview.counts.candidates} />
                 <Metric label="Context Packs" value={restorePreview.counts.packs} />
-                <Metric label="Requests" value={restorePreview.counts.requests} />
-                <Metric label="Captures" value={restorePreview.counts.captureEvents} />
+                <Metric label="依頼" value={restorePreview.counts.requests} />
+                <Metric label="Capture" value={restorePreview.counts.captureEvents} />
                 <Metric label="AI接続" value={restorePreview.counts.connectorSessions} />
-                <Metric label="Policies" value={restorePreview.counts.policies} />
+                <Metric label="Policy" value={restorePreview.counts.policies} />
                 <Metric label="Audit" value={restorePreview.counts.auditEvents} />
               </div>
               <div className="restore-receipt-grid">
@@ -5488,7 +5495,7 @@ function SettingsView({
           ) : (
             <div className="trust-note">
               <ShieldAlert size={16} />
-              <span>LibreOfficeはまだ見つかっていません。インストール後にこの画面を開き直すか、下のCommandへローカル変換コマンドを直接入力してください。</span>
+              <span>LibreOfficeはまだ見つかっていません。インストール後にこの画面を開き直すか、下の変換コマンドへローカル変換コマンドを直接入力してください。</span>
             </div>
           )}
           <div className="table-list">
@@ -5640,7 +5647,7 @@ function SettingsView({
           ) : (
             <div className="trust-note">
               <ShieldAlert size={16} />
-              <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のCommandへローカルOCRコマンドを直接入力してください。</span>
+              <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のOCRコマンドへローカルOCRコマンドを直接入力してください。</span>
             </div>
           )}
           <div className="table-list">
@@ -5739,7 +5746,7 @@ function SettingsView({
           <div className="danger-zone">
             <div className="trust-note attention-note">
               <ShieldAlert size={16} />
-              <span>Vaultをクリアすると、Sources、候補、Fact、Context Pack、接続監査が空になります。バックアップが必要なら先にExportしてください。</span>
+              <span>Vaultをクリアすると、Sources、候補、Fact、Context Pack、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
             <div className="clear-impact-list" aria-label="Vault clear impact">
               {clearImpactSections.map((section) => (
@@ -7936,8 +7943,8 @@ export function aiAccessChecklistItems(
     {
       label: "Streamable HTTP",
       detail: status?.relayReachable
-        ? "POST JSON-RPC、GET SSE ready、MCP session、DELETE終了に対応しています。SSE event replayは未広告で、RelayはLast-Event-ID値を保存しません。"
-        : "Relay起動後にSSE ready診断で確認できます。event replayは対応状況を/relay/stateで確認します。",
+        ? "POST JSON-RPC、GET SSE ready、MCP session、DELETE終了に対応しています。SSE再開はメタデータ限定で、AI本文やContext Pack本文は保存しません。"
+        : "Relay起動後にSSE ready診断で確認できます。再開対応は/relay/stateで確認します。",
       state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
     },
     {

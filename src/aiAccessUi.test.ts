@@ -268,7 +268,7 @@ describe("AI access UI safety", () => {
     expect(JSON.stringify(browserOnly)).not.toContain("secret-code");
   });
 
-  it("separates SSE ready diagnostics from unsupported event replay in the AI access checklist", () => {
+  it("separates SSE ready diagnostics from metadata-only event replay in the AI access checklist", () => {
     const status = {
       managedByApp: true,
       relayMode: "local_managed",
@@ -291,8 +291,8 @@ describe("AI access UI safety", () => {
 
     expect(streamableHttp?.state).toBe("ready");
     expect(streamableHttp?.detail).toContain("GET SSE ready");
-    expect(streamableHttp?.detail).toContain("SSE event replayは未広告");
-    expect(streamableHttp?.detail).toContain("Last-Event-ID値を保存しません");
+    expect(streamableHttp?.detail).toContain("SSE再開はメタデータ限定");
+    expect(streamableHttp?.detail).toContain("Context Pack本文は保存しません");
   });
 
   it("shows source titles for source-backed facts", () => {

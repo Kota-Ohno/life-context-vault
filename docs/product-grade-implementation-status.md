@@ -43,6 +43,7 @@ Last updated: 2026-06-13
   - `passive_capture_events`
   - `audit_events`
   - `facts_fts`
+  - Source body projection now splits large Source text into deterministic overlapping `source_chunks` instead of storing every Source as a single chunk.
 - Added native Vault Core search path:
   - Tauri Search uses encrypted SQLite `facts_fts` for ApprovedFact search
   - domain and sensitivity filters are applied in SQL
@@ -116,6 +117,7 @@ Last updated: 2026-06-13
   - `POST /relay/handoff` accepts signed, already confirmed MCP responses for approved Context Packs
   - handoff responses are memory-only, TTL-bound, and default to 10 minutes
   - the Relay accepts only fulfilled `ContextPack only` MCP responses
+  - accepted handoffs are canonicalized before memory caching so stray Raw Source, Vault snapshot, unapproved Candidate, or tool-result fields cannot ride along with an otherwise valid signed payload
   - `life_context.get_request_status` can return a cached handoff response when the local Agent path is temporarily offline
   - `/relay/state` exposes only handoff metadata and retention settings, never Pack body text
   - relay state persistence and metadata backups still exclude Context Pack bodies
@@ -283,13 +285,15 @@ Last updated: 2026-06-13
   - `npm run product:check` now runs the smoke after release sidecar binaries are built
 - Added local SSE soak coverage:
   - `npm run relay:sse-soak` opens repeated authenticated Streamable HTTP receive channels against release `lcv-relay`
-  - the soak verifies ready events, unsupported replay disclosure, non-storage/non-echo of `Last-Event-ID`, bounded recent SSE diagnostics, and metadata-only persisted state
+  - the soak verifies ready events, generated-event-id resume, unknown-cursor non-storage/non-echo, bounded recent SSE diagnostics, and metadata-only persisted state
   - `npm run product:check:full` includes the soak for release candidates, while `product:check` keeps the default loop bounded
 - Added Streamable HTTP SSE receive-channel support:
   - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
-  - `Last-Event-ID` is accepted for compatibility but not persisted or replayed; the ready event declares `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`
-  - relay state and persisted metadata remain body-free and exclude SSE cursor values
-  - ready SSE events now carry a generated `mcp_sse_*` event id and the Relay exposes metadata-only recent SSE event diagnostics plus replay policy without storing Last-Event-ID values
+  - `Last-Event-ID` is accepted for compatibility; generated Relay SSE event ids can resume the same client/session stream inside the bounded in-memory metadata window
+  - unknown client-provided `Last-Event-ID` values are acknowledged as received but not stored or echoed
+  - the ready event declares `resumeSupported: true`, `replayPolicy: metadata_only_per_stream_replay`, and whether the cursor was recognized
+  - relay state and persisted metadata remain body-free and exclude client-provided SSE cursor values
+  - ready SSE events now carry a generated `mcp_sse_*` event id and the Relay exposes metadata-only recent SSE event diagnostics plus replay policy without storing Context Pack, MCP response, Raw Source, or tool-result bodies
 - Added Universal AI Access readiness UX:
   - Connections now shows the MCP endpoint, Remote/Local/Copy access routes, Context Pack boundary, and readiness checklist in one first-screen panel
   - Remote Relay diagnostics include an SSE ready check alongside health and POST header checks
@@ -310,6 +314,10 @@ Last updated: 2026-06-13
   - OCR/Legacy Office provider output is drained concurrently with bounded buffers, and temporary document directories are cleaned on failure
   - plaintext Vault migration backups are deleted after verified encrypted migration by default
 - Kept encrypted JSON backup compatibility through the existing backup flow.
+- Strengthened encrypted JSON backups:
+  - new browser fallback exports use PBKDF2-SHA256 with 600,000 iterations
+  - restore remains compatible with legacy 120,000-iteration backups and legacy backups that omitted the iteration count
+  - Settings explains the passphrase risk and requires a longer mixed-character backup passphrase before export
 
 ## Still Remaining For Full Product Grade
 
@@ -317,7 +325,7 @@ Last updated: 2026-06-13
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Remote MCP hosted-client certification and true event replay/resumability if provider certification requires more than the current SSE readiness channel and session lifecycle.
+- Remote MCP hosted-client certification and provider-specific long-lived SSE behavior if certification requires more than the current metadata-only resume window and session lifecycle.
 
 ## Verification
 
@@ -845,7 +853,7 @@ Last updated: 2026-06-13
 
 - Product fit: ChatGPT/Claude-style hosted MCP smoke tests now get explicit Streamable HTTP transport guidance when `/mcp` is called with missing or incompatible POST headers.
 - Security/privacy: malformed MCP POSTs are rejected before OAuth, Agent forwarding, direct sidecar fallback, or any Vault read path. The Relay still exposes only Context Pack tools and does not store MCP request bodies.
-- Technical design: `POST /mcp` requires `Content-Type: application/json` and `Accept: application/json, text/event-stream`, returning `415 unsupported_media_type` or `406 not_acceptable` before authorization. Full SSE/resumability support stays deferred.
+- Technical design: `POST /mcp` requires `Content-Type: application/json` and `Accept: application/json, text/event-stream`, returning `415 unsupported_media_type` or `406 not_acceptable` before authorization. GET `/mcp` handles the SSE receive channel and metadata-only resume path.
 - Verification: Relay unit tests cover missing `Accept`, non-JSON `Content-Type`, preserved OAuth challenges for well-formed unauthenticated requests, and cached handoff behavior under the new header contract. `npm run product:check` passed.
 - Review fallback: SubAgents were not used for this incremental protocol-hardening slice; the main thread ran separate compatibility, security/privacy, product, and maintainability passes.
 
@@ -869,7 +877,7 @@ Last updated: 2026-06-13
 
 - Product fit: hosted MCP clients can now open `GET /mcp` as an SSE receive channel instead of hitting a POST-only method boundary, which reduces connector compatibility risk while keeping `POST /mcp` as the only JSON-RPC request path.
 - Security/privacy: SSE GET requires `Accept: text/event-stream` plus a valid bearer token, session ids remain client-bound, `Last-Event-ID` values are not persisted, and the ready event carries no Context Pack, Raw Source, tool result, or request body content.
-- Technical design: the Relay emits a short `ready` SSE event with `retry: 5000`, `resumeSupported: false`, and `lastEventIdReceived` so clients get a clear non-replayable receive-channel contract. Unsupported `/mcp` methods now advertise `Allow: GET, POST, DELETE, OPTIONS`.
+- Technical design: the Relay emits a short `ready` SSE event with `retry: 5000`, a generated event id, and `lastEventIdReceived`. Unsupported `/mcp` methods now advertise `Allow: GET, POST, DELETE, OPTIONS`.
 - Verification: Relay unit coverage was added for missing SSE Accept, unauthorized SSE GET, authorized ready events, Last-Event-ID non-persistence, and unsupported method boundaries. The release HTTP smoke now checks real-binary SSE behavior.
 - Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran separate protocol compatibility, security/privacy, operations, and maintainability passes.
 
@@ -877,7 +885,7 @@ Last updated: 2026-06-13
 
 - Product fit: Relay operators can now see whether hosted MCP clients are opening the SSE receive channel and whether resume was requested, without needing packet logs or MCP body inspection. This makes connector setup failures easier to diagnose before a hosted beta.
 - Security/privacy: Relay state exposes only generated SSE event ids, client id, optional session id, event type, timestamps, and a boolean `resumeRequested`. It still does not persist MCP bodies, Context Pack bodies, Raw Sources, tool responses, `MCP-Session-Id` values in the state file, or the actual `Last-Event-ID` cursor value.
-- Technical design: `GET /mcp` now records a memory-only `RelaySseEvent` when it emits the `ready` SSE event. `/relay/state` reports `sseResumeSupported: false`, bounded `recentSseEvents`, and `sseEventCount`; persisted relay state remains limited to OAuth client registrations and request metadata.
+- Technical design: `GET /mcp` now records a memory-only `RelaySseEvent` when it emits the `ready` SSE event. `/relay/state` reports `sseResumeSupported: true`, bounded `recentSseEvents`, and `sseEventCount`; persisted relay state remains limited to OAuth client registrations and request metadata.
 - Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture` and `npm run relay:smoke` passed. The smoke now asserts real release-binary SSE event ids, metadata-only SSE diagnostics, `resumeRequested`, and non-persistence of raw `Last-Event-ID` values.
 - Review fallback: SubAgents were not used for this incremental protocol-hardening slice; the main thread ran protocol compatibility, security/privacy, operations, and maintainability passes.
 
@@ -1056,10 +1064,26 @@ Last updated: 2026-06-13
 ### Remote MCP SSE Replay Policy Slice
 
 - Product fit: Connections and Relay diagnostics now separate "SSE ready channel works" from "event replay/resume is supported." This avoids misleading hosted-client setup during provider certification and gives operators a precise `/relay/state` signal.
-- Security/privacy: the Relay still does not persist `Last-Event-ID` values, MCP bodies, Context Pack bodies, Raw Sources, or tool responses. The SSE ready event and `/relay/state` expose only `resumeSupported: false`, `replayPolicy: metadata_only_no_event_replay`, and `lastEventIdStored: false`.
-- Technical design: `GET /mcp` ready payloads and `/relay/state` now carry the same replay policy. Connections labels the command as an SSE ready check and states that event replay is not advertised, so future true resumability work has a clear contract to update.
-- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed. The UI helper test confirms the readiness checklist mentions `GET SSE ready`, unadvertised replay, and non-storage of `Last-Event-ID` values. System Chrome headless rendered Connections at desktop `1280x900` and mobile `390x844`: `SSE診断をコピー` is visible, buttons do not overflow, and there is no page-level horizontal overflow.
+- Security/privacy: that slice made replay capability explicit without persisting `Last-Event-ID` values, MCP bodies, Context Pack bodies, Raw Sources, or tool responses. The later metadata-resume slice upgrades the advertised policy to generated-id replay while preserving that storage boundary.
+- Technical design: `GET /mcp` ready payloads and `/relay/state` now carry the same replay policy. Connections labels the command as an SSE ready check and keeps durable resumability separate from the current memory-only metadata replay window.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `npm run relay:build`, `npm run relay:smoke`, and `git diff --check` passed for that earlier policy slice. The later metadata-resume slice updates the UI helper and release smoke to advertise generated-id metadata replay. System Chrome headless rendered Connections at desktop `1280x900` and mobile `390x844`: `SSE診断をコピー` is visible, buttons do not overflow, and there is no page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental protocol/UX slice; the main thread ran protocol compatibility, security/privacy, product, and maintainability passes.
+
+### Remote MCP SSE Metadata Resume Slice
+
+- Product fit: hosted MCP clients can now reconnect with a Relay-generated SSE event id and receive a concrete metadata-only resume acknowledgement instead of a permanent "replay unsupported" signal. This reduces provider-certification risk while keeping the external data boundary as Context Pack only.
+- Security/privacy: resume works only for generated event ids already present in the bounded in-memory SSE window for the same client/session stream. Unknown client-provided `Last-Event-ID` values are not stored or echoed, and replayable payloads are Relay metadata only; Context Pack bodies, MCP response bodies, Raw Sources, tool results, OAuth tokens, and session ids are not written to persisted relay state.
+- Technical design: `RelaySseEvent` now carries `streamId`, monotonic `sequence`, and a metadata payload. GET `/mcp` builds a replay plan from `Last-Event-ID`, replays missed metadata events from memory, emits the current `ready` event, and reports `resumeSupported: true`, `replayPolicy: metadata_only_per_stream_replay`, `lastEventIdStored`, and `replayedEventCount`.
+- Verification: `cargo test --manifest-path src-tauri/Cargo.toml --bin lcv-relay -- --nocapture`, `npm run relay:build`, `npm run relay:smoke`, `npm run mcp:build`, `npm run relay:sse-soak`, `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. Chrome visual checks verified Connections at desktop `1280px` and mobile `390px`: metadata-resume copy renders, old unsupported-replay copy is absent, and neither viewport has page-level horizontal overflow.
+- Review fallback: SubAgents were not used for this incremental protocol slice; the main thread ran protocol compatibility, security/privacy, product fit, UI/UX, and maintainability passes.
+
+### Storage Backup And Handoff Hardening Slice
+
+- Product fit: large uploaded documents now project into multiple deterministic Source chunks, which keeps the Vault architecture aligned with the planned `source_chunks` retrieval model instead of letting one huge Source dominate indexing. Backup copy now explains and enforces stronger user-chosen protection for the full life-context export.
+- Security/privacy: encrypted browser fallback backups now require a stronger passphrase and use a higher PBKDF2 iteration count for new exports while keeping legacy restore compatibility. Relay handoff cache storage now canonicalizes a valid signed response before caching so extra Raw Source, full Vault, unapproved Candidate, or raw tool-result fields cannot persist in the short-lived handoff cache.
+- Technical design: Source projection uses a 4,000-character target chunk with a 300-character overlap and stable chunk ids. Backup payloads carry `iterations`, defaulting to 600,000 on export and falling back to 120,000 for older imports. Handoff validation returns a canonical MCP response containing only the approved Context Pack boundary fields.
+- Verification: `npm test -- --run src/vault.test.ts src/aiAccessUi.test.ts`, focused Rust projection and handoff tests, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. Chrome visual checks verified Settings at desktop `1280px` and mobile `390px`: stronger backup passphrase guidance and risk copy render, old Export copy is absent, and neither viewport has page-level horizontal overflow. `cargo fmt` is still skipped by the release check because rustfmt is not installed for the active toolchain.
+- Review fallback: SubAgents were not used for this incremental hardening slice; the main thread ran performance, security/privacy, backup/restore compatibility, UI/UX, and maintainability passes.
 
 ### Hosted Relay Readiness Gate Slice
 
