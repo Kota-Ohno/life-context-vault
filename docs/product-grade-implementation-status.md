@@ -1138,8 +1138,17 @@ Last updated: 2026-06-13
 - UX/design: Backup/Restore is now a full-width Settings panel so the three restore receipt columns remain readable on desktop and stack on mobile. The new `AI boundary after restore` column follows the existing restore receipt card language.
 - Security/privacy: the restore preview still does not echo Source body, Fact text, Context Pack item text, request task text, or Pack snippets. It summarizes only counts and operational state, keeping restore review metadata-only.
 - Technical design: `restoreAiBoundarySummary` reuses the same effective expiry/delivery-state helpers as Requests, so restored expired Packs are described consistently with the active review UI.
-- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. In-app Browser checked Settings restore preview at desktop and mobile widths: the AI boundary section is visible, desktop cards have readable column width, mobile stacks to one column, and neither viewport has page-level horizontal overflow.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. System Chrome/Playwright checked an encrypted backup restore preview at `1280px` and `390px`: the AI boundary section shows four cards, desktop cards have readable column width, mobile stacks to one column, neither viewport has page-level horizontal overflow, and no Pack or Fact body text appears in the receipt.
 - Review fallback: SubAgents were not used for this incremental restore preview slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
+
+### Vault Clear Impact Receipt Slice
+
+- Product fit: Settings now shows a clear-impact receipt before the destructive `CLEAR` action, so users can see what local life context, AI boundary records, connector metadata, and audit/capture history will be removed.
+- UX/design: the receipt reuses the existing restore receipt card style inside the danger zone. The clear button remains disabled until the user types `CLEAR`, and the cards fit desktop and mobile without adding another modal.
+- Security/privacy: the receipt summarizes counts and local operational impact only. It does not echo Source body, Fact text, Context Pack item text, request text, or Pack snippets. It also reminds users that external AI/service-side settings are separate from local Vault deletion.
+- Technical design: `clearVaultImpactSections` reuses Vault record counts and the same Context Pack delivery-state summary used by restore preview and Requests, keeping destructive-action copy aligned with the AI boundary model.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, and `git diff --check` passed. System Chrome/Playwright checked Settings danger zone at `1280px` and `390px`: four impact cards render, the clear button stays disabled before confirmation text, neither viewport has page-level horizontal overflow, and no stored Source, Fact, Pack, or Request body text appears in the warning receipt.
+- Review fallback: SubAgents were not used for this incremental clear-impact slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
 ### Document Ingestion Readiness UX Slice
 

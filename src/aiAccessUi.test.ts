@@ -6,6 +6,7 @@ import {
   aiMcpEndpointDisplay,
   auditReceiptBody,
   canCopyAiMcpEndpoint,
+  clearVaultImpactSections,
   contextPackDeliveryState,
   contextPackBoundaryReceipt,
   documentIngestionReadiness,
@@ -717,6 +718,120 @@ describe("AI access UI safety", () => {
     expect(JSON.stringify(preview)).not.toContain("must not appear");
     expect(JSON.stringify(preview)).not.toContain("Restored pack body text");
     expect(JSON.stringify(preview)).not.toContain("live restored request");
+  });
+
+  it("summarizes Vault clear impact without exposing stored body text", () => {
+    const state = createEmptyVault();
+    state.sources = [
+      {
+        id: "source_clear",
+        kind: "document",
+        title: "Clear impact source",
+        origin: "user_upload",
+        body: "Source body that must not appear in the clear impact receipt.",
+        createdAt: "2026-06-13T00:00:00.000Z",
+        capturedAt: "2026-06-13T00:00:00.000Z",
+        defaultSensitivity: "sensitive",
+        processingStatus: "ready",
+        deletionState: "active"
+      }
+    ];
+    state.facts = [
+      {
+        id: "fact_clear",
+        factText: "Fact text that must not appear in the clear impact receipt.",
+        domain: "documents_and_evidence",
+        factType: "document_reference",
+        sourceIds: ["source_clear"],
+        sensitivity: "sensitive",
+        confidence: "source_backed",
+        status: "active",
+        createdAt: "2026-06-13T00:00:00.000Z",
+        approvedAt: "2026-06-13T00:00:00.000Z",
+        updatedAt: "2026-06-13T00:00:00.000Z",
+        supersedesFactIds: []
+      }
+    ];
+    state.contextPackRequests = [
+      {
+        id: "request_clear",
+        clientId: "conn_chatgpt",
+        clientName: "ChatGPT",
+        taskText: "Request text that must not appear in the clear impact receipt.",
+        purpose: "planning",
+        requestedDomains: ["documents_and_evidence"],
+        sensitivityCeiling: "sensitive",
+        approvalMode: "always_review",
+        createdAt: "2099-06-13T00:00:00.000Z",
+        expiresAt: "2099-06-13T00:10:00.000Z",
+        status: "fulfilled"
+      }
+    ];
+    state.contextPacks = [
+      {
+        id: "pack_clear",
+        requestId: "request_clear",
+        taskText: "Pack task that must not appear in the clear impact receipt.",
+        taskDomain: "documents_and_evidence",
+        riskLevel: "medium",
+        generatedAt: "2099-06-13T00:00:00.000Z",
+        expiresAt: "2099-06-13T00:10:00.000Z",
+        maxSensitivityIncluded: "sensitive",
+        confirmationStatus: "confirmed",
+        items: [
+          {
+            id: "item_clear",
+            factId: "fact_clear",
+            itemText: "Pack body that must not appear in the clear impact receipt.",
+            reasonIncluded: "Relevant",
+            sensitivity: "sensitive",
+            sourceTitles: ["Clear impact source"],
+            confidence: "source_backed"
+          }
+        ],
+        excludedItems: [],
+        warnings: []
+      }
+    ];
+    state.connectorSessions = [
+      {
+        id: "conn_chatgpt",
+        clientKind: "chatgpt",
+        clientName: "ChatGPT",
+        transport: "remote_mcp_relay",
+        oauthSubject: "oauth_subject_hash",
+        scopes: ["context_pack.request"],
+        status: "connected",
+        createdAt: "2026-06-13T00:00:00.000Z",
+        lastUsedAt: "2026-06-13T00:00:00.000Z"
+      }
+    ];
+    state.auditEvents = [
+      {
+        id: "audit_clear",
+        eventType: "context_pack_delivered",
+        actor: "user",
+        subjectType: "context_pack",
+        subjectId: "pack_clear",
+        occurredAt: "2026-06-13T00:00:00.000Z",
+        sensitivity: "sensitive",
+        metadata: {
+          clientName: "ChatGPT",
+          itemCount: 1
+        }
+      }
+    ];
+
+    const sections = clearVaultImpactSections(state);
+
+    expect(sections.find((section) => section.label === "生活コンテキスト")?.value).toContain("1 Sources / 1 Facts");
+    expect(sections.find((section) => section.label === "AI境界")?.detail).toContain("1件の取得可能Pack");
+    expect(sections.find((section) => section.label === "AI接続とPolicy")?.detail).toContain("外部サービス側");
+    expect(sections.find((section) => section.label === "Audit / Capture")?.detail).toContain("AI配達");
+    expect(JSON.stringify(sections)).not.toContain("Source body that must not appear");
+    expect(JSON.stringify(sections)).not.toContain("Fact text that must not appear");
+    expect(JSON.stringify(sections)).not.toContain("Pack body that must not appear");
+    expect(JSON.stringify(sections)).not.toContain("Request text that must not appear");
   });
 
   it("summarizes Home passive capture safety without treating captures as facts", () => {

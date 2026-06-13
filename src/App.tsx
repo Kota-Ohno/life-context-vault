@@ -321,6 +321,13 @@ type RestorePreview = {
   }>;
 };
 
+type ClearImpactSection = {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "ready" | "attention";
+};
+
 type ManualCopyPayload = {
   packId: string;
   payloadText: string;
@@ -2138,6 +2145,7 @@ export function App() {
             clearVault={clearVault}
             clearConfirmText={clearConfirmText}
             setClearConfirmText={setClearConfirmText}
+            clearImpactSections={clearVaultImpactSections(state)}
             seedDemo={seedDemo}
             nativePath={nativePath}
             nativeRevision={nativeRevision}
@@ -5137,6 +5145,7 @@ function SettingsView({
   clearVault,
   clearConfirmText,
   setClearConfirmText,
+  clearImpactSections,
   seedDemo,
   nativePath,
   nativeRevision,
@@ -5160,6 +5169,7 @@ function SettingsView({
   clearVault: () => void;
   clearConfirmText: string;
   setClearConfirmText: (value: string) => void;
+  clearImpactSections: ClearImpactSection[];
   seedDemo: () => void;
   nativePath: string | null;
   nativeRevision: string | null;
@@ -5572,6 +5582,15 @@ function SettingsView({
             <div className="trust-note attention-note">
               <ShieldAlert size={16} />
               <span>Vaultをクリアすると、Sources、候補、Fact、Context Pack、接続監査が空になります。バックアップが必要なら先にExportしてください。</span>
+            </div>
+            <div className="clear-impact-list" aria-label="Vault clear impact">
+              {clearImpactSections.map((section) => (
+                <div className={`restore-receipt ${section.tone}`} key={section.label}>
+                  <strong>{section.label}</strong>
+                  <span>{section.value}</span>
+                  <small>{section.detail}</small>
+                </div>
+              ))}
             </div>
             <Input
               label="クリア確認"
@@ -6453,6 +6472,56 @@ function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySum
           ? "ペアリング済み接続メタデータを含みます。復元後にConnectionsで接続状態とPolicyを確認してください。"
           : "ペアリング済み接続メタデータは含まれていません。",
       tone: input.pairedConnectorCount > 0 ? "attention" : "ready"
+    }
+  ];
+}
+
+export function clearVaultImpactSections(state: VaultState): ClearImpactSection[] {
+  const counts = vaultRecordCounts(state);
+  const sourceBodyBytes = state.sources.reduce((total, source) => total + textByteLength(source.body), 0);
+  const aiBoundary = restoreAiBoundarySummary(state);
+  const hasSavedContext = counts.sources + counts.candidates + counts.facts > 0;
+  const hasAiBoundaryRecords =
+    counts.requests + counts.packs + aiBoundary.deliverablePackCount + aiBoundary.pendingRequestCount > 0;
+  const hasConnectorPolicy = counts.connectorSessions + counts.policies > 0;
+  const hasAuditCapture = counts.auditEvents + counts.captureEvents > 0;
+
+  return [
+    {
+      label: "生活コンテキスト",
+      value: `${counts.sources} Sources / ${counts.facts} Facts / ${counts.candidates} Inbox`,
+      detail:
+        sourceBodyBytes > 0
+          ? `${formatFileSize(sourceBodyBytes)}のSource本文を含む保存データを削除します。本文内容はここには表示しません。`
+          : "保存済みSource本文はありません。FactとInbox候補も空になります。",
+      tone: hasSavedContext ? "attention" : "ready"
+    },
+    {
+      label: "AI境界",
+      value: `${counts.requests} Requests / ${counts.packs} Packs`,
+      detail:
+        hasAiBoundaryRecords
+          ? `${aiBoundary.deliverablePackCount}件の取得可能Pack、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れPackのローカル履歴を削除します。`
+          : "Context RequestとContext Packはありません。",
+      tone: hasAiBoundaryRecords ? "attention" : "ready"
+    },
+    {
+      label: "AI接続とPolicy",
+      value: `${counts.connectorSessions} Connections / ${counts.policies} Policies`,
+      detail:
+        hasConnectorPolicy
+          ? `${aiBoundary.pairedConnectorCount}件のペアリング済み接続メタデータを含めて削除します。外部サービス側の設定は別途確認してください。`
+          : "接続メタデータとPolicyはありません。",
+      tone: hasConnectorPolicy ? "attention" : "ready"
+    },
+    {
+      label: "Audit / Capture",
+      value: `${counts.auditEvents} Audit / ${counts.captureEvents} Captures`,
+      detail:
+        hasAuditCapture
+          ? "保存・承認・AI配達・Captureのローカル監査履歴を削除します。AIへ渡した過去の本文はAuditには保存されていません。"
+          : "AuditとCapture履歴はありません。",
+      tone: hasAuditCapture ? "attention" : "ready"
     }
   ];
 }

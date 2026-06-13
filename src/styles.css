@@ -1423,6 +1423,11 @@ button:focus-visible {
   gap: 8px;
 }
 
+.clear-impact-list {
+  display: grid;
+  gap: 8px;
+}
+
 .restore-receipt {
   display: grid;
   gap: 3px;
