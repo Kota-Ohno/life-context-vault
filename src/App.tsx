@@ -5347,7 +5347,7 @@ function SettingsView({
       <div className="panel wide">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Backup</p>
+            <p className="eyebrow">バックアップ</p>
             <h3>暗号化バックアップ</h3>
           </div>
           <Lock size={18} />
@@ -5356,9 +5356,9 @@ function SettingsView({
           <Input label="パスフレーズ" value={passphrase} onChange={setPassphrase} placeholder="復元にも同じ値が必要です" type="password" />
           <button className="primary-button" onClick={exportBackup} type="button">
             <Download size={16} />
-            Export
+            バックアップを作成
           </button>
-          <Textarea label="Backup JSON" value={backupText} onChange={setBackupText} placeholder="復元する場合はここに貼り付け" />
+          <Textarea label="バックアップJSON" value={backupText} onChange={setBackupText} placeholder="復元する場合はここに貼り付け" />
           <div className="restore-actions">
             <button className="secondary-button" onClick={previewRestoreBackup} type="button">
               <Search size={16} />
@@ -5389,7 +5389,7 @@ function SettingsView({
               </div>
               <div className="restore-receipt-grid">
                 <div>
-                  <p className="eyebrow">Backup contains</p>
+                  <p className="eyebrow">バックアップに含まれるもの</p>
                   <div className="restore-receipt-list">
                     {restorePreview.receiptSections.map((section) => (
                       <div className={`restore-receipt ${section.tone}`} key={section.label}>
@@ -5401,7 +5401,7 @@ function SettingsView({
                   </div>
                 </div>
                 <div>
-                  <p className="eyebrow">Will replace current Vault</p>
+                  <p className="eyebrow">現在のVaultから置き換わるもの</p>
                   <div className="restore-receipt-list">
                     {restorePreview.overwriteSections.map((section) => (
                       <div className={`restore-receipt ${section.tone}`} key={section.label}>
@@ -5413,7 +5413,7 @@ function SettingsView({
                   </div>
                 </div>
                 <div>
-                  <p className="eyebrow">AI boundary after restore</p>
+                  <p className="eyebrow">復元後のAI境界</p>
                   <div className="restore-receipt-list">
                     {restorePreview.aiBoundarySections.map((section) => (
                       <div className={`restore-receipt ${section.tone}`} key={section.label}>
@@ -5442,17 +5442,17 @@ function SettingsView({
               />
             </div>
           ) : (
-            <p className="muted">復元前にBackup JSONを復号し、件数と感度を確認します。確認前に現在のVaultは変更されません。</p>
+            <p className="muted">復元前にバックアップJSONを復号し、件数と感度を確認します。確認前に現在のVaultは変更されません。</p>
           )}
         </div>
       </div>
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Legacy Office conversion</p>
+            <p className="eyebrow">旧Office変換</p>
             <h3>DOC / XLS / PPTを変換して読む</h3>
           </div>
-          <Badge>{hasLegacyOfficeCommand ? "configured" : "off"}</Badge>
+          <Badge>{hasLegacyOfficeCommand ? "設定済み" : "停止中"}</Badge>
         </div>
         <div className="form-stack">
           <div className="trust-note">
@@ -5506,7 +5506,7 @@ function SettingsView({
                     type="button"
                   >
                     <Clipboard size={16} />
-                    Copy
+                    コピー
                   </button>
                   <button
                     className="secondary-button"
@@ -5527,19 +5527,19 @@ function SettingsView({
             ))}
           </div>
           <Input
-            label="Command"
+            label="変換コマンド"
             value={runtimePreferences.legacyOfficeCommand}
             onChange={(value) => updateRuntimePreference({ legacyOfficeCommand: value })}
             placeholder="/Applications/LibreOffice.app/Contents/MacOS/soffice"
           />
           <Textarea
-            label="Arguments"
+            label="引数"
             value={runtimePreferences.legacyOfficeArgs}
             onChange={(value) => updateRuntimePreference({ legacyOfficeArgs: value })}
             placeholder="--headless --convert-to {target_ext} --outdir {output_dir} {input}"
           />
           <Input
-            label="Timeout seconds"
+            label="タイムアウト秒"
             value={String(runtimePreferences.legacyOfficeTimeoutSeconds)}
             onChange={(value) =>
               updateRuntimePreference({ legacyOfficeTimeoutSeconds: normalizedOcrTimeout(Number(value), 60) })
@@ -5571,7 +5571,7 @@ function SettingsView({
               type="button"
             >
               <X size={16} />
-              Clear
+              設定を消す
             </button>
           </div>
         </div>
@@ -5579,7 +5579,7 @@ function SettingsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Storage</p>
+            <p className="eyebrow">保存先</p>
             <h3>Vault保存先</h3>
           </div>
           <Lock size={18} />
@@ -5594,17 +5594,17 @@ function SettingsView({
                   : "Tauri外ではブラウザのlocalStorageに保存します。"}
               </span>
             </div>
-            <Badge>{storageReady ? "ready" : "loading"}</Badge>
+            <Badge>{storageReady ? "準備完了" : "読み込み中"}</Badge>
           </div>
         </div>
       </div>
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Local OCR</p>
+            <p className="eyebrow">ローカルOCR</p>
             <h3>画像本文の抽出</h3>
           </div>
-          <Badge>{hasOcrCommand ? "configured" : "off"}</Badge>
+          <Badge>{hasOcrCommand ? "設定済み" : "停止中"}</Badge>
         </div>
         <div className="form-stack">
           <div className="trust-note">
@@ -5658,7 +5658,7 @@ function SettingsView({
                     type="button"
                   >
                     <Clipboard size={16} />
-                    Copy
+                    コピー
                   </button>
                   <button
                     className="secondary-button"
@@ -5679,19 +5679,19 @@ function SettingsView({
             ))}
           </div>
           <Input
-            label="Command"
+            label="OCRコマンド"
             value={runtimePreferences.ocrCommand}
             onChange={(value) => updateRuntimePreference({ ocrCommand: value })}
             placeholder="/opt/homebrew/bin/tesseract"
           />
           <Textarea
-            label="Arguments"
+            label="引数"
             value={runtimePreferences.ocrArgs}
             onChange={(value) => updateRuntimePreference({ ocrArgs: value })}
             placeholder="{input} stdout -l eng+jpn"
           />
           <Input
-            label="Timeout seconds"
+            label="タイムアウト秒"
             value={String(runtimePreferences.ocrTimeoutSeconds)}
             onChange={(value) => updateRuntimePreference({ ocrTimeoutSeconds: normalizedOcrTimeout(Number(value)) })}
             type="number"
@@ -5719,7 +5719,7 @@ function SettingsView({
               type="button"
             >
               <X size={16} />
-              Clear
+              設定を消す
             </button>
           </div>
         </div>
@@ -5727,7 +5727,7 @@ function SettingsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Demo</p>
+            <p className="eyebrow">デモ</p>
             <h3>検証用操作</h3>
           </div>
         </div>

@@ -1197,6 +1197,13 @@ Last updated: 2026-06-13
 - Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and in-app Browser checks passed. Browser verified Connections at desktop `1280px` and mobile `390px`: Japanese primary labels render, old `Start AI Access`/`Copy URL` labels are absent from the visible page, the diagnostic disclosure is closed by default with a summary readiness badge, expanding reveals four status cards, and neither viewport has page-level horizontal overflow. A follow-up pass also removed remaining English action labels from Local MCP setup, login/startup controls, Passive Capture, and Browser extension setup.
 - Review fallback: SubAgents were not re-run for this small follow-up slice; it directly addresses prior Product Design/Product-fit findings about English operational labels and Connections complexity.
 
+### Settings General-User Labeling Slice
+
+- Product fit: Settings now uses Japanese action labels for backup, restore receipts, local OCR, Legacy Office conversion, storage readiness, provider copy actions, and destructive provider reset controls. This keeps backup/OCR setup from feeling like an operator console when non-technical users need to protect or import life context.
+- Security/privacy: no persistence or provider execution path changed. Backup passphrases, backup JSON, OCR image data, Office documents, Source bodies, and Context Pack payloads are not newly logged, copied, or sent.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, and `git diff --check` passed. In-app Browser verified Settings at desktop `1280px` and mobile `390px`: backup/OCR/Office Japanese labels render, old `Backup JSON`/`Legacy Office conversion`/`Timeout seconds` labels are absent from the visible page, and neither viewport has page-level horizontal overflow.
+- Review fallback: this is a scoped UX text cleanup following the same Product Design concern as the Connections labeling slice.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
