@@ -1116,11 +1116,11 @@ Last updated: 2026-06-13
 
 ### Document Ingestion Readiness UX Slice
 
-- Product fit: Sources now shows a compact document-ingestion readiness receipt before users upload files, separating always-local PDF/modern Office extraction from optional image OCR and legacy Office conversion providers.
+- Product fit: Sources now shows a compact document-ingestion readiness receipt before users upload files, separating always-local PDF/DOCX-style extraction from optional image OCR and legacy DOC/XLS/PPT conversion providers.
 - UX/design: the receipt uses the existing compact card language and tells users whether Images and DOC/XLS/PPT are currently blocked or locally configured. This reduces the "why did my document not import?" failure path for non-technical users.
 - Security/privacy: disconnected OCR/legacy Office states explicitly say those files are not Source-created until a local provider is configured. Ready states reiterate that extracted content becomes Source plus Inbox candidates only; Fact creation and AI sending remain separate confirmation steps.
 - Technical design: `documentIngestionReadiness` is a pure UI helper covered by unit tests, and Sources renders the resulting cards inside the upload panel. The extraction path itself is unchanged and still rejects unsupported files before RawSource creation.
-- Verification: `npm test -- --run src/aiAccessUi.test.ts src/sourceUpload.test.ts`, `npm run build`, and `git diff --check` passed. In-app Browser checked Sources at desktop and mobile widths: the readiness receipt renders three cards and neither viewport has page-level horizontal overflow.
+- Verification: `npm test -- --run src/aiAccessUi.test.ts src/sourceUpload.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. System Chrome/Playwright checked Sources at `1280px` and `390px`: the readiness receipt renders three cards, modern and legacy Office support are visually separated, and neither viewport has page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental ingestion UX slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
 ### Product Review UX Closure Slice
