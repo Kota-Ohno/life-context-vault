@@ -562,6 +562,45 @@ describe("vault flow", () => {
     });
   });
 
+  it("revalidates current fact state before allowing a confirmed pack to be sent", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Passport note",
+      body: "Passport expires on 2028-05-01."
+    });
+    state = approveCandidate(state, state.candidates[0].id);
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "When does my passport expire?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    const confirmed = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmed.contextPacks.find((pack) => pack.id === built.pack!.id)!;
+
+    expect(canSendContextPackToAi(confirmed, confirmedPack)).toBe(true);
+
+    const hiddenFactState: VaultState = {
+      ...confirmed,
+      facts: confirmed.facts.map((fact) =>
+        fact.id === confirmedPack.items[0].factId ? { ...fact, status: "user_hidden" } : fact
+      )
+    };
+    expect(canSendContextPackToAi(hiddenFactState, confirmedPack)).toBe(false);
+
+    const staleTextState: VaultState = {
+      ...confirmed,
+      facts: confirmed.facts.map((fact) =>
+        fact.id === confirmedPack.items[0].factId
+          ? { ...fact, factText: "Passport expires on 2029-05-01.", updatedAt: new Date().toISOString() }
+          : fact
+      )
+    };
+    expect(canSendContextPackToAi(staleTextState, confirmedPack)).toBe(false);
+  });
+
   it("records an AI delivery receipt without pack or raw source body text", () => {
     let state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",
@@ -753,6 +792,8 @@ describe("vault flow", () => {
     });
     expect(minimizedPack.maxSensitivityIncluded).toBe("public");
     expect(minimizedPack.warnings.some((warning) => warning.kind === "sensitive_context")).toBe(false);
+    expect(payload.excludedItems).toContainEqual({ reason: "user_hidden" });
+    expect(JSON.stringify(payload)).not.toContain(privateFactId);
     expect(JSON.stringify(payload)).not.toContain("apartment lease");
   });
 

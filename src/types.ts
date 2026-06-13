@@ -329,10 +329,10 @@ export type AiContextPackPayload = Pick<
   | "items"
   | "sourceSnippets"
   | "warnings"
-  | "excludedItems"
   | "confirmationStatus"
 > & {
   trustBoundary: "ContextPack only";
+  excludedItems: Array<Pick<ContextExclusion, "reason">>;
 };
 
 export type AccessPolicy = {

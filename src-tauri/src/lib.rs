@@ -3085,9 +3085,28 @@ fn safe_context_pack_for_client(pack: &Value) -> Value {
     "items": pack.get("items").cloned().unwrap_or_else(|| json!([])),
     "sourceSnippets": pack.get("sourceSnippets").cloned().unwrap_or_else(|| json!([])),
     "warnings": pack.get("warnings").cloned().unwrap_or_else(|| json!([])),
-    "excludedItems": pack.get("excludedItems").cloned().unwrap_or_else(|| json!([])),
+    "excludedItems": sanitize_context_exclusions_for_ai(pack),
     "confirmationStatus": str_field(pack, "confirmationStatus")
   })
+}
+
+fn sanitize_context_exclusions_for_ai(pack: &Value) -> Value {
+  let exclusions = pack
+    .get("excludedItems")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default()
+    .into_iter()
+    .filter_map(|item| {
+      let reason = str_field(&item, "reason");
+      if reason.is_empty() {
+        None
+      } else {
+        Some(json!({ "reason": reason }))
+      }
+    })
+    .collect::<Vec<_>>();
+  Value::Array(exclusions)
 }
 
 fn ensure_pack_can_be_edited(vault: &mut Value, pack: &Value) -> Result<(), String> {
@@ -3144,14 +3163,60 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
     let fact_id = str_field(&item, "factId");
     let fact = find_vault_item_by_id(vault, "facts", &fact_id)
       .ok_or_else(|| format!("ContextPack references a missing Fact: {fact_id}"))?;
+    if str_field(&fact, "status") != "active" {
+      return Err("ContextPack references a Fact that is no longer active.".to_string());
+    }
+    if str_field(&item, "itemText") != str_field(&fact, "factText") {
+      return Err("ContextPack item text no longer matches the current Fact.".to_string());
+    }
+    if str_field(&item, "validFrom") != str_field(&fact, "validFrom") {
+      return Err("ContextPack item validity no longer matches the current Fact.".to_string());
+    }
+    let fact_valid_until = str_field(&fact, "validUntil");
+    if !fact_valid_until.is_empty() && is_expired(&fact_valid_until) {
+      return Err("ContextPack references an expired Fact.".to_string());
+    }
+    if str_field(&item, "validUntil") != fact_valid_until {
+      return Err("ContextPack item validity no longer matches the current Fact.".to_string());
+    }
     let fact_sensitivity = str_field(&fact, "sensitivity");
     let fact_sensitivity = sensitivity_tier(&fact_sensitivity).unwrap_or("secret_never_send");
+    if fact_sensitivity == "secret_never_send" {
+      return Err("ContextPack references a secret Fact.".to_string());
+    }
     if sensitivity_rank(fact_sensitivity) > sensitivity_rank(&ceiling) {
       return Err("ContextPack Fact exceeds the current AI client sensitivity policy.".to_string());
     }
     let fact_domain = life_domain(&str_field(&fact, "domain"))?;
     if !domain_allowlist.iter().any(|domain| domain == fact_domain) {
       return Err("ContextPack Fact is outside the current AI client domain policy.".to_string());
+    }
+    let source_ids = fact
+      .get("sourceIds")
+      .and_then(Value::as_array)
+      .cloned()
+      .unwrap_or_default();
+    if !source_ids.is_empty() {
+      let has_ai_eligible_source = source_ids.iter().any(|source_id| {
+        let Some(source_id) = source_id.as_str() else {
+          return false;
+        };
+        let Some(source) = find_vault_item_by_id(vault, "sources", source_id) else {
+          return false;
+        };
+        if str_field(&source, "deletionState") != "active" {
+          return false;
+        }
+        let source_sensitivity = str_field(&source, "defaultSensitivity");
+        let Ok(source_sensitivity) = sensitivity_tier(&source_sensitivity) else {
+          return false;
+        };
+        source_sensitivity != "secret_never_send"
+          && sensitivity_rank(source_sensitivity) <= sensitivity_rank(&ceiling)
+      });
+      if !has_ai_eligible_source {
+        return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
+      }
     }
   }
   Ok(())
@@ -10878,6 +10943,7 @@ mod tests {
     assert_eq!(status.status, "fulfilled");
     assert!(!client_items_payload.contains("apartment rent contract"));
     assert!(client_pack.to_string().contains("user_hidden"));
+    assert!(!client_pack.to_string().contains(&private_fact_id));
     remove_temp_vault(&path);
   }
 
@@ -10998,6 +11064,71 @@ mod tests {
 
     assert_eq!(status.status, "expired");
     assert!(status.context_pack.is_none());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn confirmed_context_pack_revalidates_current_fact_before_external_status_return() {
+    use_test_vault_key();
+    let path = temp_vault_path("confirmed-pack-current-fact");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Passport reminder",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    let approved = approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let fact_id = approved.fact_id.expect("approved fact id");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let ok_status = get_context_request_status_for_client_at_path(
+      &path,
+      &built.request_id,
+      "conn_chatgpt",
+    )
+    .expect("request status before fact drift");
+    assert_eq!(ok_status.status, "fulfilled");
+    assert!(ok_status.context_pack.is_some());
+
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    for fact in vault
+      .get_mut("facts")
+      .and_then(Value::as_array_mut)
+      .expect("facts")
+    {
+      if str_field(fact, "id") == fact_id {
+        fact["status"] = Value::String("user_hidden".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save drifted vault");
+
+    let blocked_status = get_context_request_status_for_client_at_path(
+      &path,
+      &built.request_id,
+      "conn_chatgpt",
+    )
+    .expect("request status after fact drift");
+
+    assert_eq!(blocked_status.status, "expired");
+    assert!(blocked_status.context_pack.is_none());
     remove_temp_vault(&path);
   }
 

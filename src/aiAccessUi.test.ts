@@ -13,6 +13,7 @@ import {
   effectiveRequestStatus,
   factInventoryCounts,
   factSourceNames,
+  homeAiBoundarySections,
   homeCaptureSafetySummary,
   homeNextActionKind,
   HomeView,
@@ -345,9 +346,9 @@ describe("AI access UI safety", () => {
     expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("Fact化とAI送信は別確認");
   });
 
-  it("shows the copy fallback starter only on an empty Context Requests inbox", () => {
+  it("keeps the copy fallback starter available unless a pack is already selected", () => {
     expect(shouldShowCopyFallbackStarter([], null)).toBe(true);
-    expect(shouldShowCopyFallbackStarter([{ id: "request_1" }], null)).toBe(false);
+    expect(shouldShowCopyFallbackStarter([{ id: "request_1" }], null)).toBe(true);
     expect(shouldShowCopyFallbackStarter([], { id: "pack_1" })).toBe(false);
   });
 
@@ -992,6 +993,7 @@ describe("AI access UI safety", () => {
         captureEvents: [event],
         sources: [source],
         requests: [],
+        contextPacks: [],
         nativePath: null,
         aiServiceStatus: null,
         aiServiceBusy: false,
@@ -1007,6 +1009,8 @@ describe("AI access UI safety", () => {
         startAiAccess: noop,
         updateCapture: noop,
         purgeAllPassiveCaptures: noop,
+        confirmAllCapturePurge: false,
+        cancelAllCapturePurge: noop,
         seedDemo: noop,
         goInbox: noop,
         goSources: noop,
@@ -1023,6 +1027,56 @@ describe("AI access UI safety", () => {
     expect(html).toContain("chatgpt.com");
     expect(html).toContain("来月引っ越す予定");
     expect(html).toContain("未承認候補");
+
+    const confirmHtml = renderToStaticMarkup(
+      createElement(HomeView, {
+        facts: [],
+        candidates: [],
+        connectors: [
+          {
+            id: "connector_capture",
+            clientKind: "chatgpt",
+            clientName: "ChatGPT Capture",
+            transport: "browser_extension",
+            scopes: ["passive_capture.write"],
+            status: "available",
+            createdAt: "2026-06-13T00:00:00.000Z",
+            lastUsedAt: "2026-06-13T00:00:00.000Z"
+          }
+        ],
+        captureSettings: settings,
+        captureEvents: [event],
+        sources: [source],
+        requests: [],
+        contextPacks: [],
+        nativePath: null,
+        aiServiceStatus: null,
+        aiServiceBusy: false,
+        setup: {
+          displayName: "",
+          tonePreference: "",
+          activeLifeAreas: "",
+          recurringConstraints: "",
+          confirmationTopics: ""
+        },
+        setSetup: noop,
+        submitBackground: noop,
+        startAiAccess: noop,
+        updateCapture: noop,
+        purgeAllPassiveCaptures: noop,
+        confirmAllCapturePurge: true,
+        cancelAllCapturePurge: noop,
+        seedDemo: noop,
+        goInbox: noop,
+        goSources: noop,
+        goRequests: noop,
+        goConnections: noop
+      })
+    );
+
+    expect(confirmHtml).toContain("1件のCapture本文を消去します");
+    expect(confirmHtml).toContain("Raw transcript本文だけを消去します");
+    expect(confirmHtml).toContain("確認して全本文を消去");
   });
 
   it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {
@@ -1032,7 +1086,7 @@ describe("AI access UI safety", () => {
         backgroundStarted: true,
         approvedFactCount: 2,
         pendingRequestCount: 0,
-        requestCount: 0,
+        deliverablePackCount: 0,
         aiAccessReady: false
       })
     ).toBe("try_context_pack");
@@ -1042,7 +1096,17 @@ describe("AI access UI safety", () => {
         backgroundStarted: true,
         approvedFactCount: 2,
         pendingRequestCount: 0,
-        requestCount: 1,
+        deliverablePackCount: 0,
+        aiAccessReady: false
+      })
+    ).toBe("try_context_pack");
+    expect(
+      homeNextActionKind({
+        candidateCount: 0,
+        backgroundStarted: true,
+        approvedFactCount: 2,
+        pendingRequestCount: 0,
+        deliverablePackCount: 1,
         aiAccessReady: false
       })
     ).toBe("connect_ai");
@@ -1052,7 +1116,7 @@ describe("AI access UI safety", () => {
         backgroundStarted: true,
         approvedFactCount: 2,
         pendingRequestCount: 0,
-        requestCount: 0,
+        deliverablePackCount: 0,
         aiAccessReady: false
       })
     ).toBe("review_candidates");
@@ -1062,10 +1126,67 @@ describe("AI access UI safety", () => {
         backgroundStarted: true,
         approvedFactCount: 0,
         pendingRequestCount: 0,
-        requestCount: 0,
+        deliverablePackCount: 0,
         aiAccessReady: false
       })
     ).toBe("add_background");
+  });
+
+  it("summarizes the Home AI boundary without exposing stored context text", () => {
+    const nowMs = Date.parse("2026-06-13T12:00:00.000Z");
+    const facts = [
+      { status: "active" as const, factText: "Approved fact text must stay out of the Home boundary receipt." },
+      { status: "needs_review" as const, factText: "Review fact text must stay out of the Home boundary receipt." }
+    ];
+    const candidates = [
+      { status: "new" as const, proposedFactText: "Candidate text must stay out of the Home boundary receipt." }
+    ];
+    const requests = [
+      {
+        id: "request_ready",
+        status: "fulfilled" as const,
+        expiresAt: "2026-06-13T12:10:00.000Z",
+        taskText: "Ready request text must stay out of the Home boundary receipt."
+      },
+      {
+        id: "request_pending",
+        status: "pending_user_confirmation" as const,
+        expiresAt: "2026-06-13T12:10:00.000Z",
+        taskText: "Pending request text must stay out of the Home boundary receipt."
+      },
+      {
+        id: "request_expired",
+        status: "fulfilled" as const,
+        expiresAt: "2026-06-13T11:00:00.000Z",
+        taskText: "Expired request text must stay out of the Home boundary receipt."
+      }
+    ];
+    const contextPacks = [
+      {
+        requestId: "request_ready",
+        confirmationStatus: "confirmed" as const,
+        expiresAt: "2026-06-13T12:10:00.000Z",
+        taskText: "Ready pack text must stay out of the Home boundary receipt."
+      },
+      {
+        requestId: "request_expired",
+        confirmationStatus: "confirmed" as const,
+        expiresAt: "2026-06-13T11:00:00.000Z",
+        taskText: "Expired pack text must stay out of the Home boundary receipt."
+      }
+    ];
+
+    const sections = homeAiBoundarySections({ facts, candidates, requests, contextPacks, nowMs });
+
+    expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 Facts");
+    expect(sections.find((section) => section.label === "未承認で止める")?.value).toBe("1 candidates");
+    expect(sections.find((section) => section.label === "確認/返却待ち")?.value).toBe("1 requests");
+    expect(sections.find((section) => section.label === "AIへ返せるPack")?.value).toBe("1 ready");
+    expect(sections.find((section) => section.label === "AIへ返せるPack")?.detail).toContain("期限切れPack");
+    expect(JSON.stringify(sections)).not.toContain("Approved fact text");
+    expect(JSON.stringify(sections)).not.toContain("Candidate text");
+    expect(JSON.stringify(sections)).not.toContain("request text");
+    expect(JSON.stringify(sections)).not.toContain("pack text");
   });
 
   it("sends first-time Home onboarding to the guided background setup", () => {
@@ -1083,6 +1204,7 @@ describe("AI access UI safety", () => {
         captureEvents: [],
         sources: [],
         requests: [],
+        contextPacks: [],
         nativePath: null,
         aiServiceStatus: null,
         aiServiceBusy: false,
@@ -1098,6 +1220,8 @@ describe("AI access UI safety", () => {
         startAiAccess: noop,
         updateCapture: noop,
         purgeAllPassiveCaptures: noop,
+        confirmAllCapturePurge: false,
+        cancelAllCapturePurge: noop,
         seedDemo: noop,
         goInbox: noop,
         goSources: noop,
@@ -1109,6 +1233,9 @@ describe("AI access UI safety", () => {
     expect(html).toContain("生活背景を入れる");
     expect(html).toContain("入力欄へ");
     expect(html).toContain("生活背景を追加");
+    expect(html).toContain("AI Boundary Today");
+    expect(html).toContain("保存されたこととAIへ渡ること");
+    expect(html).toContain("Sourceや候補だけではAIに渡る文脈になりません");
   });
 
   it("describes AI delivery receipts by life domain without storing body text", () => {

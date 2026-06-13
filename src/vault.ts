@@ -1620,9 +1620,25 @@ function contextPackPolicyViolation(
   for (const item of pack.items) {
     const fact = state.facts.find((candidate) => candidate.id === item.factId);
     if (!fact) return "deleted";
+    if (fact.status !== "active") return "deleted";
+    if (fact.sensitivity === "secret_never_send") return "sensitivity_policy";
+    if (fact.validUntil && isExpired(fact.validUntil)) return "expired";
+    if (item.itemText !== fact.factText) return "deleted";
+    if (item.validFrom !== fact.validFrom || item.validUntil !== fact.validUntil) return "deleted";
     if (sensitivityRank[item.sensitivity] > sensitivityRank[currentCeiling]) return "sensitivity_policy";
     if (sensitivityRank[fact.sensitivity] > sensitivityRank[currentCeiling]) return "sensitivity_policy";
     if (!domainAllowlist.includes(fact.domain)) return "domain_policy";
+    if (fact.sourceIds.length > 0) {
+      const hasAiEligibleSource = fact.sourceIds.some((sourceId) => {
+        const source = state.sources.find((candidate) => candidate.id === sourceId);
+        return (
+          source?.deletionState === "active" &&
+          source.defaultSensitivity !== "secret_never_send" &&
+          sensitivityRank[source.defaultSensitivity] <= sensitivityRank[currentCeiling]
+        );
+      });
+      if (!hasAiEligibleSource) return "deleted";
+    }
   }
   return null;
 }
@@ -1758,9 +1774,13 @@ export function makeAiContextPackPayload(pack: ContextPack): AiContextPackPayloa
     items: pack.items,
     sourceSnippets: pack.sourceSnippets,
     warnings: pack.warnings,
-    excludedItems: pack.excludedItems,
+    excludedItems: sanitizeContextExclusionsForAi(pack.excludedItems),
     confirmationStatus: pack.confirmationStatus
   };
+}
+
+function sanitizeContextExclusionsForAi(excludedItems: ContextPack["excludedItems"]): AiContextPackPayload["excludedItems"] {
+  return excludedItems.map((item) => ({ reason: item.reason }));
 }
 
 export function denyContextPackRequest(state: VaultState, requestId: string): VaultState {

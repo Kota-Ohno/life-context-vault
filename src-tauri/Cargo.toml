@@ -1,7 +1,7 @@
 [package]
 name = "life-context-vault"
 version = "0.1.0"
-description = "Local-first life context vault PoC"
+description = "Local-first life context vault"
 authors = ["Kota"]
 license = ""
 repository = ""

@@ -269,6 +269,13 @@ type DocumentIngestionReadinessItem = {
   detail: string;
 };
 
+type HomeAiBoundarySection = {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "ready" | "attention";
+};
+
 type RestorePreview = {
   generatedAt: string;
   counts: {
@@ -408,6 +415,7 @@ export function App() {
   const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
   const [captureHostInstallResult, setCaptureHostInstallResult] =
     useState<BrowserCaptureHostInstallResult | null>(null);
+  const [confirmAllCapturePurge, setConfirmAllCapturePurge] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
   const [sensitivityFilter, setSensitivityFilter] = useState<SensitivityTier | "all">("all");
@@ -1006,7 +1014,13 @@ export function App() {
     const sourceIds = passiveCaptureSourceIds(state)
       .filter((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "purged");
     if (sourceIds.length === 0) {
+      setConfirmAllCapturePurge(false);
       setNotice("消去できるCapture本文はありません。");
+      return;
+    }
+    if (!confirmAllCapturePurge) {
+      setConfirmAllCapturePurge(true);
+      setNotice(`${sourceIds.length}件のCapture本文を消去する前に、画面の影響表示を確認してください。`);
       return;
     }
 
@@ -1027,6 +1041,7 @@ export function App() {
           setState(latestState);
           setNotice(`${sourceIds.length}件のCapture本文を消去しました。`);
         }
+        setConfirmAllCapturePurge(false);
         return;
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Vault CoreでCapture本文を消去できませんでした。");
@@ -1039,6 +1054,7 @@ export function App() {
       state
     );
     apply(next, `${sourceIds.length}件のCapture本文を消去しました。`);
+    setConfirmAllCapturePurge(false);
   }
 
   async function editSourceMetadata(sourceId: string, input: SourceMetadataUpdate): Promise<boolean> {
@@ -1952,9 +1968,12 @@ export function App() {
               </button>
             )}
             {notice && (
-              <button className="notice" onClick={() => setNotice("")} type="button">
-                {notice}
-              </button>
+              <div className="notice" role="status" aria-live="polite">
+                <span>{notice}</span>
+                <button aria-label="通知を閉じる" onClick={() => setNotice("")} type="button">
+                  <X size={14} />
+                </button>
+              </div>
             )}
           </div>
         </header>
@@ -1968,6 +1987,7 @@ export function App() {
             captureEvents={state.passiveCaptureEvents}
             sources={state.sources}
             requests={state.contextPackRequests}
+            contextPacks={state.contextPacks}
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
@@ -1977,6 +1997,8 @@ export function App() {
             startAiAccess={startAiAccess}
             updateCapture={updateCapture}
             purgeAllPassiveCaptures={purgeAllPassiveCaptures}
+            confirmAllCapturePurge={confirmAllCapturePurge}
+            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
             seedDemo={seedDemo}
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
@@ -2013,6 +2035,7 @@ export function App() {
             sources={state.sources}
             candidates={state.candidates}
             facts={state.facts}
+            contextPacks={state.contextPacks}
             manualTitle={manualTitle}
             manualBody={manualBody}
             setManualTitle={setManualTitle}
@@ -2043,6 +2066,8 @@ export function App() {
             updatePolicy={updatePolicy}
             purgePassiveCaptureEvent={purgePassiveCaptureEvent}
             purgeAllPassiveCaptures={purgeAllPassiveCaptures}
+            confirmAllCapturePurge={confirmAllCapturePurge}
+            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
             nativePath={nativePath}
             aiServiceStatus={aiServiceStatus}
             aiServiceBusy={aiServiceBusy}
@@ -2178,6 +2203,7 @@ function NavButton({
   return (
     <button
       aria-label={label}
+      aria-current={active ? "page" : undefined}
       className={active ? "nav-item active" : "nav-item"}
       onClick={onClick}
       type="button"
@@ -2206,6 +2232,7 @@ export function HomeView({
   captureEvents,
   sources,
   requests,
+  contextPacks,
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
@@ -2215,6 +2242,8 @@ export function HomeView({
   startAiAccess,
   updateCapture,
   purgeAllPassiveCaptures,
+  confirmAllCapturePurge,
+  cancelAllCapturePurge,
   seedDemo,
   goInbox,
   goSources,
@@ -2228,6 +2257,7 @@ export function HomeView({
   captureEvents: PassiveCaptureEvent[];
   sources: VaultState["sources"];
   requests: ContextPackRequest[];
+  contextPacks: ContextPack[];
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
@@ -2237,6 +2267,8 @@ export function HomeView({
   startAiAccess: () => void;
   updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
   purgeAllPassiveCaptures: () => void;
+  confirmAllCapturePurge: boolean;
+  cancelAllCapturePurge: () => void;
   seedDemo: () => void;
   goInbox: () => void;
   goSources: () => void;
@@ -2259,16 +2291,30 @@ export function HomeView({
   const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
   const approvedContextReady = facts.length > 0;
   const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
-  const requestTried = requests.length > 0;
+  const nowMs = Date.now();
+  const deliverablePackCount = contextPacks.filter((pack) =>
+    contextPackDeliveryState(
+      pack,
+      requests.find((request) => request.id === pack.requestId) ?? null,
+      nowMs
+    ).canDeliver
+  ).length;
+  const packTried = deliverablePackCount > 0;
   const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
-  const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request)).length;
+  const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request, nowMs)).length;
   const captureSafety = homeCaptureSafetySummary(captureSettings, captureEvents, sources);
+  const aiBoundarySections = homeAiBoundarySections({
+    facts,
+    candidates,
+    requests,
+    contextPacks
+  });
   const nextActionKind = homeNextActionKind({
     candidateCount: candidates.length,
     backgroundStarted,
     approvedFactCount: facts.length,
     pendingRequestCount,
-    requestCount: requests.length,
+    deliverablePackCount,
     aiAccessReady
   });
   const focusSetup = () => {
@@ -2297,12 +2343,12 @@ export function HomeView({
     },
     {
       title: "Context Packを試す",
-      body: requestTried
-        ? `${requests.length}件のContext Request履歴があります。`
+      body: packTried
+        ? `${deliverablePackCount}件の取得可能Context Packがあります。`
         : approvedContextReady
           ? "MCPなしでも、確認してコピーすれば普段使うAIで試せます。"
           : "ApprovedFactができたら、AIへ渡す最小文脈を確認します。",
-      status: requestTried ? "done" : approvedContextReady ? "current" : "blocked",
+      status: packTried ? "done" : approvedContextReady ? "current" : "blocked",
       actionLabel: "Requestsを開く",
       action: goRequests
     },
@@ -2310,10 +2356,10 @@ export function HomeView({
       title: "AI連携を常用化する",
       body: aiAccessReady
         ? "外部AIからContext Packを呼べる状態です。"
-        : requestTried
+        : packTried
           ? accessReadiness.body
           : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
-      status: aiAccessReady ? "done" : requestTried ? "current" : "blocked",
+      status: aiAccessReady ? "done" : packTried ? "current" : "blocked",
       actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
       action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
       disabled: aiServiceBusy
@@ -2358,7 +2404,7 @@ export function HomeView({
     }
     if (nextActionKind === "connect_ai") {
       return {
-        title: requestTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
+        title: packTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
         body: accessReadiness.body,
         label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
         action: nativePath ? startAiAccess : goConnections,
@@ -2427,6 +2473,35 @@ export function HomeView({
         </div>
       </div>
 
+      <div className="panel wide home-ai-boundary-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AI Boundary Today</p>
+            <h3>保存されたこととAIへ渡ること</h3>
+          </div>
+          <ShieldCheck size={18} />
+        </div>
+        <div className="home-ai-boundary-grid" aria-label="Home AI boundary summary">
+          {aiBoundarySections.map((section) => (
+            <div className={`home-ai-boundary-card ${section.tone}`} key={section.label}>
+              <span>{section.label}</span>
+              <strong>{section.value}</strong>
+              <small>{section.detail}</small>
+            </div>
+          ))}
+        </div>
+        <div className="service-actions">
+          <button className="secondary-button" onClick={goInbox} type="button">
+            <Inbox size={16} />
+            保存候補を確認
+          </button>
+          <button className="primary-button" onClick={goRequests} type="button">
+            <MessageSquare size={16} />
+            AIへ渡すPackを見る
+          </button>
+        </div>
+      </div>
+
       <div className="panel quick-setup-panel" id="home-guided-setup">
         <div className="panel-heading">
           <div>
@@ -2474,6 +2549,16 @@ export function HomeView({
             <Metric label="消去できる本文" value={`${captureSafety.purgeableCount}件`} />
           </div>
           {captureSafety.lastPreview ? <p className="home-capture-preview">{captureSafety.lastPreview}</p> : null}
+          {confirmAllCapturePurge && (
+            <div className="danger-confirm-card" role="status">
+              <strong>{captureSafety.purgeableCount}件のCapture本文を消去します</strong>
+              <span>Raw transcript本文だけを消去します。承認済みFact、未承認候補の履歴、Auditの件数記録は残ります。</span>
+              <button className="secondary-button" onClick={cancelAllCapturePurge} type="button">
+                <X size={16} />
+                取消
+              </button>
+            </div>
+          )}
           <div className="service-actions">
             <button
               className={captureSettings.enabled ? "danger-button" : "primary-button"}
@@ -2494,7 +2579,7 @@ export function HomeView({
               type="button"
             >
               <Trash2 size={16} />
-              全本文を消去
+              {confirmAllCapturePurge ? "確認して全本文を消去" : "全本文を消去"}
             </button>
           </div>
         </div>
@@ -2726,6 +2811,7 @@ function SourcesView({
   sources,
   candidates,
   facts,
+  contextPacks,
   manualTitle,
   manualBody,
   setManualTitle,
@@ -2747,6 +2833,7 @@ function SourcesView({
   sources: VaultState["sources"];
   candidates: VaultState["candidates"];
   facts: VaultState["facts"];
+  contextPacks: VaultState["contextPacks"];
   manualTitle: string;
   manualBody: string;
   setManualTitle: (value: string) => void;
@@ -2933,7 +3020,11 @@ function SourcesView({
         <div className="table-list">
           {sources.map((source) => {
             const linkedCandidateCount = candidates.filter((candidate) => candidate.sourceIds.includes(source.id)).length;
-            const linkedFactCountValue = facts.filter((fact) => fact.sourceIds.includes(source.id)).length;
+            const linkedFacts = facts.filter((fact) => fact.sourceIds.includes(source.id));
+            const linkedFactCountValue = linkedFacts.length;
+            const linkedPackCount = contextPacks.filter((pack) =>
+              pack.items.some((item) => linkedFacts.some((fact) => fact.id === item.factId))
+            ).length;
             return (
               <SourceRow
                 changeSourceLifecycle={changeSourceLifecycle}
@@ -2942,6 +3033,7 @@ function SourcesView({
                 key={source.id}
                 linkedCandidateCount={linkedCandidateCount}
                 linkedFactCount={linkedFactCountValue}
+                linkedPackCount={linkedPackCount}
                 source={source}
               />
             );
@@ -2957,6 +3049,7 @@ function SourceRow({
   source,
   linkedCandidateCount,
   linkedFactCount,
+  linkedPackCount,
   changeSourceLifecycle,
   editSourceMetadata,
   editSourceBody
@@ -2964,14 +3057,20 @@ function SourceRow({
   source: VaultState["sources"][number];
   linkedCandidateCount: number;
   linkedFactCount: number;
+  linkedPackCount: number;
   changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
   editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
   editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<SourceMetadataUpdate | null>(null);
   const [bodyDraft, setBodyDraft] = useState<string | null>(null);
+  const [confirmBodyPurge, setConfirmBodyPurge] = useState(false);
   const retentionLabel = sourceRetentionLabel(source);
   const canPromote = Boolean(source.retentionUntil);
+
+  useEffect(() => {
+    if (source.deletionState === "purged") setConfirmBodyPurge(false);
+  }, [source.deletionState]);
 
   return (
     <div className="table-row source-row">
@@ -3040,7 +3139,20 @@ function SourceRow({
               {retentionLabel && <Badge>{retentionLabel}</Badge>}
               <Badge>候補 {linkedCandidateCount}</Badge>
               <Badge>Fact {linkedFactCount}</Badge>
+              <Badge>Pack {linkedPackCount}</Badge>
             </div>
+            {confirmBodyPurge && (
+              <div className="danger-confirm-card inline-confirm" role="status">
+                <strong>このSource本文を消去します</strong>
+                <span>
+                  本文は戻せません。未承認候補 {linkedCandidateCount}件、関連Fact {linkedFactCount}件、関連Context Pack {linkedPackCount}件に影響します。
+                </span>
+                <button className="secondary-button" onClick={() => setConfirmBodyPurge(false)} type="button">
+                  <X size={16} />
+                  取消
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -3133,11 +3245,18 @@ function SourceRow({
         {source.deletionState !== "purged" && (
           <button
             className="danger-button"
-            onClick={() => changeSourceLifecycle(source.id, "purge_body")}
+            onClick={() => {
+              if (!confirmBodyPurge) {
+                setConfirmBodyPurge(true);
+                return;
+              }
+              setConfirmBodyPurge(false);
+              changeSourceLifecycle(source.id, "purge_body");
+            }}
             type="button"
           >
             <X size={16} />
-            本文消去
+            {confirmBodyPurge ? "確認して本文消去" : "本文消去"}
           </button>
         )}
       </div>
@@ -3155,6 +3274,8 @@ function ConnectionsView({
   updatePolicy,
   purgePassiveCaptureEvent,
   purgeAllPassiveCaptures,
+  confirmAllCapturePurge,
+  cancelAllCapturePurge,
   nativePath,
   aiServiceStatus,
   aiServiceBusy,
@@ -3202,6 +3323,8 @@ function ConnectionsView({
   ) => void;
   purgePassiveCaptureEvent: (eventId: string) => void;
   purgeAllPassiveCaptures: () => void;
+  confirmAllCapturePurge: boolean;
+  cancelAllCapturePurge: () => void;
   nativePath: string | null;
   aiServiceStatus: AiAccessServiceStatus | null;
   aiServiceBusy: boolean;
@@ -3266,6 +3389,7 @@ function ConnectionsView({
     .slice(0, 6);
   const purgeableCaptureCount = passiveCaptureSourceIdsForEvents(passiveCaptureEvents, sources).length;
   const [allowedSitesDraft, setAllowedSitesDraft] = useState(captureSettings.allowedSites.join(", "));
+  const [confirmCapturePurgeId, setConfirmCapturePurgeId] = useState<string | null>(null);
 
   useEffect(() => {
     setAllowedSitesDraft(captureSettings.allowedSites.join(", "));
@@ -4392,14 +4516,25 @@ function ConnectionsView({
             type="button"
           >
             <Trash2 size={16} />
-            全本文を消去
+            {confirmAllCapturePurge ? "確認して全本文を消去" : "全本文を消去"}
           </button>
         </div>
+        {confirmAllCapturePurge && (
+          <div className="danger-confirm-card" role="status">
+            <strong>{purgeableCaptureCount}件のCapture本文を消去します</strong>
+            <span>Raw transcript本文だけを消去します。承認済みFact、未承認候補の履歴、Auditの件数記録は残ります。</span>
+            <button className="secondary-button" onClick={cancelAllCapturePurge} type="button">
+              <X size={16} />
+              取消
+            </button>
+          </div>
+        )}
         <div className="capture-history-list">
           {recentCaptures.map((event) => {
             const sourceId = passiveCaptureSourceId(event);
             const source = sourceId ? sources.find((item) => item.id === sourceId) : undefined;
             const sourcePurged = source?.deletionState === "purged" || event.processingStatus === "purged";
+            const isConfirmingPurge = confirmCapturePurgeId === event.id;
             return (
               <div className="capture-history-row" key={event.id}>
                 <div>
@@ -4415,15 +4550,32 @@ function ConnectionsView({
                     <Badge>{event.urlHash}</Badge>
                   </div>
                   <span>保持期限: {formatDateTime(event.retentionUntil)}</span>
+                  {isConfirmingPurge && (
+                    <div className="danger-confirm-card inline-confirm" role="status">
+                      <strong>このCapture本文を消去します</strong>
+                      <span>Raw transcript本文だけを消去します。候補とAudit履歴は、本文なしの記録として残ります。</span>
+                      <button className="secondary-button" onClick={() => setConfirmCapturePurgeId(null)} type="button">
+                        <X size={16} />
+                        取消
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <button
                   className="danger-button"
                   disabled={!sourceId || sourcePurged}
-                  onClick={() => purgePassiveCaptureEvent(event.id)}
+                  onClick={() => {
+                    if (!isConfirmingPurge) {
+                      setConfirmCapturePurgeId(event.id);
+                      return;
+                    }
+                    setConfirmCapturePurgeId(null);
+                    purgePassiveCaptureEvent(event.id);
+                  }}
                   type="button"
                 >
                   <Trash2 size={16} />
-                  本文消去
+                  {isConfirmingPurge ? "確認して本文消去" : "本文消去"}
                 </button>
               </div>
             );
@@ -6001,10 +6153,10 @@ export function sourceReviewCandidates<T extends Pick<MemoryCandidate, "sourceId
 }
 
 export function shouldShowCopyFallbackStarter(
-  requests: Array<Pick<ContextPackRequest, "id">>,
+  _requests: Array<Pick<ContextPackRequest, "id">>,
   currentPack: Pick<ContextPack, "id"> | null
 ): boolean {
-  return requests.length === 0 && !currentPack;
+  return !currentPack;
 }
 
 export function homeNextActionKind({
@@ -6012,23 +6164,93 @@ export function homeNextActionKind({
   backgroundStarted,
   approvedFactCount,
   pendingRequestCount,
-  requestCount,
+  deliverablePackCount,
   aiAccessReady
 }: {
   candidateCount: number;
   backgroundStarted: boolean;
   approvedFactCount: number;
   pendingRequestCount: number;
-  requestCount: number;
+  deliverablePackCount: number;
   aiAccessReady: boolean;
 }): HomeNextActionKind {
   if (candidateCount > 0) return "review_candidates";
   if (!backgroundStarted) return "add_background";
   if (pendingRequestCount > 0) return "review_pending_request";
   if (approvedFactCount === 0) return "add_background";
-  if (approvedFactCount > 0 && requestCount === 0) return "try_context_pack";
+  if (approvedFactCount > 0 && deliverablePackCount === 0) return "try_context_pack";
   if (!aiAccessReady) return "connect_ai";
   return "try_context_pack";
+}
+
+export function homeAiBoundarySections({
+  facts,
+  candidates,
+  requests,
+  contextPacks,
+  nowMs = Date.now()
+}: {
+  facts: Array<Pick<ApprovedFact, "status">>;
+  candidates: Array<Pick<MemoryCandidate, "status">>;
+  requests: Array<Pick<ContextPackRequest, "id" | "status" | "expiresAt">>;
+  contextPacks: Array<Pick<ContextPack, "requestId" | "confirmationStatus" | "expiresAt">>;
+  nowMs?: number;
+}): HomeAiBoundarySection[] {
+  const activeFactCount = facts.filter((fact) => fact.status === "active").length;
+  const reviewCandidateCount = candidates.filter((candidate) =>
+    ["new", "needs_user_detail", "blocked_sensitive"].includes(candidate.status)
+  ).length;
+  const requestsById = new Map(requests.map((request) => [request.id, request]));
+  const actionableRequestCount = requests.filter((request) => {
+    const status = effectiveRequestStatus(request, nowMs);
+    return status === "pending_user_confirmation" || status === "approved";
+  }).length;
+  const packStates = contextPacks.map((pack) =>
+    contextPackDeliveryState(pack, pack.requestId ? requestsById.get(pack.requestId) ?? null : null, nowMs)
+  );
+  const deliverablePackCount = packStates.filter((state) => state.canDeliver).length;
+  const expiredPackCount = packStates.filter((state) => state.expired).length;
+
+  return [
+    {
+      label: "AIが使える正本",
+      value: `${activeFactCount} Facts`,
+      detail:
+        activeFactCount > 0
+          ? "ApprovedFactだけがContext Pack候補になります。"
+          : "Sourceや候補だけではAIに渡る文脈になりません。",
+      tone: activeFactCount > 0 ? "ready" : "attention"
+    },
+    {
+      label: "未承認で止める",
+      value: `${reviewCandidateCount} candidates`,
+      detail:
+        reviewCandidateCount > 0
+          ? "Inboxで保存するまで、候補はAIの確定文脈に使いません。"
+          : "未承認候補はありません。",
+      tone: reviewCandidateCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "確認/返却待ち",
+      value: `${actionableRequestCount} requests`,
+      detail:
+        actionableRequestCount > 0
+          ? "承認、返却、またはコピー操作まではPack本文を外部AIへ返しません。"
+          : "いま確認待ちのContext Requestはありません。",
+      tone: actionableRequestCount > 0 ? "attention" : "ready"
+    },
+    {
+      label: "AIへ返せるPack",
+      value: `${deliverablePackCount} ready`,
+      detail:
+        expiredPackCount > 0
+          ? `${expiredPackCount}件の期限切れPackはAIへ返せません。`
+          : deliverablePackCount > 0
+            ? "期限内の確認済みPackだけが取得可能です。"
+            : "取得可能なPackはありません。必要な時に作成します。",
+      tone: deliverablePackCount > 0 ? "attention" : "ready"
+    }
+  ];
 }
 
 export function manualCopyPayloadForPack(

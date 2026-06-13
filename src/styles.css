@@ -176,6 +176,10 @@ button {
 }
 
 .notice {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
   max-width: 460px;
   padding: 9px 12px;
   border: 1px solid #b8c8b3;
@@ -183,6 +187,23 @@ button {
   background: #eef6e8;
   color: #26352b;
   text-align: left;
+}
+
+.notice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #b8c8b3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #26352b;
 }
 
 .trust-note {
@@ -315,6 +336,60 @@ button {
   border-radius: 8px;
   background: #ffffff;
   color: #26352b;
+}
+
+.home-ai-boundary-panel {
+  align-content: start;
+}
+
+.home-ai-boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-ai-boundary-card {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dde5dc;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.home-ai-boundary-card.ready {
+  border-left-color: #7ba66f;
+  background: #f7fbf5;
+}
+
+.home-ai-boundary-card.attention {
+  border-left-color: #d99b3d;
+  background: #fffaf1;
+}
+
+.home-ai-boundary-card span,
+.home-ai-boundary-card strong,
+.home-ai-boundary-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.home-ai-boundary-card span {
+  color: #6f7a70;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.home-ai-boundary-card strong {
+  color: #26352b;
+  font-size: 15px;
+}
+
+.home-ai-boundary-card small {
+  color: #56645c;
+  line-height: 1.4;
 }
 
 .onboarding-checklist {
@@ -1447,6 +1522,42 @@ button:focus-visible {
 .restore-receipt.attention {
   border-color: #dfc28d;
   background: #fffaf0;
+}
+
+.danger-confirm-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e7b4aa;
+  border-left: 4px solid #c4513f;
+  border-radius: 8px;
+  background: #fff6f4;
+}
+
+.danger-confirm-card.inline-confirm {
+  margin-top: 8px;
+}
+
+.danger-confirm-card strong,
+.danger-confirm-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.danger-confirm-card strong {
+  color: #673027;
+  font-size: 13px;
+}
+
+.danger-confirm-card span {
+  color: #6f4a42;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.danger-confirm-card .secondary-button {
+  justify-self: start;
 }
 
 .restore-receipt strong,
@@ -3045,6 +3156,7 @@ button:focus-visible {
   .connection-diagnostic-main,
   .connection-diagnostic-status-grid,
   .home-capture-meta,
+  .home-ai-boundary-grid,
   .hosted-relay-grid,
   .hosted-relay-status,
   .hosted-relay-steps,

@@ -2,20 +2,12 @@
 
 Local-first Control Center and AI Access Layer for a personal life-context vault. The product boundary is simple: everyday AI clients can request reviewed Context Packs, but they cannot read the whole Vault, Raw Sources, or unapproved memory candidates.
 
-## Run
+## Run As Desktop App
+
+Life Context Vault is a desktop-first product. Use the Tauri app when you want AI Access, encrypted native persistence, Local MCP, Hosted Relay Agent pairing, or browser capture.
 
 ```bash
 npm install
-npm run dev
-```
-
-Open the printed local URL.
-
-## Run As Desktop App
-
-The native shell uses Tauri. If Rust is installed:
-
-```bash
 npm run tauri:dev
 ```
 
@@ -30,6 +22,16 @@ For a macOS `.app` bundle:
 ```bash
 npm run tauri:bundle
 ```
+
+## Run Browser Preview
+
+Browser dev mode is for UI review and fallback storage only. It cannot start the Vault Agent, manage encrypted native persistence, pair with Hosted Relay, or install local AI integrations.
+
+```bash
+npm run dev
+```
+
+Open the printed local URL only when you want that preview mode.
 
 ## Verify
 
@@ -115,9 +117,9 @@ Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri des
 
 1. Open **Home** and add a small piece of life background.
 2. Review the generated candidate in **Inbox** and save it as an ApprovedFact.
-3. Open **Connections** and choose an AI route: Claude Desktop/local MCP, ChatGPT or Claude Web via hosted HTTPS Relay, browser capture, or copy fallback.
-4. Start Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
-5. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task.
+3. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task. Use copy fallback first if MCP/Relay is not connected yet.
+4. Open **Connections** when you want to make the route persistent: Claude Desktop/local MCP, ChatGPT or Claude Web via hosted HTTPS Relay, browser capture, or copy fallback.
+5. Start Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
 6. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
 7. Open **Audit** to see what was captured, saved, requested, generated, copied, or denied.
 
