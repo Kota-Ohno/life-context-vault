@@ -2110,7 +2110,7 @@ function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function HomeView({
+export function HomeView({
   facts,
   candidates,
   connectors,
@@ -6015,7 +6015,7 @@ export function homeCaptureSafetySummary(
   const lastSource = lastSourceId ? sources.find((source) => source.id === lastSourceId) : undefined;
   const allowedSitesLabel = captureAllowedSitesLabel(settings.allowedSites);
   const lastCaptureLabel = lastEvent ? formatDateTime(lastEvent.capturedAt) : "まだありません";
-  const lastPreview = lastEvent ? capturePreviewText(lastSource) : null;
+  const lastPreview = lastEvent ? compactHomeCapturePreview(capturePreviewText(lastSource)) : null;
 
   if (settings.enabled) {
     return {
@@ -6046,6 +6046,10 @@ function captureAllowedSitesLabel(sites: string[]): string {
   if (sites.length === 0) return "未設定";
   if (sites.length <= 2) return sites.join(", ");
   return `${sites.slice(0, 2).join(", ")} +${sites.length - 2}`;
+}
+
+function compactHomeCapturePreview(value: string): string {
+  return value.length > 84 ? `${value.slice(0, 84)}...` : value;
 }
 
 function connectorKindLabel(kind: ConnectorKind): string {

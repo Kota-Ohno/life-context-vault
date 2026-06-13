@@ -10,6 +10,7 @@ import {
   factSourceNames,
   homeCaptureSafetySummary,
   homeNextActionKind,
+  HomeView,
   InboxView,
   isHostedRelayConfirmed,
   manualCopyPayloadForPack,
@@ -222,6 +223,25 @@ describe("AI access UI safety", () => {
     expect(summary.purgeableCount).toBe(1);
     expect(summary.body).toContain("未承認候補");
     expect(summary.body).toContain("Context Pack確認");
+    const longPreview = homeCaptureSafetySummary(
+      settings,
+      [event],
+      [
+        {
+          ...source,
+          body: "これはとても長い会話断片です。".repeat(10)
+        }
+      ]
+    ).lastPreview;
+    expect(longPreview?.endsWith("...")).toBe(true);
+    expect(longPreview?.length).toBeLessThanOrEqual(87);
+    expect(
+      homeCaptureSafetySummary(
+        { ...settings, allowedSites: ["chatgpt.com", "claude.ai", "gemini.google.com"] },
+        [],
+        []
+      ).allowedSitesLabel
+    ).toBe("chatgpt.com, claude.ai +1");
   });
 
   it("shows paused capture safety as non-writing and keeps purged bodies out of purge count", () => {
@@ -264,6 +284,93 @@ describe("AI access UI safety", () => {
     expect(summary.body).toContain("書き込みません");
     expect(summary.allowedSitesLabel).toBe("未設定");
     expect(summary.purgeableCount).toBe(0);
+  });
+
+  it("renders passive capture controls on Home so users can pause or purge without hunting", () => {
+    const noop = () => undefined;
+    const settings: PassiveCaptureSettings = {
+      enabled: true,
+      retentionDays: 14,
+      allowedSites: ["chatgpt.com"]
+    };
+    const event: PassiveCaptureEvent = {
+      id: "capture_1",
+      sourceClient: "chatgpt",
+      conversationId: "thread_1",
+      urlHash: "urlhash_1",
+      textFragmentRef: "source_capture_1:0-24",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      sensitivityGuess: "personal",
+      processingStatus: "candidate_generated",
+      sourceId: "source_capture_1",
+      candidateIds: ["candidate_1"]
+    };
+    const source: RawSource = {
+      id: "source_capture_1",
+      kind: "passive_capture",
+      title: "Passive capture from ChatGPT",
+      origin: "passive_browser",
+      body: "来月引っ越す予定。住所変更が必要な契約を確認したい。",
+      createdAt: "2026-06-13T00:00:00.000Z",
+      capturedAt: "2026-06-13T00:00:00.000Z",
+      retentionUntil: "2026-06-27T00:00:00.000Z",
+      defaultSensitivity: "personal",
+      processingStatus: "ready",
+      deletionState: "active"
+    };
+
+    const html = renderToStaticMarkup(
+      createElement(HomeView, {
+        facts: [],
+        candidates: [],
+        connectors: [
+          {
+            id: "connector_capture",
+            clientKind: "chatgpt",
+            clientName: "ChatGPT Capture",
+            transport: "browser_extension",
+            scopes: ["passive_capture.write"],
+            status: "available",
+            createdAt: "2026-06-13T00:00:00.000Z",
+            lastUsedAt: "2026-06-13T00:00:00.000Z"
+          }
+        ],
+        captureSettings: settings,
+        captureEvents: [event],
+        sources: [source],
+        requests: [],
+        nativePath: null,
+        aiServiceStatus: null,
+        aiServiceBusy: false,
+        setup: {
+          displayName: "",
+          tonePreference: "",
+          activeLifeAreas: "",
+          recurringConstraints: "",
+          confirmationTopics: ""
+        },
+        setSetup: noop,
+        submitBackground: noop,
+        startAiAccess: noop,
+        updateCapture: noop,
+        purgeAllPassiveCaptures: noop,
+        seedDemo: noop,
+        goInbox: noop,
+        goSources: noop,
+        goRequests: noop,
+        goConnections: noop
+      })
+    );
+
+    expect(html).toContain("Capture safety");
+    expect(html).toContain("許可サイトだけをローカルで候補化中");
+    expect(html).toContain("Captureを一時停止");
+    expect(html).toContain("Capture詳細");
+    expect(html).toContain("全本文を消去");
+    expect(html).toContain("chatgpt.com");
+    expect(html).toContain("来月引っ越す予定");
+    expect(html).toContain("未承認候補");
   });
 
   it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {
