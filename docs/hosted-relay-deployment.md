@@ -83,6 +83,7 @@ LCV_RELAY_HANDOFF_SECRET=<long-random-handoff-signing-secret>
 LCV_RELAY_TENANT_ID=<tenant-or-environment-id>
 LCV_RELAY_ALLOW_DIRECT_SIDECAR=0
 LCV_RELAY_ALLOWED_ORIGINS=https://chatgpt.com,https://claude.ai
+LCV_RELAY_ALLOWED_CIMD_HOSTS=chatgpt.com
 LCV_RELAY_STATE_PATH=/data/relay-state.json
 ```
 
@@ -109,11 +110,13 @@ Static bearer fallback is disabled by default. Do not set `LCV_RELAY_ENABLE_STAT
 
 Do not set `LCV_RELAY_AUTO_APPROVE=1` in public or shared deployments. Public OAuth approvals must be completed by the Vault owner through Control Center or an admin-authenticated operator path; the public browser approval page is informational only.
 
-OAuth clients must request `resource=https://relay.example.com/mcp` during both authorization and token exchange. The Relay binds issued access tokens to that MCP resource and rejects tokens for a different resource. Unauthorized `/mcp` calls return a `WWW-Authenticate` challenge pointing clients to the protected-resource metadata and the minimum required scope.
+OAuth clients must request `resource=https://relay.example.com/mcp` during both authorization and token exchange, and public token exchanges must include the same `client_id` used during authorization. The Relay binds issued access tokens to that MCP resource and rejects tokens for a different resource. Unauthorized `/mcp` calls return a `WWW-Authenticate` challenge pointing clients to the protected-resource metadata and the minimum required scope.
 
 Dynamic OAuth redirect URIs are validated at registration and authorization time. Hosted deployments accept HTTPS redirect URIs for AI clients and loopback HTTP redirect URIs only for local development callbacks; control characters, userinfo, fragments, unsafe schemes, and non-loopback HTTP redirects are refused.
 
 `LCV_RELAY_ALLOWED_ORIGINS` gates browser CORS for `/mcp` and `/relay/handoff`. Keep it to the exact AI client origins you intend to support. OAuth discovery metadata remains public, but the AI-bound data endpoints reject browser requests from other Origins before authorization or request-body payload processing.
+
+`LCV_RELAY_ALLOWED_CIMD_HOSTS` gates OAuth Client ID Metadata Document fetches. Keep it to trusted AI provider metadata hosts; the default is `chatgpt.com`, and custom hosts should not be enabled until provider validation, rate limiting, and connect-time IP pinning requirements are understood.
 
 ## Recommended Runtime Settings
 

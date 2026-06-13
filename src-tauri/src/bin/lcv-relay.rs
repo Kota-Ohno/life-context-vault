@@ -9,7 +9,7 @@ use std::{
   env,
   fs,
   io::{BufRead, BufReader, Read, Write},
-  net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream},
+  net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream, ToSocketAddrs},
   path::PathBuf,
   sync::{
     mpsc::{self, Sender},
@@ -44,6 +44,9 @@ const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_REDIRECT_URIS: usize = 10;
 const MAX_OAUTH_REDIRECT_URI_BYTES: usize = 2048;
 const MAX_CIMD_CLIENT_ID_BYTES: usize = 2048;
+const MAX_CIMD_DOCUMENT_BYTES: u64 = 128 * 1024;
+const CIMD_FETCH_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_ALLOWED_CIMD_HOSTS: &[&str] = &["chatgpt.com"];
 const DEFAULT_LOCAL_TENANT_ID: &str = "local";
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: &[&str] =
@@ -114,6 +117,7 @@ struct RelayConfig {
   relay_state_path: Option<PathBuf>,
   allow_direct_sidecar: bool,
   allowed_origins: Vec<String>,
+  allowed_cimd_hosts: Vec<String>,
   retention: RelayRetentionPolicy,
 }
 
@@ -134,6 +138,7 @@ impl RelayConfig {
       .map(|value| value == "1")
       .unwrap_or(false);
     let allowed_origins = parse_allowed_origins(env::var("LCV_RELAY_ALLOWED_ORIGINS").ok());
+    let allowed_cimd_hosts = parse_allowed_cimd_hosts(env::var("LCV_RELAY_ALLOWED_CIMD_HOSTS").ok());
     validate_relay_surface(
       &bind,
       &base_url,
@@ -163,6 +168,7 @@ impl RelayConfig {
         .or_else(default_relay_state_path),
       allow_direct_sidecar,
       allowed_origins,
+      allowed_cimd_hosts,
       retention: RelayRetentionPolicy::from_env(),
     })
   }
@@ -313,6 +319,23 @@ fn parse_allowed_origins(raw: Option<String>) -> Vec<String> {
     .filter(|value| !value.is_empty())
     .map(|value| value.trim_end_matches('/').to_string())
     .collect()
+}
+
+fn parse_allowed_cimd_hosts(raw: Option<String>) -> Vec<String> {
+  let parsed: Vec<String> = raw
+    .unwrap_or_default()
+    .split(|character: char| character == ',' || character.is_whitespace())
+    .map(|value| value.trim().trim_matches('.').to_ascii_lowercase())
+    .filter(|value| !value.is_empty())
+    .collect();
+  if parsed.is_empty() {
+    DEFAULT_ALLOWED_CIMD_HOSTS
+      .iter()
+      .map(|host| host.to_string())
+      .collect()
+  } else {
+    parsed
+  }
 }
 
 fn relay_tenant_id_from_env(bind: &str) -> Result<String, String> {
@@ -1545,13 +1568,24 @@ fn oauth_resource_from_param(
 struct OAuthClientIdentity {
   client_name: String,
   registered: bool,
+  client_identifier: String,
+  client_id_host: Option<String>,
+  redirect_host: String,
+  registration_method: String,
 }
 
-fn resolve_oauth_client(
+fn resolve_oauth_client_with_cimd<VerifyHost, FetchDocument>(
   client_id: &str,
   redirect_uri: &str,
   state: &RelayState,
-) -> Result<OAuthClientIdentity, HttpResponse> {
+  config: &RelayConfig,
+  verify_host: &VerifyHost,
+  fetch_document: &FetchDocument,
+) -> Result<OAuthClientIdentity, HttpResponse>
+where
+  VerifyHost: Fn(&str) -> Result<(), String>,
+  FetchDocument: Fn(&str) -> Result<Value, String>,
+{
   if let Some(client) = state.client(client_id) {
     if !client.redirect_uris.iter().any(|uri| uri == redirect_uri) {
       return Err(json_response(400, json!({
@@ -1565,25 +1599,40 @@ fn resolve_oauth_client(
         "message": message
       })));
     }
-    return Ok(OAuthClientIdentity {
-      client_name: client.client_name,
-      registered: true,
-    });
-  }
-
-  match validate_cimd_client_id(client_id) {
-    Ok(client_name) => {
-      if let Err(message) = validate_oauth_redirect_uri(redirect_uri) {
+    let redirect_host = match uri_host(redirect_uri) {
+      Ok(host) => host,
+      Err(message) => {
         return Err(json_response(400, json!({
           "error": "invalid_redirect_uri",
           "message": message
         })));
       }
-      Ok(OAuthClientIdentity {
-        client_name,
-        registered: false,
-      })
-    }
+    };
+    return Ok(OAuthClientIdentity {
+      client_name: client.client_name,
+      registered: true,
+      client_identifier: client_id.to_string(),
+      client_id_host: None,
+      redirect_host,
+      registration_method: "Dynamic Client Registration".to_string(),
+    });
+  }
+
+  match resolve_cimd_client_metadata_with(
+    client_id,
+    redirect_uri,
+    &config.allowed_cimd_hosts,
+    verify_host,
+    fetch_document,
+  ) {
+    Ok(client) => Ok(OAuthClientIdentity {
+      client_name: client.client_name,
+      registered: false,
+      client_identifier: client_id.to_string(),
+      client_id_host: Some(client.client_id_host),
+      redirect_host: client.redirect_host,
+      registration_method: "Client ID Metadata Document".to_string(),
+    }),
     Err(message) => Err(json_response(400, json!({
       "error": "invalid_client",
       "message": message
@@ -1592,13 +1641,29 @@ fn resolve_oauth_client(
 }
 
 fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  oauth_authorize_with_cimd(
+    request,
+    config,
+    state,
+    &verify_cimd_host_resolves_publicly,
+    &fetch_cimd_document,
+  )
+}
+
+fn oauth_authorize_with_cimd<VerifyHost, FetchDocument>(
+  request: &HttpRequest,
+  config: &RelayConfig,
+  state: &RelayState,
+  verify_host: &VerifyHost,
+  fetch_document: &FetchDocument,
+) -> HttpResponse
+where
+  VerifyHost: Fn(&str) -> Result<(), String>,
+  FetchDocument: Fn(&str) -> Result<Value, String>,
+{
   let query = parse_query(&request.query);
   let client_id = query.get("client_id").cloned().unwrap_or_default();
   let redirect_uri = query.get("redirect_uri").cloned().unwrap_or_default();
-  let client = match resolve_oauth_client(&client_id, &redirect_uri, state) {
-    Ok(client) => client,
-    Err(response) => return response,
-  };
   if query.get("response_type").map(String::as_str) != Some("code") {
     return json_response(400, json!({
       "error": "unsupported_response_type"
@@ -1637,6 +1702,17 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
     Ok(resource) => resource,
     Err(response) => return response,
   };
+  if let Err(message) = validate_oauth_redirect_uri(&redirect_uri) {
+    return json_response(400, json!({
+      "error": "invalid_redirect_uri",
+      "message": message
+    }));
+  }
+  let client =
+    match resolve_oauth_client_with_cimd(&client_id, &redirect_uri, state, config, verify_host, fetch_document) {
+      Ok(client) => client,
+      Err(response) => return response,
+    };
   let pending = state.insert_pending_authorization(PendingAuthorization {
     id: random_token("oauth_session"),
     client_id: client_id.clone(),
@@ -1674,6 +1750,28 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
       html_escape(&pending.id)
     )
   };
+  let client_host_row = client
+    .client_id_host
+    .as_deref()
+    .map(|host| {
+      format!(
+        "<li><strong>Client ID host:</strong> <code>{}</code></li>",
+        html_escape(host)
+      )
+    })
+    .unwrap_or_else(|| "<li><strong>Client ID host:</strong> registered client</li>".to_string());
+  let client_details = format!(
+    "<ul style=\"background:#f7f8f5;border:1px solid #dde4dc;border-radius:8px;padding:12px 16px 12px 28px\">\
+     <li><strong>Registration:</strong> {}</li>\
+     <li><strong>Client ID:</strong> <code>{}</code></li>\
+     {}\
+     <li><strong>Redirect host:</strong> <code>{}</code></li>\
+     </ul>",
+    html_escape(&client.registration_method),
+    html_escape(&client.client_identifier),
+    client_host_row,
+    html_escape(&client.redirect_host)
+  );
   HttpResponse::html(
     200,
     format!(
@@ -1683,12 +1781,15 @@ fn oauth_authorize(request: &HttpRequest, config: &RelayConfig, state: &RelaySta
        <h1>Authorize {}</h1>\
        <p>This AI may request reviewed Context Packs, propose memories for your Inbox, read policy summaries, or check request status according to the scopes below.</p>\
        <p>It never receives Raw Sources, unapproved candidates, deleted facts, or the whole Vault through OAuth. Context Packs still require Vault policy checks and user confirmation before sensitive context is sent.</p>\
+       <p>Confirm the host details before approving. A familiar display name is not enough on its own.</p>\
+       {}\
        <p><strong>Scopes:</strong> {}</p>\
        <p><strong>Resource:</strong> {}</p>\
        {}\
        <p><a href=\"{}\" style=\"color:#4c5d52\">Deny / cancel</a></p>\
        </main>",
       html_escape(&client.client_name),
+      client_details,
       html_escape(&pending.scopes.join(" ")),
       html_escape(pending.resource.as_deref().unwrap_or("local development fallback")),
       approval_control,
@@ -1810,13 +1911,17 @@ fn oauth_token(request: &HttpRequest, config: &RelayConfig, state: &RelayState) 
       "message": "redirect_uri mismatch"
     }));
   }
-  if let Some(client_id) = form.get("client_id").filter(|value| !value.trim().is_empty()) {
-    if client_id != &auth_code.client_id {
-      return json_response(400, json!({
-        "error": "invalid_grant",
-        "message": "client_id mismatch"
-      }));
-    }
+  let Some(client_id) = form.get("client_id").filter(|value| !value.trim().is_empty()) else {
+    return json_response(400, json!({
+      "error": "invalid_request",
+      "message": "client_id is required for public OAuth clients"
+    }));
+  };
+  if client_id != &auth_code.client_id {
+    return json_response(400, json!({
+      "error": "invalid_grant",
+      "message": "client_id mismatch"
+    }));
   }
   let verifier = form.get("code_verifier").cloned().unwrap_or_default();
   if !verify_pkce(
@@ -1929,7 +2034,40 @@ fn validate_oauth_redirect_uri(uri: &str) -> Result<(), String> {
   Ok(())
 }
 
-fn validate_cimd_client_id(client_id: &str) -> Result<String, String> {
+struct CimdClientIdentity {
+  client_name: String,
+  client_id_host: String,
+  redirect_host: String,
+}
+
+fn resolve_cimd_client_metadata_with<VerifyHost, FetchDocument>(
+  client_id: &str,
+  redirect_uri: &str,
+  allowed_hosts: &[String],
+  verify_host: &VerifyHost,
+  fetch_document: &FetchDocument,
+) -> Result<CimdClientIdentity, String>
+where
+  VerifyHost: Fn(&str) -> Result<(), String>,
+  FetchDocument: Fn(&str) -> Result<Value, String>,
+{
+  let host = validate_cimd_client_id_url(client_id)?;
+  validate_cimd_host_allowed(&host, allowed_hosts)?;
+  validate_oauth_redirect_uri(redirect_uri)
+    .map_err(|message| format!("CIMD redirect_uri is invalid: {message}"))?;
+  let redirect_host = uri_host(redirect_uri)
+    .map_err(|message| format!("CIMD redirect_uri is invalid: {message}"))?;
+  verify_host(&host)?;
+  let document = fetch_document(client_id)?;
+  let client_name = validate_cimd_metadata_document(client_id, redirect_uri, &document)?;
+  Ok(CimdClientIdentity {
+    client_name,
+    client_id_host: host,
+    redirect_host,
+  })
+}
+
+fn validate_cimd_client_id_url(client_id: &str) -> Result<String, String> {
   let value = client_id.trim();
   if value.is_empty() {
     return Err("client_id is required.".to_string());
@@ -1978,7 +2116,153 @@ fn validate_cimd_client_id(client_id: &str) -> Result<String, String> {
   if path_and_query.contains('?') {
     return Err("CIMD client_id must not include a query string.".to_string());
   }
-  Ok(format!("CIMD client {}", host))
+  if path_and_query.split('/').any(|segment| segment == "." || segment == "..") {
+    return Err("CIMD client_id path must not include dot segments.".to_string());
+  }
+  Ok(host)
+}
+
+fn validate_cimd_host_allowed(host: &str, allowed_hosts: &[String]) -> Result<(), String> {
+  let normalized = host.trim().trim_matches('.').to_ascii_lowercase();
+  if allowed_hosts
+    .iter()
+    .any(|allowed| allowed.trim().trim_matches('.').eq_ignore_ascii_case(&normalized))
+  {
+    return Ok(());
+  }
+  Err(format!(
+    "CIMD client_id host {normalized} is not in LCV_RELAY_ALLOWED_CIMD_HOSTS."
+  ))
+}
+
+fn verify_cimd_host_resolves_publicly(host: &str) -> Result<(), String> {
+  let addresses = (host, 443)
+    .to_socket_addrs()
+    .map_err(|error| format!("CIMD client_id host could not be resolved: {error}"))?;
+  let mut saw_address = false;
+  for address in addresses {
+    saw_address = true;
+    if cimd_ip_is_forbidden(address.ip()) {
+      return Err("CIMD client_id host resolves to a non-public address.".to_string());
+    }
+  }
+  if !saw_address {
+    return Err("CIMD client_id host did not resolve to an address.".to_string());
+  }
+  Ok(())
+}
+
+fn fetch_cimd_document(client_id: &str) -> Result<Value, String> {
+  let agent = ureq::AgentBuilder::new()
+    .timeout(Duration::from_secs(CIMD_FETCH_TIMEOUT_SECONDS))
+    .redirects(0)
+    .build();
+  let response = agent
+    .get(client_id)
+    .set("Accept", "application/json")
+    .call()
+    .map_err(|error| match error {
+      ureq::Error::Status(status, _) => {
+        format!("CIMD metadata document returned HTTP {status}.")
+      }
+      ureq::Error::Transport(error) => {
+        format!("CIMD metadata document fetch failed: {error}")
+      }
+    })?;
+  let content_type = response
+    .header("Content-Type")
+    .unwrap_or_default()
+    .split(';')
+    .next()
+    .unwrap_or_default()
+    .trim()
+    .to_ascii_lowercase();
+  if content_type != "application/json" {
+    return Err("CIMD metadata document must use Content-Type: application/json.".to_string());
+  }
+  let mut body = String::new();
+  let bytes_read = response
+    .into_reader()
+    .take(MAX_CIMD_DOCUMENT_BYTES + 1)
+    .read_to_string(&mut body)
+    .map_err(|error| format!("CIMD metadata document could not be read: {error}"))?;
+  if bytes_read as u64 > MAX_CIMD_DOCUMENT_BYTES {
+    return Err(format!(
+      "CIMD metadata document must be at most {MAX_CIMD_DOCUMENT_BYTES} bytes."
+    ));
+  }
+  serde_json::from_str::<Value>(&body)
+    .map_err(|error| format!("CIMD metadata document is not valid JSON: {error}"))
+}
+
+fn validate_cimd_metadata_document(
+  client_id: &str,
+  redirect_uri: &str,
+  document: &Value,
+) -> Result<String, String> {
+  if document.get("client_id").and_then(Value::as_str) != Some(client_id) {
+    return Err("CIMD metadata document client_id must match the OAuth client_id.".to_string());
+  }
+
+  let redirect_uris = document
+    .get("redirect_uris")
+    .and_then(Value::as_array)
+    .ok_or_else(|| "CIMD metadata document must include redirect_uris.".to_string())?
+    .iter()
+    .map(|value| {
+      value
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "CIMD redirect_uris entries must be strings.".to_string())
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+  let redirect_uris = validate_oauth_redirect_uris(&redirect_uris)
+    .map_err(|message| format!("CIMD redirect_uris are invalid: {message}"))?;
+  if !redirect_uris.iter().any(|uri| uri == redirect_uri) {
+    return Err("redirect_uri is not listed in the CIMD metadata document.".to_string());
+  }
+
+  if let Some(grant_types) = document.get("grant_types") {
+    json_string_array_contains(grant_types, "authorization_code", "grant_types")?;
+  }
+  if let Some(response_types) = document.get("response_types") {
+    json_string_array_contains(response_types, "code", "response_types")?;
+  }
+  if let Some(method) = document.get("token_endpoint_auth_method") {
+    if method.as_str() != Some("none") {
+      return Err("CIMD public clients must use token_endpoint_auth_method: none.".to_string());
+    }
+  }
+
+  let client_name = document
+    .get("client_name")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .ok_or_else(|| "CIMD metadata document must include client_name.".to_string())?;
+  if client_name.len() > 200 {
+    return Err("CIMD client_name must be at most 200 bytes.".to_string());
+  }
+  if client_name.chars().any(|character| character.is_control()) {
+    return Err("CIMD client_name must not contain control characters.".to_string());
+  }
+  Ok(client_name.to_string())
+}
+
+fn json_string_array_contains(value: &Value, expected: &str, field_name: &str) -> Result<(), String> {
+  let items = value
+    .as_array()
+    .ok_or_else(|| format!("CIMD {field_name} must be an array of strings."))?;
+  let contains_expected = items.iter().try_fold(false, |contains, item| {
+    let Some(item) = item.as_str() else {
+      return Err(format!("CIMD {field_name} entries must be strings."));
+    };
+    Ok(contains || item == expected)
+  })?;
+  if !contains_expected {
+    return Err(format!("CIMD {field_name} must include {expected}."));
+  }
+  Ok(())
 }
 
 fn authority_port(authority: &str) -> Option<&str> {
@@ -2036,6 +2320,17 @@ fn cimd_ipv6_is_forbidden(ip: Ipv6Addr) -> bool {
     || (segments[0] & 0xfe00) == 0xfc00
     || (segments[0] & 0xffc0) == 0xfe80
     || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+}
+
+fn uri_host(uri: &str) -> Result<String, String> {
+  let (_, rest) = uri
+    .split_once("://")
+    .ok_or_else(|| "URI must include a scheme".to_string())?;
+  let authority_end = rest
+    .find(['/', '?'])
+    .unwrap_or(rest.len());
+  let authority = &rest[..authority_end];
+  redirect_uri_host(authority)
 }
 
 fn redirect_uri_host(authority: &str) -> Result<String, String> {
@@ -3718,6 +4013,7 @@ fn reason_phrase(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::cell::Cell;
 
   fn test_config() -> RelayConfig {
     RelayConfig {
@@ -3733,6 +4029,7 @@ mod tests {
       relay_state_path: None,
       allow_direct_sidecar: true,
       allowed_origins: Vec::new(),
+      allowed_cimd_hosts: parse_allowed_cimd_hosts(None),
       retention: RelayRetentionPolicy::default(),
     }
   }
@@ -4634,18 +4931,229 @@ mod tests {
       "https://[::1]/oauth/client.json",
       "https://chatgpt.com:8443/oauth/client.json",
       "https://chatgpt.com:/oauth/client.json",
+      "https://chatgpt.com/oauth/../client.json",
+      "https://chatgpt.com/oauth/./client.json",
       "client_unregistered",
     ] {
       assert!(
-        validate_cimd_client_id(client_id).is_err(),
+        validate_cimd_client_id_url(client_id).is_err(),
         "unsafe CIMD client_id should be rejected: {client_id}"
       );
     }
     assert_eq!(
-      validate_cimd_client_id("https://chatgpt.com/oauth/client.json")
+      validate_cimd_client_id_url("https://chatgpt.com/oauth/client.json")
         .expect("valid CIMD client_id"),
-      "CIMD client chatgpt.com"
+      "chatgpt.com"
     );
+    assert!(validate_cimd_host_allowed("chatgpt.com", &["chatgpt.com".to_string()]).is_ok());
+    assert!(validate_cimd_host_allowed("evil.example", &["chatgpt.com".to_string()]).is_err());
+  }
+
+  #[test]
+  fn cimd_metadata_document_validation_accepts_public_pkce_clients() {
+    let client_id = "https://chatgpt.com/oauth/life-context-vault/client.json";
+    let redirect_uri = "https://chatgpt.com/connector/oauth/callback";
+    let document = json!({
+      "client_id": client_id,
+      "client_name": "Life Context Vault",
+      "redirect_uris": [redirect_uri],
+      "grant_types": ["authorization_code"],
+      "response_types": ["code"],
+      "token_endpoint_auth_method": "none"
+    });
+
+    assert_eq!(
+      validate_cimd_metadata_document(client_id, redirect_uri, &document)
+        .expect("valid CIMD metadata"),
+      "Life Context Vault"
+    );
+
+  }
+
+  #[test]
+  fn cimd_metadata_document_validation_rejects_mismatched_or_confidential_clients() {
+    let client_id = "https://chatgpt.com/oauth/life-context-vault/client.json";
+    let redirect_uri = "https://chatgpt.com/connector/oauth/callback";
+    for (label, document) in [
+      (
+        "mismatched client_id",
+        json!({
+          "client_id": "https://evil.example/client.json",
+          "redirect_uris": [redirect_uri]
+        }),
+      ),
+      (
+        "missing requested redirect",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": ["https://chatgpt.com/other/callback"]
+        }),
+      ),
+      (
+        "unsafe redirect",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": ["http://evil.example/callback"]
+        }),
+      ),
+      (
+        "confidential token auth",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": [redirect_uri],
+          "token_endpoint_auth_method": "client_secret_basic"
+        }),
+      ),
+      (
+        "wrong grant type",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": [redirect_uri],
+          "grant_types": ["client_credentials"]
+        }),
+      ),
+      (
+        "wrong response type",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": [redirect_uri],
+          "response_types": ["token"]
+        }),
+      ),
+      (
+        "non-string redirect",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": [123]
+        }),
+      ),
+      (
+        "missing client_name",
+        json!({
+          "client_id": client_id,
+          "redirect_uris": [redirect_uri]
+        }),
+      ),
+      (
+        "control character name",
+        json!({
+          "client_id": client_id,
+          "client_name": "Bad\nName",
+          "redirect_uris": [redirect_uri]
+        }),
+      ),
+    ] {
+      assert!(
+        validate_cimd_metadata_document(client_id, redirect_uri, &document).is_err(),
+        "{label} should be rejected"
+      );
+    }
+  }
+
+  #[test]
+  fn oauth_authorize_validates_cheap_parameters_before_cimd_resolution() {
+    let state = RelayState::new();
+    let config = public_test_config();
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/authorize".to_string(),
+      query: form_encode(&[
+        ("response_type", "token"),
+        ("client_id", "https://chatgpt.com/oauth/life-context-vault/client.json"),
+        ("redirect_uri", "https://chatgpt.com/connector/oauth/callback"),
+        ("scope", "request.status"),
+        ("resource", config.mcp_resource_uri().as_str()),
+      ]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+
+    let unexpected_verify = |_host: &str| -> Result<(), String> {
+      panic!("CIMD host verification must not run before cheap OAuth validation");
+    };
+    let unexpected_fetch = |_client_id: &str| -> Result<Value, String> {
+      panic!("CIMD metadata fetch must not run before cheap OAuth validation");
+    };
+    let response = oauth_authorize_with_cimd(
+      &request,
+      &config,
+      &state,
+      &unexpected_verify,
+      &unexpected_fetch,
+    );
+    assert_eq!(response.status, 400);
+    let body = String::from_utf8(response.body).expect("authorize body");
+    assert!(body.contains("unsupported_response_type"));
+  }
+
+  #[test]
+  fn oauth_authorize_accepts_fetched_cimd_metadata_without_dcr_registration() {
+    let state = RelayState::new();
+    let config = public_test_config();
+    let client_id = "https://chatgpt.com/oauth/life-context-vault/client.json";
+    let redirect_uri = "https://chatgpt.com/connector/oauth/callback";
+    let verifier = "correct-horse-battery-staple-0123456789abcdef";
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let request = HttpRequest {
+      method: "GET".to_string(),
+      path: "/oauth/authorize".to_string(),
+      query: form_encode(&[
+        ("response_type", "code"),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "request.status"),
+        ("resource", config.mcp_resource_uri().as_str()),
+      ]),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    let verified_host = Cell::new(false);
+    let fetch_count = Cell::new(0);
+    let verify_host = |host: &str| -> Result<(), String> {
+      assert_eq!(host, "chatgpt.com");
+      verified_host.set(true);
+      Ok(())
+    };
+    let fetch_document = |actual_client_id: &str| -> Result<Value, String> {
+      assert_eq!(actual_client_id, client_id);
+      fetch_count.set(fetch_count.get() + 1);
+      Ok(json!({
+        "client_id": client_id,
+        "client_name": "ChatGPT Life Context Vault",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none"
+      }))
+    };
+
+    let response = oauth_authorize_with_cimd(
+      &request,
+      &config,
+      &state,
+      &verify_host,
+      &fetch_document,
+    );
+
+    assert_eq!(response.status, 200);
+    assert!(verified_host.get());
+    assert_eq!(fetch_count.get(), 1);
+    let body = String::from_utf8(response.body).expect("approval body");
+    assert!(body.contains("ChatGPT Life Context Vault"));
+    assert!(body.contains("Client ID Metadata Document"));
+    assert!(body.contains("chatgpt.com"));
+    let inner = state.inner.lock().expect("relay state");
+    let pending = inner
+      .pending_authorizations
+      .values()
+      .next()
+      .expect("pending CIMD authorization");
+    assert_eq!(pending.client_id, client_id);
+    assert!(!pending.client_is_registered);
+    assert_eq!(pending.redirect_uri, redirect_uri);
+    assert_eq!(pending.resource.as_deref(), Some(config.mcp_resource_uri().as_str()));
   }
 
   #[test]
@@ -4783,6 +5291,7 @@ mod tests {
       body: form_encode(&[
         ("grant_type", "authorization_code"),
         ("code", code_without_token_resource.as_str()),
+        ("client_id", client.client_id.as_str()),
         ("redirect_uri", "https://client.example/callback"),
         ("code_verifier", verifier),
       ]),
@@ -4806,11 +5315,25 @@ mod tests {
     };
     assert_eq!(oauth_token(&wrong_client_token, &config, &state).status, 400);
 
+    let missing_client_code = issue_code();
+    let missing_client_token = HttpRequest {
+      body: form_encode(&[
+        ("grant_type", "authorization_code"),
+        ("code", missing_client_code.as_str()),
+        ("redirect_uri", "https://client.example/callback"),
+        ("code_verifier", verifier),
+        ("resource", resource.as_str()),
+      ]),
+      ..missing_token_resource.clone()
+    };
+    assert_eq!(oauth_token(&missing_client_token, &config, &state).status, 400);
+
     let code = issue_code();
     let token_request = HttpRequest {
       body: form_encode(&[
         ("grant_type", "authorization_code"),
         ("code", code.as_str()),
+        ("client_id", client.client_id.as_str()),
         ("redirect_uri", "https://client.example/callback"),
         ("code_verifier", verifier),
         ("resource", resource.as_str()),

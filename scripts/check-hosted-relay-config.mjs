@@ -80,6 +80,21 @@ function validateHostName(value, name) {
   }
 }
 
+function validateCimdHost(value) {
+  const host = String(value ?? "").trim().replace(/\.$/, "").toLowerCase();
+  if (!host) fail("LCV_RELAY_ALLOWED_CIMD_HOSTS must not include empty entries");
+  if (host.includes("://") || host.includes("/") || host.includes(":") || host.includes("@")) {
+    fail(`LCV_RELAY_ALLOWED_CIMD_HOSTS entries must be hostnames without scheme, path, port, or userinfo: ${value}`);
+  }
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+    fail(`LCV_RELAY_ALLOWED_CIMD_HOSTS entries must be public DNS hostnames: ${value}`);
+  }
+  if (!/^[a-z0-9.-]+$/.test(host) || !host.includes(".")) {
+    fail(`LCV_RELAY_ALLOWED_CIMD_HOSTS entries must be public DNS hostnames: ${value}`);
+  }
+  return host;
+}
+
 function validateComposeEnv(config, relayConfig) {
   const errors = [];
   const warnings = [];
@@ -238,6 +253,16 @@ function validate(config) {
   });
 
   check(() => {
+    const rawHosts = splitCsv(config.LCV_RELAY_ALLOWED_CIMD_HOSTS);
+    const hosts = rawHosts.length ? rawHosts : ["chatgpt.com"];
+    if (!rawHosts.length) {
+      warnings.push("LCV_RELAY_ALLOWED_CIMD_HOSTS is not set; relay default is chatgpt.com.");
+    }
+    if (hosts.includes("*")) fail("LCV_RELAY_ALLOWED_CIMD_HOSTS must not include *");
+    for (const host of hosts) validateCimdHost(host);
+  });
+
+  check(() => {
     if (config.LCV_MCP_COMMAND) fail("LCV_MCP_COMMAND must not be set on the hosted metadata-only relay");
     if (config.LCV_VAULT_DB_PATH) fail("LCV_VAULT_DB_PATH must not be set on the hosted metadata-only relay");
     if (config.LCV_VAULT_DB_KEY) fail("LCV_VAULT_DB_KEY must not be set on the hosted metadata-only relay");
@@ -262,6 +287,7 @@ function exampleConfig() {
     LCV_RELAY_TENANT_ID: "production",
     LCV_RELAY_ALLOW_DIRECT_SIDECAR: "0",
     LCV_RELAY_ALLOWED_ORIGINS: "https://chatgpt.com,https://claude.ai",
+    LCV_RELAY_ALLOWED_CIMD_HOSTS: "chatgpt.com",
     LCV_RELAY_STATE_PATH: "/data/relay-state.json",
     LCV_RELAY_REQUEST_EVENT_RETENTION_DAYS: "30",
     LCV_RELAY_CLIENT_RETENTION_DAYS: "180",

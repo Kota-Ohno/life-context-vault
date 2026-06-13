@@ -155,13 +155,13 @@ The handoff body must include `clientId`, `requestId`, `expiresAt`, `mcpResponse
 The Relay supports both ChatGPT-style Client ID Metadata Document (CIMD) client ids and Dynamic Client Registration (DCR):
 
 - Authorization server metadata advertises `client_id_metadata_document_supported: true` and `registration_endpoint`.
-- CIMD client ids must be public `https://` metadata document URLs. The Relay rejects localhost, userinfo, fragments, query strings, empty document paths, non-HTTPS schemes, non-default HTTPS ports, non-public IPs, control characters, and oversized values.
-- For CIMD, the current Relay validates the public HTTPS `client_id` URL shape and then applies the same Authorization Code + PKCE S256, redirect URI safety, MCP `resource`, and token `client_id` binding checks used for registered clients.
+- CIMD client ids must be public `https://` metadata document URLs whose host is in `LCV_RELAY_ALLOWED_CIMD_HOSTS` (default: `chatgpt.com`). The Relay rejects localhost, userinfo, fragments, query strings, dot path segments, empty document paths, non-HTTPS schemes, non-default HTTPS ports, non-public IP literals, control characters, and oversized values before any metadata fetch.
+- For CIMD, the Relay validates cheap OAuth request parameters before fetching, performs a defensive public-address DNS preflight, fetches the metadata document as JSON with redirects disabled, caps the document at 128 KiB, verifies that `client_id` matches the OAuth `client_id`, requires `client_name`, requires the requested `redirect_uri` to be listed in `redirect_uris`, and accepts only public-client token auth (`token_endpoint_auth_method: none` when present).
 - DCR remains available at `POST /oauth/register` and persists only client metadata.
 - Both CIMD and DCR clients use Authorization Code + PKCE S256 with `resource=<mcp endpoint>` binding.
-- Token exchange rejects a supplied `client_id` that does not match the authorization code.
+- Token exchange requires `client_id` and rejects any value that does not match the authorization code.
 
-The current CIMD path is public-client PKCE support. It does not fetch or validate remote CIMD documents and does not verify `private_key_jwt` or confidential-client assertions; add those only if provider certification requires them.
+The current CIMD path is public-client PKCE support. It does not pin the final connected IP after DNS preflight, cache metadata, rate-limit CIMD fetches, or verify `private_key_jwt`/confidential-client assertions; add those if provider certification or custom host allowlists require them.
 
 ## Relay State Store
 

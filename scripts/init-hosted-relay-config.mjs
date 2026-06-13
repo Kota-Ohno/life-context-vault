@@ -41,6 +41,8 @@ Options:
   --out-dir <path>                       Output directory. Default: deploy/relay
   --allowed-origins <csv>                Browser AI origins. Default: ChatGPT and Claude.
   --allowed-origin <origin>              Repeatable alternative to --allowed-origins.
+  --allowed-cimd-hosts <csv>             OAuth CIMD metadata hosts. Default: chatgpt.com.
+  --allowed-cimd-host <host>             Repeatable alternative to --allowed-cimd-hosts.
   --force                               Overwrite existing relay.env and compose.env.
   --dry-run                             Validate and print next steps without writing repo files.
 `);
@@ -114,6 +116,32 @@ function normalizeOrigins() {
   return [...new Set(origins)];
 }
 
+function normalizeCimdHosts() {
+  const repeated = valuesFor("--allowed-cimd-host");
+  const csv = valueFor("--allowed-cimd-hosts");
+  const rawHosts = repeated.length
+    ? repeated
+    : String(csv ?? "chatgpt.com").split(",");
+  const hosts = [];
+  for (const raw of rawHosts) {
+    const host = raw.trim().replace(/\.$/, "").toLowerCase();
+    if (!host) continue;
+    if (host.includes("://") || host.includes("/") || host.includes(":") || host.includes("@")) {
+      fail(`allowed CIMD host must be a hostname without scheme, path, port, or userinfo: ${raw}`);
+    }
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+      fail(`allowed CIMD host must be a public DNS hostname: ${raw}`);
+    }
+    if (!/^[a-z0-9.-]+$/.test(host) || !host.includes(".")) {
+      fail(`allowed CIMD host must be a public DNS hostname: ${raw}`);
+    }
+    hosts.push(host);
+  }
+  if (!hosts.length) fail("at least one allowed CIMD metadata host is required");
+  if (hosts.includes("*")) fail("wildcard CIMD metadata hosts are not supported");
+  return [...new Set(hosts)];
+}
+
 function secret(prefix) {
   return `${prefix}_${randomBytes(48).toString("base64url")}`;
 }
@@ -157,6 +185,7 @@ const publicHost = normalizePublicHost(valueFor("--public-host"));
 const email = validateEmail(valueFor("--email"));
 const tenantId = validateTenantId(valueFor("--tenant-id"));
 const origins = normalizeOrigins();
+const cimdHosts = normalizeCimdHosts();
 const force = hasFlag("--force");
 const dryRun = hasFlag("--dry-run");
 const outDir = resolve(repoRoot, valueFor("--out-dir") ?? "deploy/relay");
@@ -178,6 +207,7 @@ const relayEnv = [
   "LCV_RELAY_ENABLE_STATIC_TOKEN=0",
   "LCV_RELAY_AUTO_APPROVE=0",
   `LCV_RELAY_ALLOWED_ORIGINS=${origins.join(",")}`,
+  `LCV_RELAY_ALLOWED_CIMD_HOSTS=${cimdHosts.join(",")}`,
   "LCV_RELAY_STATE_PATH=/data/relay-state.json",
   "LCV_RELAY_REQUEST_EVENT_RETENTION_DAYS=30",
   "LCV_RELAY_CLIENT_RETENTION_DAYS=180",

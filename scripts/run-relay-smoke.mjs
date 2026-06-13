@@ -443,6 +443,7 @@ async function main() {
       body: formBody({
         grant_type: "authorization_code",
         code: wrongVerifierGrant.authorizationCode,
+        client_id: registeredClient.client_id,
         redirect_uri: redirectUri,
         code_verifier: base64Url(randomBytes(32)),
         resource: `${baseUrl}/mcp`
@@ -460,6 +461,7 @@ async function main() {
       body: formBody({
         grant_type: "authorization_code",
         code: wrongResourceGrant.authorizationCode,
+        client_id: registeredClient.client_id,
         redirect_uri: redirectUri,
         code_verifier: wrongResourceGrant.codeVerifier,
         resource: `${baseUrl}/wrong`
@@ -478,6 +480,7 @@ async function main() {
       body: formBody({
         grant_type: "authorization_code",
         code: authorizationCode,
+        client_id: registeredClient.client_id,
         redirect_uri: redirectUri,
         code_verifier: codeVerifier,
         resource: `${baseUrl}/mcp`
@@ -498,6 +501,7 @@ async function main() {
       body: formBody({
         grant_type: "authorization_code",
         code: authorizationCode,
+        client_id: registeredClient.client_id,
         redirect_uri: redirectUri,
         code_verifier: codeVerifier,
         resource: `${baseUrl}/mcp`
@@ -524,6 +528,7 @@ async function main() {
       body: formBody({
         grant_type: "authorization_code",
         code: limitedGrant.authorizationCode,
+        client_id: registeredClient.client_id,
         redirect_uri: redirectUri,
         code_verifier: limitedGrant.codeVerifier,
         resource: `${baseUrl}/mcp`

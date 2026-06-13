@@ -88,7 +88,7 @@ const packet = {
   mcpServerUrl: mcpUrl,
   authorizationServerMetadata: `${baseUrl}/.well-known/oauth-authorization-server`,
   protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
-  clientIdMetadataDocuments: "supported for public PKCE clients; DCR remains available",
+  clientIdMetadataDocuments: "supported for allowlisted public PKCE clients; DCR remains available",
   dynamicClientRegistration: `${baseUrl}/oauth/register`,
   relayStateStatus: `${baseUrl}/relay/state`,
   scopes: [

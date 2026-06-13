@@ -191,8 +191,8 @@ describe("AI access UI safety", () => {
 
     expect(guides).toHaveLength(3);
     expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("ready");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.steps).toContain("CIMD対応Connectorへ貼り付け");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.boundary).toContain("CIMD優先");
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.steps).toContain("ChatGPTに接続情報を貼り付け");
+    expect(guides.find((guide) => guide.provider === "ChatGPT")?.boundary).toContain("登録方式を切り替え");
     expect(guides.find((guide) => guide.provider === "Claude Web")?.actionLabel).toBe("Claude用JSONをコピー");
     expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
     expect(JSON.stringify(guides)).toContain("確認済みContext Pack");

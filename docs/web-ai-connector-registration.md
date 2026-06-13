@@ -37,9 +37,9 @@ Use the generated `chatgpt` section for the ChatGPT connector path:
 - Description: explain that the connector returns approved, source-backed Context Packs.
 - Connector URL: the public `https://.../mcp` endpoint.
 
-The Relay publishes `client_id_metadata_document_supported: true` and `registration_endpoint`. Prefer ChatGPT's Client ID Metadata Document (CIMD) connector mode when available; the Relay accepts public HTTPS CIMD `client_id` URLs, requires Authorization Code + PKCE S256, keeps `resource` binding mandatory, validates redirect URI safety, and rejects unsafe client ids or token exchanges where `client_id` does not match the authorization code. Dynamic Client Registration (DCR) remains available for connector paths that choose or require DCR.
+The Relay publishes `client_id_metadata_document_supported: true` and `registration_endpoint`. Prefer ChatGPT's Client ID Metadata Document (CIMD) connector mode when available; the Relay fetches only allowlisted public HTTPS CIMD hosts, verifies that `client_id`, `client_name`, and `redirect_uris` match the OAuth request, requires public-client PKCE semantics, keeps `resource` binding mandatory, and requires token exchanges to send the same `client_id` as the authorization code. Dynamic Client Registration (DCR) remains available for connector paths that choose or require DCR.
 
-The current CIMD support is a public-client compatibility path. It does not fetch or validate remote CIMD documents and does not implement `private_key_jwt` or confidential-client assertions; provider certification should confirm whether public-client CIMD with PKCE is sufficient for a hosted beta.
+The current CIMD support is a public-client compatibility path. It supports `token_endpoint_auth_method: none` with Authorization Code + PKCE S256. It does not implement `private_key_jwt`, confidential-client assertions, metadata caching, fetch rate limiting, or connect-time IP pinning after DNS preflight; provider certification should confirm whether public-client CIMD with PKCE is sufficient for a hosted beta.
 
 ## Claude
 

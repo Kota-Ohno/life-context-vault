@@ -22,6 +22,7 @@ COPY --from=builder /app/src-tauri/target/release/lcv-relay /usr/local/bin/lcv-r
 
 ENV LCV_RELAY_BIND=0.0.0.0:8765 \
   LCV_RELAY_ALLOW_DIRECT_SIDECAR=0 \
+  LCV_RELAY_ALLOWED_CIMD_HOSTS=chatgpt.com \
   LCV_RELAY_STATE_PATH=/data/relay-state.json \
   LCV_RELAY_REQUEST_EVENT_RETENTION_DAYS=30 \
   LCV_RELAY_HANDOFF_TTL_SECONDS=600

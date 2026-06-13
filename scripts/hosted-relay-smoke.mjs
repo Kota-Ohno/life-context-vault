@@ -229,6 +229,7 @@ async function smokeHostedOAuth() {
     body: formBody({
       grant_type: "authorization_code",
       code: authorizationCode,
+      client_id: registeredClient.client_id,
       redirect_uri: redirectUri,
       code_verifier: codeVerifier,
       resource: `${baseUrl.replace(/\/$/, "")}/mcp`
