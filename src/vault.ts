@@ -1673,6 +1673,13 @@ function contextPackReceiptMetadata(state: VaultState, pack: ContextPack): Recor
   const request = pack.requestId
     ? state.contextPackRequests.find((item) => item.id === pack.requestId)
     : null;
+  const includedDomains = Array.from(
+    new Set(
+      pack.items
+        .map((item) => state.facts.find((fact) => fact.id === item.factId)?.domain)
+        .filter(isLifeContextDomain)
+    )
+  );
   return {
     requestId: pack.requestId,
     packId: pack.id,
@@ -1684,6 +1691,7 @@ function contextPackReceiptMetadata(state: VaultState, pack: ContextPack): Recor
     sourceSnippetCount: pack.sourceSnippets?.length ?? 0,
     excludedCount: pack.excludedItems.length,
     warningCount: pack.warnings.length,
+    includedDomains,
     maxSensitivityIncluded: pack.maxSensitivityIncluded,
     confirmationStatus: pack.confirmationStatus,
     expiresAt: pack.expiresAt ?? request?.expiresAt ?? null,

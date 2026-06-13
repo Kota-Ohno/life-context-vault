@@ -599,6 +599,7 @@ describe("vault flow", () => {
       deliveryChannel: "clipboard_copy",
       deliveryStatus: "copied",
       itemCount: 1,
+      includedDomains: ["documents_and_evidence"],
       trustBoundary: "ContextPack only",
       bodyStoredInAudit: false,
       rawSourceIncluded: false,

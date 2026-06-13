@@ -5192,12 +5192,16 @@ function auditReceiptTitle(event: AuditEvent): string {
   return `${client}へのContext Packを送信不可にしました`;
 }
 
-function auditReceiptBody(event: AuditEvent): string {
+export function auditReceiptBody(event: AuditEvent): string {
   const itemCount = metadataNumber(event, "itemCount");
   const snippetCount = metadataNumber(event, "sourceSnippetCount");
   const excludedCount = metadataNumber(event, "excludedCount");
   const ttl = metadataNumber(event, "ttlSeconds");
+  const includedDomainLabels = metadataStringArray(event, "includedDomains")
+    .filter(isKnownLifeDomain)
+    .map(domainLabel);
   const pieces = [
+    includedDomainLabels.length > 0 ? `${includedDomainLabels.join("、")}の文脈` : null,
     typeof itemCount === "number" ? `${itemCount}件のApprovedFact` : null,
     typeof snippetCount === "number" ? `${snippetCount}件の根拠スニペット` : null,
     typeof excludedCount === "number" ? `${excludedCount}件を除外` : null,
@@ -5211,6 +5215,10 @@ function deliveryChannelLabel(channel: string): string {
   if (channel === "clipboard_copy") return "コピー";
   if (channel === "relay_handoff") return "Relay";
   return channel || "Context Pack";
+}
+
+function isKnownLifeDomain(value: string): value is LifeContextDomain {
+  return policyDomainOptions.includes(value as LifeContextDomain);
 }
 
 function auditEventLabel(event: AuditEvent): string {
@@ -5260,6 +5268,11 @@ function metadataString(event: AuditEvent, key: string): string {
 function metadataNumber(event: AuditEvent, key: string): number | null {
   const value = event.metadata?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metadataStringArray(event: AuditEvent, key: string): string[] {
+  const value = event.metadata?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function FactRow({

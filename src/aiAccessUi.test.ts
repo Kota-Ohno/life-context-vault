@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   aiMcpEndpointDisplay,
+  auditReceiptBody,
   canCopyAiMcpEndpoint,
   factInventoryCounts,
   factSourceNames,
@@ -13,6 +14,7 @@ import {
   sourceReviewCandidates,
   webAiMcpEndpoint
 } from "./App";
+import type { AuditEvent } from "./types";
 
 describe("AI access UI safety", () => {
   it("blocks public MCP endpoint copying while hosted relay pairing is unconfirmed", () => {
@@ -135,6 +137,31 @@ describe("AI access UI safety", () => {
         aiAccessReady: false
       })
     ).toBe("add_background");
+  });
+
+  it("describes AI delivery receipts by life domain without storing body text", () => {
+    const event: AuditEvent = {
+      id: "audit_1",
+      eventType: "context_pack_delivered",
+      actor: "user",
+      subjectType: "context_pack",
+      subjectId: "pack_1",
+      occurredAt: "2026-06-13T00:00:00.000Z",
+      sensitivity: "private_consequential",
+      metadata: {
+        includedDomains: ["contracts_and_policies", "documents_and_evidence"],
+        itemCount: 2,
+        sourceSnippetCount: 1,
+        excludedCount: 3,
+        bodyStoredInAudit: false
+      }
+    };
+
+    const body = auditReceiptBody(event);
+
+    expect(body).toContain("契約・保険、書類・証明の文脈");
+    expect(body).toContain("2件のApprovedFact");
+    expect(body).toContain("Raw Source本文と未承認候補は含めていません");
   });
 
   it("gives first-time users clear entry points from an empty Memory Inbox", () => {

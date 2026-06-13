@@ -134,7 +134,7 @@ Last updated: 2026-06-13
   - a separate local runtime preference can auto-start Relay and Agent when the app opens
   - the UI makes login launch and AI Access auto-start distinct from Context Pack approval
 - Added first-run AI access launchpad UX:
-  - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, start AI Access, and confirm a Context Pack
+  - Home now shows a four-step "First 10 minutes" checklist: add life background, approve memory candidates, try a Context Pack, and then make AI connection setup repeatable
   - Home now prioritizes one actionable next step above the checklist, such as reviewing pending MemoryCandidates before asking users to inspect status panels
   - Guided background setup appears before the long Background Snapshot so first-time users can start adding life context without scrolling through existing memories
   - mobile navigation switches to icon-first controls with accessible labels, hiding secondary stats so the first action and setup form appear much earlier
@@ -987,6 +987,14 @@ Last updated: 2026-06-13
 - Security/privacy: no AI boundary changed. The Home action only opens Requests; Pack generation, exclusions, confirmation, copy, and Audit still happen in the existing Context Pack path.
 - Review fallback: Product fit review flagged the previous Home priority as over-optimizing for MCP setup before the user had felt value. Security/privacy review confirmed copy fallback still requires Pack preview. UI/UX review checks Home checklist order, next-action copy, desktop/mobile layout, and the Requests handoff. Maintainability review added `homeNextActionKind` coverage for the priority rule.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: after demo data, Home shows `Context Packを試す` as the next action, checklist step 3 is Context Pack before AI connection step 4, `Packを確認` opens the Requests copy-fallback starter, and there is no page-level horizontal overflow.
+
+### Audit Domain Receipt Slice
+
+- Product fit: Audit receipts now explain what kind of life context was AI-bound by domain, such as `契約・保険` or `制約・配慮`, instead of only showing counts. This better matches the general-user promise that users can understand what each AI received.
+- UX/design: the receipt stays compact and natural-language, reusing the existing delivery-receipt row. It shows domain summary, Fact/snippet/exclusion counts, channel, and trust boundary without adding a heavy detail drawer.
+- Security/privacy: Audit still does not store Pack body, Fact text, Raw Source body, or unapproved candidate text. The new metadata is limited to included life-domain ids derived from already-confirmed Pack items.
+- Review fallback: Product fit review flagged count-only receipts as weak for "what was sent?" Security/privacy review confirmed domain ids are metadata, not Pack body. UI/UX review checked receipt readability on desktop/mobile. Maintainability review added tests for receipt copy and metadata leakage.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: after copy fallback, Audit shows a receipt like `制約・配慮、価値観・希望、本人情報の文脈`, includes ApprovedFact/snippet/exclusion counts, states that Raw Source body and unapproved candidates were not included, does not show Fact/Source body text, and has no page-level horizontal overflow.
 
 ## SubAgent Completion Review Disposition
 
