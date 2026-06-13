@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+
 const args = process.argv.slice(2);
+const placeholderCheckEnabled = !hasFlag("--example") && !hasFlag("--allow-placeholders");
 
 function hasFlag(flag) {
   return args.includes(flag);
@@ -12,6 +15,27 @@ function valueFor(flag) {
 
 function fail(message) {
   throw new Error(message);
+}
+
+function parseEnvFile(path) {
+  const text = readFileSync(path, "utf8");
+  const parsed = {};
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) fail(`${path}:${index + 1} must be KEY=value`);
+    const [, key, rawValue] = match;
+    let value = rawValue.trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    parsed[key] = value;
+  }
+  return parsed;
 }
 
 function originOf(raw, name) {
@@ -42,6 +66,10 @@ function secretLooksLong(value) {
   return typeof value === "string" && value.trim().length >= 32;
 }
 
+function looksLikePlaceholder(value) {
+  return /<|>|change[-_ ]?me|replace[-_ ]?me|example\.com|your[-_ ]/i.test(String(value ?? ""));
+}
+
 function validate(config) {
   const errors = [];
   const warnings = [];
@@ -59,8 +87,14 @@ function validate(config) {
     if (!baseUrl) fail("LCV_RELAY_BASE_URL is required");
     const url = originOf(baseUrl, "LCV_RELAY_BASE_URL");
     if (url.protocol !== "https:") fail("LCV_RELAY_BASE_URL must use https:// for hosted deployments");
+    if (placeholderCheckEnabled && looksLikePlaceholder(baseUrl)) {
+      fail("LCV_RELAY_BASE_URL must be replaced with the real hosted Relay origin");
+    }
     if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
       fail("LCV_RELAY_BASE_URL must be a public HTTPS origin, not localhost");
+    }
+    if (config.LCV_RELAY_PUBLIC_HOST && config.LCV_RELAY_PUBLIC_HOST !== url.hostname) {
+      fail("LCV_RELAY_PUBLIC_HOST must match the host portion of LCV_RELAY_BASE_URL");
     }
   });
 
@@ -93,11 +127,17 @@ function validate(config) {
     if (!secretLooksLong(config.LCV_RELAY_ADMIN_TOKEN)) {
       fail("LCV_RELAY_ADMIN_TOKEN must be set and at least 32 characters");
     }
+    if (placeholderCheckEnabled && looksLikePlaceholder(config.LCV_RELAY_ADMIN_TOKEN)) {
+      fail("LCV_RELAY_ADMIN_TOKEN must be generated from the hosting platform secret store");
+    }
   });
 
   check(() => {
     if (!secretLooksLong(config.LCV_RELAY_HANDOFF_SECRET)) {
       fail("LCV_RELAY_HANDOFF_SECRET must be set and at least 32 characters");
+    }
+    if (placeholderCheckEnabled && looksLikePlaceholder(config.LCV_RELAY_HANDOFF_SECRET)) {
+      fail("LCV_RELAY_HANDOFF_SECRET must be generated from the hosting platform secret store");
     }
     if (config.LCV_RELAY_HANDOFF_SECRET === config.LCV_RELAY_ADMIN_TOKEN) {
       fail("LCV_RELAY_HANDOFF_SECRET must differ from LCV_RELAY_ADMIN_TOKEN");
@@ -163,6 +203,8 @@ function exampleConfig() {
 
 const config = hasFlag("--example")
   ? exampleConfig()
+  : valueFor("--env-file")
+  ? parseEnvFile(valueFor("--env-file"))
   : Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("LCV_")));
 const { errors, warnings } = validate(config);
 

@@ -1098,6 +1098,14 @@ Last updated: 2026-06-13
 - Verification: `npm test -- --run src/aiAccessUi.test.ts`, `npm run build`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed. System Chrome/Playwright checked Connections at `1440px` and `390px`: the Web AI registration guide renders three provider cards, button labels stay compact, and neither viewport has page-level horizontal overflow.
 - Review fallback: SubAgents were not used for this incremental UX slice; the main thread ran product fit, security/privacy, UI/UX, and maintainability passes.
 
+### Hosted Relay Compose Deployment Slice
+
+- Product fit: hosted Relay provisioning now has a concrete single-host deployment bundle instead of Dockerfile-only instructions. Operators can copy env templates, validate the Relay environment, start Caddy-managed HTTPS, and then run the hosted smoke against the public origin.
+- Security/privacy: `relay.env` and `compose.env` are separated so Caddy receives only public host/ACME settings while Relay receives admin and handoff secrets. The config checker now reads `--env-file`, rejects real deployments that still contain placeholder domains/secrets, verifies the public host matches `LCV_RELAY_BASE_URL`, and keeps rejecting public static bearer, direct sidecar fallback, hosted Vault variables, wildcard CORS, and long handoff TTLs.
+- Technical design: `deploy/relay/compose.yaml` runs `lcv-relay` behind Caddy with durable metadata volumes, read-only containers, tmpfs `/tmp`, and `no-new-privileges`. `product:check` validates the relay env template with `--allow-placeholders` so template drift is caught without requiring real secrets.
+- Verification: `node --check scripts/check-hosted-relay-config.mjs`, `npm run hosted-relay:check -- --example`, `npm run hosted-relay:check -- --env-file deploy/relay/relay.env.example --allow-placeholders --name deploy-template`, real placeholder rejection without `--allow-placeholders`, `docker compose --env-file compose.env -f compose.yaml config`, `git diff --check`, and `npm run product:check -- --include-sse-soak` passed.
+- Review fallback: SubAgents were not used for this incremental deployment slice; the main thread ran hosted-ops, security/privacy, product, and maintainability passes.
+
 ### Product Review UX Closure Slice
 
 - Product fit: Home onboarding step 1 now sends first-time users to the guided life-background input instead of splitting them between Sources and the setup card.

@@ -10,6 +10,42 @@ This guide describes the product-grade hosted shape for `lcv-relay`. The hosted 
 docker build -f deploy/relay/Dockerfile -t life-context-vault-relay:local .
 ```
 
+## Docker Compose Staging
+
+For a single-host staging deployment with automatic HTTPS termination, use the deployment bundle in `deploy/relay/`.
+
+```bash
+cp deploy/relay/relay.env.example deploy/relay/relay.env
+cp deploy/relay/compose.env.example deploy/relay/compose.env
+```
+
+Edit both copied files before starting the Relay:
+
+- `deploy/relay/relay.env` is passed only to `lcv-relay`. Replace `LCV_RELAY_BASE_URL`, `LCV_RELAY_PUBLIC_HOST`, `LCV_RELAY_ADMIN_TOKEN`, `LCV_RELAY_HANDOFF_SECRET`, tenant id, and allowed origins.
+- `deploy/relay/compose.env` is passed only to Caddy. Set the same `LCV_RELAY_PUBLIC_HOST` and an ACME email address.
+
+Validate the real Relay environment before boot:
+
+```bash
+npm run hosted-relay:check -- --env-file deploy/relay/relay.env --name staging
+```
+
+The checked environment rejects placeholder domains/secrets, localhost base URLs, public static bearer fallback, direct sidecar fallback, wildcard CORS, missing tenant id, and hosted Vault variables.
+
+Start the HTTPS Relay:
+
+```bash
+cd deploy/relay
+docker compose --env-file compose.env up -d --build
+```
+
+The compose bundle runs:
+
+- `relay`: metadata-only `lcv-relay`, no direct Vault or sidecar access, durable `/data` volume.
+- `caddy`: HTTPS reverse proxy for `LCV_RELAY_PUBLIC_HOST`, with Caddy-managed certificates.
+
+Do not put `LCV_RELAY_ADMIN_TOKEN` or `LCV_RELAY_HANDOFF_SECRET` in `compose.env`; those belong only in `relay.env`.
+
 ## Required Runtime Settings
 
 Set these for any public or shared deployment:
@@ -29,6 +65,12 @@ Before deploying, validate the public Relay environment:
 
 ```bash
 npm run hosted-relay:check
+```
+
+When deploying from an env file, prefer:
+
+```bash
+npm run hosted-relay:check -- --env-file deploy/relay/relay.env --name production
 ```
 
 The same checker is part of `npm run product:check` in documented-example mode, so release checks catch drift in the required hosted boundary even when a real public Relay URL is not available in CI.
