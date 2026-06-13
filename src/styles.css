@@ -1683,6 +1683,20 @@ button:focus-visible {
   margin-top: 12px;
 }
 
+.copy-fallback-starter {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dfe6dc;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.copy-fallback-starter .form-stack {
+  margin-top: 0;
+}
+
 .request-test-panel .form-stack {
   margin-top: 12px;
 }

@@ -8,6 +8,7 @@ import {
   factSourceNames,
   InboxView,
   isHostedRelayConfirmed,
+  shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
   webAiMcpEndpoint
 } from "./App";
@@ -84,6 +85,12 @@ describe("AI access UI safety", () => {
       { id: "candidate_detail", sourceIds: ["source_1"], status: "needs_user_detail" },
       { id: "candidate_sensitive", sourceIds: ["source_2"], status: "blocked_sensitive" }
     ]);
+  });
+
+  it("shows the copy fallback starter only on an empty Context Requests inbox", () => {
+    expect(shouldShowCopyFallbackStarter([], null)).toBe(true);
+    expect(shouldShowCopyFallbackStarter([{ id: "request_1" }], null)).toBe(false);
+    expect(shouldShowCopyFallbackStarter([], { id: "pack_1" })).toBe(false);
   });
 
   it("gives first-time users clear entry points from an empty Memory Inbox", () => {

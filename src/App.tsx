@@ -4137,6 +4137,7 @@ function ContextRequestsView({
   const actionableRequests = requests.filter((request) => requestNeedsUserAction(request));
   const readyRequests = requests.filter((request) => request.status === "fulfilled");
   const closedRequests = requests.filter((request) => request.status === "denied" || request.status === "expired");
+  const showCopyFallbackStarter = shouldShowCopyFallbackStarter(requests, currentPack);
   const requestQueueTitle =
     pendingReviewRequests.length > 0
       ? `${pendingReviewRequests.length}件の確認待ち`
@@ -4148,7 +4149,31 @@ function ContextRequestsView({
       ? "外部AIへ返す前に、使うFact・根拠・除外理由を確認できます。"
       : unreturnedLowRiskRequests.length > 0
         ? "低リスクでも、AIへ返す前に送信内容をここで確認できます。"
-        : "新しいAI要求が届くとここに並びます。手動テストは下の折りたたみから試せます。";
+        : showCopyFallbackStarter
+          ? "新しいAI要求が届くとここに並びます。MCPなしで使う場合は下でContext Packを作成します。"
+          : "新しいAI要求が届くとここに並びます。手動テストは下の折りたたみから試せます。";
+  const requestComposer = (buttonLabel: string) => (
+    <div className="form-stack">
+      <label className="field">
+        <span>AIクライアント</span>
+        <select value={requestClientId} onChange={(event) => setRequestClientId(event.target.value)}>
+          {connectors
+            .filter((connector) => connector.scopes.includes("context_pack.request"))
+            .map((connector) => (
+              <option key={connector.id} value={connector.id}>
+                {connector.clientName}
+              </option>
+            ))}
+        </select>
+      </label>
+      <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
+      <button className="primary-button" onClick={buildPack} type="button">
+        <Sparkles size={16} />
+        {buttonLabel}
+      </button>
+      <p className="muted">MCPなしでも、AIへ渡す前に同じContext Pack確認とAuditを通します。</p>
+    </div>
+  );
   const packPanelRef = useRef<HTMLDivElement | null>(null);
   const packActionRef = useRef<HTMLDivElement | null>(null);
 
@@ -4198,33 +4223,31 @@ function ContextRequestsView({
           {requests.length === 0 && (
             <EmptyState
               title="まだAI要求はありません"
-              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。"
+              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。MCPなしで使う場合は下でContext Packを作成します。"
             />
           )}
         </div>
-        <details className="advanced-panel request-test-panel">
-          <summary>手動でContext Packを試す</summary>
-          <div className="form-stack">
-            <label className="field">
-              <span>AIクライアント</span>
-              <select value={requestClientId} onChange={(event) => setRequestClientId(event.target.value)}>
-                {connectors
-                  .filter((connector) => connector.scopes.includes("context_pack.request"))
-                  .map((connector) => (
-                    <option key={connector.id} value={connector.id}>
-                      {connector.clientName}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
-            <button className="primary-button" onClick={buildPack} type="button">
-              <Sparkles size={16} />
-              テスト要求を作成
-            </button>
-            <p className="muted">手動テストでも、AIへ返す前に同じContext Pack確認とAuditを通します。</p>
+        {showCopyFallbackStarter ? (
+          <div className="copy-fallback-starter">
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Copy fallback</p>
+                <h3>MCPなしでContext Packを作る</h3>
+              </div>
+              <Clipboard size={18} />
+            </div>
+            <div className="trust-note">
+              <ShieldCheck size={16} />
+              <span>ここで作ったPackも、確認画面で許可またはコピーするまでAIには渡りません。</span>
+            </div>
+            {requestComposer("確認用Context Packを作成")}
           </div>
-        </details>
+        ) : (
+          <details className="advanced-panel request-test-panel">
+            <summary>手動でContext Packを試す</summary>
+            {requestComposer("テスト要求を作成")}
+          </details>
+        )}
       </div>
 
       <div className="panel context-pack-panel" ref={packPanelRef}>
@@ -5404,6 +5427,13 @@ export function sourceReviewCandidates<T extends Pick<MemoryCandidate, "sourceId
       candidate.sourceIds.length > 0 &&
       ["new", "needs_user_detail", "blocked_sensitive"].includes(candidate.status)
   );
+}
+
+export function shouldShowCopyFallbackStarter(
+  requests: Array<Pick<ContextPackRequest, "id">>,
+  currentPack: Pick<ContextPack, "id"> | null
+): boolean {
+  return requests.length === 0 && !currentPack;
 }
 
 function Input({

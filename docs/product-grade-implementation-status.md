@@ -972,6 +972,14 @@ Last updated: 2026-06-13
 - Review fallback: Product fit review flagged the old fallback button as misleading because it copied an MCP endpoint rather than the AI-bound pack content. Security/privacy review confirmed no new data path was added. UI/UX review checked desktop/mobile Connections cards and the click path to Requests.
 - Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked Connections at desktop `1280x900` and mobile `390x900`: the card is labeled `MCPなしでコピー`, the old `現在の入口をコピー` button is absent, `Requestsで確認・コピー` appears once, clicking it opens Context Requests, and there is no page-level horizontal overflow.
 
+### Requests Copy Fallback Starter Slice
+
+- Product fit: users who arrive in Context Requests without a live MCP request now see a direct copy-fallback starter instead of a hidden manual test control. This completes the "MCPなしでコピー" route as an actual first-use path.
+- UX/design: the empty Requests state keeps the existing approval-inbox layout, adds one compact starter panel, and leaves the advanced manual test folded only after there is already request or pack context on the page.
+- Security/privacy: the starter reuses the existing `buildPack` flow, so the user still reviews the generated Context Pack before copying or generating an answer. No Fact, Source body, or connector endpoint is sent just by opening the starter.
+- Review fallback: Product fit review checked the Connections-to-Requests handoff. Security/privacy review confirmed the same Context Pack boundary, exclusions, and confirmation gate remain in force. UI/UX review checks desktop/mobile empty Requests, form labels, and no horizontal overflow. Maintainability review added `shouldShowCopyFallbackStarter` coverage for the empty-state rule.
+- Verification: `npm test`, `npm run build`, `git diff --check`, and `npm run product:check` passed. Headless Browser/Playwright checked desktop `1280x900` and mobile `390x900`: demo data can route from Connections to Requests, the empty Requests inbox shows `MCPなしでContext Packを作る`, the advanced manual-test summary is hidden in that state, `確認用Context Packを作成` generates a Context Pack preview with `確認してコピーFallback`, and there is no page-level horizontal overflow.
+
 ## SubAgent Completion Review Disposition
 
 SubAgent reviews were used for the product-grade completion pass. Material findings were triaged as fixed, intentionally deferred, or requiring real hosted operations outside this local implementation slice.
