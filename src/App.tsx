@@ -61,6 +61,7 @@ import {
   saveNativeVault,
   searchNativeFacts,
   startAiAccessAgentForRelay,
+  requestManagedPairingUrl,
   startAiAccessServices,
   stopAiAccessServices,
   updateNativeAccessPolicy,
@@ -1845,6 +1846,31 @@ export function App() {
     }
   }
 
+  async function connectManagedRelay() {
+    setAiServiceBusy(true);
+    try {
+      const url = await requestManagedPairingUrl();
+      if (!url) {
+        setNotice("Desktop appでのみ管理リレーに接続できます。");
+        return;
+      }
+      const status = await startAiAccessAgentForRelay(url);
+      setAiServiceStatus(status);
+      setNotice(
+        status?.agentConnected
+          ? "管理リレーとのpairingを確認しました。Web AIへMCP URLを登録できます。"
+          : status?.agentManagedRunning
+          ? "管理リレーへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
+          : "管理リレーAgentの接続を開始しました。"
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "管理リレーへの接続に失敗しました。");
+      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+    } finally {
+      setAiServiceBusy(false);
+    }
+  }
+
   async function stopAiAccess() {
     setAiServiceBusy(true);
     try {
@@ -2128,6 +2154,7 @@ export function App() {
             claudeConfig={claudeConfig}
             startAiAccess={startAiAccess}
             startHostedRelayAgent={startHostedRelayAgent}
+            connectManagedRelay={connectManagedRelay}
             stopAiAccess={stopAiAccess}
             refreshAiAccess={refreshAiAccess}
             hostedAgentWebsocketUrl={hostedAgentWebsocketUrl}
@@ -3359,6 +3386,7 @@ function ConnectionsView({
   claudeConfig,
   startAiAccess,
   startHostedRelayAgent,
+  connectManagedRelay,
   stopAiAccess,
   refreshAiAccess,
   hostedAgentWebsocketUrl,
@@ -3408,6 +3436,7 @@ function ConnectionsView({
   claudeConfig: string;
   startAiAccess: () => void;
   startHostedRelayAgent: () => void;
+  connectManagedRelay: () => void;
   stopAiAccess: () => void;
   refreshAiAccess: () => void;
   hostedAgentWebsocketUrl: string;
@@ -3847,6 +3876,15 @@ function ConnectionsView({
               </div>
             </div>
             <div className="service-actions">
+              <button
+                className="primary-button"
+                disabled={!nativePath || aiServiceBusy}
+                onClick={connectManagedRelay}
+                type="button"
+              >
+                <Plug size={16} />
+                管理リレーにワンクリック接続
+              </button>
               <button
                 className="primary-button"
                 disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}
