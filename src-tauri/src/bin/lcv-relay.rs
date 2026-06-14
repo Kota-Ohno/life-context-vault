@@ -16,7 +16,7 @@ use std::{
     Arc, Mutex,
   },
   thread,
-  time::{Duration, SystemTime, UNIX_EPOCH},
+  time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tungstenite::{accept_hdr, Message};
 
@@ -74,6 +74,85 @@ fn main() {
   }
 }
 
+/// Fixed-window per-IP request rate limiter for the public relay surface
+/// (P0-F abuse defense). Time is injected so the counting logic is testable
+/// without sleeping.
+#[derive(Debug)]
+struct RateLimiter {
+  window: Duration,
+  max_per_window: u32,
+  buckets: HashMap<IpAddr, (Instant, u32)>,
+}
+
+impl RateLimiter {
+  fn new(window: Duration, max_per_window: u32) -> Self {
+    Self {
+      window,
+      max_per_window,
+      buckets: HashMap::new(),
+    }
+  }
+
+  /// Returns true when the request is allowed, false when the peer has exceeded
+  /// its quota for the current window.
+  fn check(&mut self, ip: IpAddr, now: Instant) -> bool {
+    match self.buckets.get_mut(&ip) {
+      Some((window_start, count)) => {
+        if now.duration_since(*window_start) >= self.window {
+          *window_start = now;
+          *count = 1;
+          true
+        } else {
+          *count += 1;
+          *count <= self.max_per_window
+        }
+      }
+      None => {
+        self.buckets.insert(ip, (now, 1));
+        true
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod rate_limiter_tests {
+  use super::*;
+
+  #[test]
+  fn allows_up_to_max_then_denies_within_window() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 3);
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let now = Instant::now();
+    assert!(limiter.check(ip, now));
+    assert!(limiter.check(ip, now));
+    assert!(limiter.check(ip, now));
+    assert!(!limiter.check(ip, now));
+  }
+
+  #[test]
+  fn tracks_ips_independently() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 1);
+    let now = Instant::now();
+    let a: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let b: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    assert!(limiter.check(a, now));
+    assert!(limiter.check(b, now));
+    assert!(!limiter.check(a, now));
+  }
+
+  #[test]
+  fn resets_after_window_elapses() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 1);
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let now = Instant::now();
+    assert!(limiter.check(ip, now));
+    assert!(!limiter.check(ip, now));
+    let later = now + Duration::from_secs(61);
+    assert!(limiter.check(ip, later));
+  }
+}
+
 fn run() -> Result<(), String> {
   let config = Arc::new(RelayConfig::from_env()?);
   let state = RelayState::load_with_retention(
@@ -85,13 +164,26 @@ fn run() -> Result<(), String> {
   let listener = TcpListener::bind(&config.bind)
     .map_err(|error| format!("failed to bind {}: {error}", config.bind))?;
 
+  let rate_limit_window = Duration::from_secs(
+    env::var("LCV_RELAY_RATE_LIMIT_WINDOW_SECS")
+      .ok()
+      .and_then(|value| value.parse().ok())
+      .unwrap_or(60),
+  );
+  let rate_limit_max = env::var("LCV_RELAY_RATE_LIMIT_MAX")
+    .ok()
+    .and_then(|value| value.parse().ok())
+    .unwrap_or(120);
+  let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(rate_limit_window, rate_limit_max)));
+
   for stream in listener.incoming() {
     match stream {
       Ok(stream) => {
         let config = config.clone();
         let state = state.clone();
+        let rate_limiter = rate_limiter.clone();
         thread::spawn(move || {
-          if let Err(error) = handle_stream(stream, &config, &state) {
+          if let Err(error) = handle_stream(stream, &config, &state, &rate_limiter) {
             eprintln!("relay request error: {error}");
           }
         });
@@ -1263,11 +1355,30 @@ impl PersistedRelayState {
   }
 }
 
-fn handle_stream(stream: TcpStream, config: &RelayConfig, state: &RelayState) -> Result<(), String> {
+fn handle_stream(
+  stream: TcpStream,
+  config: &RelayConfig,
+  state: &RelayState,
+  rate_limiter: &Mutex<RateLimiter>,
+) -> Result<(), String> {
+  let mut stream = stream;
+  let peer_ip = stream.peer_addr().ok().map(|socket_addr| socket_addr.ip());
+  if let Some(ip) = peer_ip {
+    let allowed = rate_limiter
+      .lock()
+      .map(|mut limiter| limiter.check(ip, Instant::now()))
+      .unwrap_or(true);
+    if !allowed {
+      return json_response(
+        429,
+        json!({ "error": "rate_limited", "message": "Too many requests. Please retry shortly." }),
+      )
+      .write_to(&mut stream);
+    }
+  }
   if is_agent_websocket_request(&stream)? {
     return handle_agent_websocket(stream, state);
   }
-  let mut stream = stream;
   let request = match HttpRequest::read(&mut stream) {
     Ok(request) => request,
     Err(error) => return error.to_response().write_to(&mut stream),
