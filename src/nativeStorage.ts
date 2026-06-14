@@ -115,6 +115,34 @@ export async function getNativeVaultPath(): Promise<string | null> {
   return invoke<string>("vault_storage_path");
 }
 
+/**
+ * Export the entire vault as an encrypted backup envelope (PBKDF2-SHA256 +
+ * AES-GCM-256). The envelope contains every raw source, so it is as sensitive
+ * as the vault itself; the passphrase protects it. Returns null in the browser
+ * preview (which has no native vault).
+ */
+export async function exportNativeEncryptedBackup(passphrase: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("export_native_encrypted_backup", { passphrase });
+}
+
+/**
+ * Restore a vault from an encrypted backup envelope. Overwrites the current
+ * vault on disk; callers must confirm destructively before invoking. Returns
+ * the restored, normalized vault state so the UI can refresh. Returns null in
+ * the browser preview.
+ */
+export async function importNativeEncryptedBackup(
+  backupText: string,
+  passphrase: string
+): Promise<VaultState | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const payload = await invoke<string>("import_native_encrypted_backup", { backupText, passphrase });
+  return normalizeVaultState(JSON.parse(payload));
+}
+
 export async function extractNativeDocumentText(input: {
   fileName: string;
   mimeType: string;

@@ -28,6 +28,7 @@ use tauri::{
 };
 
 mod mcp_stdio;
+mod vault_backup;
 mod vault_crypto;
 
 const VAULT_STATE_KEY: &str = "vault_state";
@@ -1776,6 +1777,49 @@ fn save_vault_json_with_projection(
   let save_result = save_vault_state_payload(connection, &payload, None)?;
   let saved_snapshot = load_vault_state_snapshot_from_connection(connection)?;
   Ok((saved_snapshot.payload.unwrap_or(payload), save_result.updated_at))
+}
+
+pub fn export_encrypted_backup_at_path(path: &Path, passphrase: &str) -> Result<String, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = vault.to_string();
+  vault_backup::export_encrypted_backup(&payload, passphrase)
+}
+
+pub fn import_encrypted_backup_at_path(
+  path: &Path,
+  backup_text: &str,
+  passphrase: &str,
+) -> Result<String, String> {
+  let payload = vault_backup::import_encrypted_backup(backup_text, passphrase)?;
+  let vault: Value = serde_json::from_str(&payload)
+    .map_err(|error| format!("decrypted backup is not a valid vault payload: {error}"))?;
+  let version = vault.get("version").and_then(Value::as_u64);
+  if version != Some(2) {
+    return Err(format!(
+      "decrypted backup is not a supported vault version (got {:?})",
+      version
+    ));
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(payload)
+}
+
+#[tauri::command]
+fn export_native_encrypted_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
+  let path = vault_db_path(&app)?;
+  export_encrypted_backup_at_path(&path, &passphrase)
+}
+
+#[tauri::command]
+fn import_native_encrypted_backup(
+  app: AppHandle,
+  backup_text: String,
+  passphrase: String,
+) -> Result<String, String> {
+  let path = vault_db_path(&app)?;
+  import_encrypted_backup_at_path(&path, &backup_text, &passphrase)
 }
 
 pub fn propose_memory_at_path(
@@ -8365,7 +8409,9 @@ pub fn run() {
       install_chrome_capture_host_manifest,
       login_item_status,
       install_login_item,
-      uninstall_login_item
+      uninstall_login_item,
+      export_native_encrypted_backup,
+      import_native_encrypted_backup
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -8454,6 +8500,63 @@ mod tests {
 
   fn use_test_vault_key() {
     std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+  }
+
+  #[test]
+  fn encrypted_backup_round_trips_through_vault_db_at_path() {
+    use_test_vault_key();
+    let passphrase = "Correct-Horse-42!";
+    let source_path = temp_vault_path("backup-source");
+    let restore_path = temp_vault_path("backup-restore");
+
+    {
+      let mut connection = open_vault_db_at_path(&source_path).expect("open source vault");
+      let vault = json!({
+        "version": 2,
+        "sources": [],
+        "candidates": [],
+        "facts": [{
+          "id": "fact_test",
+          "factText": "テスト用の事実",
+          "domain": "identity_and_profile",
+          "factType": "identity",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "user_asserted",
+          "status": "active",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "approvedAt": "2026-01-01T00:00:00.000Z",
+          "updatedAt": "2026-01-01T00:00:00.000Z",
+          "supersedesFactIds": []
+        }],
+        "accessPolicies": [],
+        "passiveCaptureSettings": { "enabled": false, "retentionDays": 14, "allowedSites": [] },
+        "passiveCaptureEvents": [],
+        "connectorSessions": [],
+        "contextPackRequests": [],
+        "contextPacks": [],
+        "auditEvents": []
+      });
+      save_vault_json_with_projection(&mut connection, &vault).expect("seed source vault");
+    }
+
+    let envelope =
+      export_encrypted_backup_at_path(&source_path, passphrase).expect("export should succeed");
+    let _restored_payload =
+      import_encrypted_backup_at_path(&restore_path, &envelope, passphrase).expect("import should succeed");
+
+    let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
+    let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
+    let facts = restored
+      .get("facts")
+      .and_then(Value::as_array)
+      .expect("restored vault has facts array");
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["id"], "fact_test");
+    assert_eq!(facts[0]["factText"], "テスト用の事実");
+
+    remove_temp_vault(&source_path);
+    remove_temp_vault(&restore_path);
   }
 
   fn zipped_document(entries: &[(&str, &str)]) -> Vec<u8> {

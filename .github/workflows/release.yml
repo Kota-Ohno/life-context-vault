@@ -1,0 +1,109 @@
+name: release
+
+# Produces a signed + notarized macOS build on version tags.
+# P0-A of the public-release plan. The signing/notarization secrets must be
+# populated in the repository settings before the first real release; see
+# docs/release-and-signing.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to publish (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Cheap gate on Linux before spending macOS build minutes.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+      - run: npm ci
+      - run: npm run product:check
+
+  build-macos:
+    needs: gate
+    runs-on: macos-latest
+    env:
+      # Tauri reads these to drive codesign + xcrun notarytool/stapler.
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_SHORT_NAME: ${{ secrets.APPLE_TEAM_SHORT_NAME }}
+      # Updater signature keypair (generated via `tauri signer generate`).
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+
+      - run: npm ci
+      - run: npm run sidecars:prepare
+
+      - name: Import Developer Application certificate
+        env:
+          APPLE_SIGNING_CERTIFICATE_P12: ${{ secrets.APPLE_SIGNING_CERTIFICATE_P12 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          RUNNER_KEYCHAIN_PASSWORD: ${{ secrets.RUNNER_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_SIGNING_CERTIFICATE_P12" ]; then
+            echo "No signing certificate secret set; skipping import (build will be ad-hoc only)."
+            exit 0
+          fi
+          echo "$APPLE_SIGNING_CERTIFICATE_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$RUNNER_KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+
+      # Stages sidecars then bundles. Confirm bundle targets at first release
+      # (dmg + updater artifacts); adjust --bundles if needed.
+      - name: Build, sign, notarize, staple
+        run: node scripts/run-tauri-with-sidecars.mjs build --bundles dmg
+
+      - name: Smoke-check signatures
+        run: |
+          set -e
+          APP="src-tauri/target/release/bundle/macos/Life Context Vault.app"
+          if [ -d "$APP" ]; then
+            codesign --verify --deep --strict --verbose=2 "$APP" || true
+            spctl --assess --verbose=4 --type execute "$APP" || true
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcv-macos
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.sig
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.sig
+            src-tauri/target/release/bundle/macos/latest.json

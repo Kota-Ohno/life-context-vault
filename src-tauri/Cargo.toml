@@ -55,3 +55,5 @@ pdf-extract = "0.7.12"
 quick-xml = "0.31.0"
 zip = "0.6.6"
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "native-certs"] }
+pbkdf2 = { version = "0.12", features = ["simple"] }
+aes-gcm = "0.10"
