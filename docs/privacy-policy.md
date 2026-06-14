@@ -34,11 +34,9 @@ The maintainer **never** receives, hosts, or can decrypt your vault data.
 
 ## 3. Telemetry and crash reports
 
-The application does **not** include telemetry, analytics, advertising SDKs, or
-automatic crash reporting by default. No usage data is sent to the maintainer.
-
-_(Decision pending before public release: whether to offer opt-in, anonymous
-crash reporting. If added, it will be off by default and documented here.)_
+The application includes **no telemetry, no analytics, no advertising SDKs, and
+no crash reporting**. No usage data is ever sent to the maintainer. This is a
+deliberate decision to preserve the local-first guarantee.
 
 ## 4. Third-party services and runtimes
 
