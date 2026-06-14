@@ -13,7 +13,7 @@ use aes_gcm::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use pbkdf2::pbkdf2_hmac;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 const BACKUP_KDF_ITERATIONS: u32 = 600_000;
 const LEGACY_BACKUP_KDF_ITERATIONS: u32 = 120_000;
@@ -117,6 +117,82 @@ pub fn import_encrypted_backup(backup_text: &str, passphrase: &str) -> Result<St
     .map_err(|error| format!("decrypted backup payload is not valid UTF-8: {error}"))
 }
 
+/// Envelope for a vault-key-derived local backup (no passphrase; used for
+/// automatic scheduled redundancy on the same machine). The AES key is derived
+/// from the SQLCipher key, so this backup is only restorable where the vault
+/// key is available (the user's own machine).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBackupEnvelope {
+  version: u64,
+  kdf: String,
+  iv: String,
+  cipher_text: String,
+}
+
+const LOCAL_BACKUP_KDF_NAME: &str = "VAULT_KEY_SHA256";
+
+pub fn export_local_backup(payload: &str, vault_key_hex: &str) -> Result<String, String> {
+  let key = derive_local_backup_key(vault_key_hex);
+  let mut iv = [0u8; BACKUP_IV_LEN];
+  getrandom::getrandom(&mut iv).map_err(|error| format!("failed to generate local backup iv: {error}"))?;
+  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let ciphertext = cipher
+    .encrypt(Nonce::from_slice(&iv), payload.as_bytes())
+    .map_err(|error| format!("failed to encrypt local backup: {error}"))?;
+  let envelope = LocalBackupEnvelope {
+    version: BACKUP_ENVELOPE_VERSION,
+    kdf: LOCAL_BACKUP_KDF_NAME.to_string(),
+    iv: STANDARD.encode(iv),
+    cipher_text: STANDARD.encode(&ciphertext),
+  };
+  serde_json::to_string_pretty(&envelope).map_err(|error| format!("failed to encode local backup envelope: {error}"))
+}
+
+pub fn import_local_backup(backup_text: &str, vault_key_hex: &str) -> Result<String, String> {
+  let value: serde_json::Value = serde_json::from_str(backup_text)
+    .map_err(|error| format!("local backup is not valid JSON: {error}"))?;
+  let version = value
+    .get("version")
+    .and_then(serde_json::Value::as_u64)
+    .ok_or_else(|| "local backup is missing a version".to_string())?;
+  if version != BACKUP_ENVELOPE_VERSION {
+    return Err(format!("unsupported local backup version: {version}"));
+  }
+  let kdf = value.get("kdf").and_then(serde_json::Value::as_str).unwrap_or("");
+  if kdf != LOCAL_BACKUP_KDF_NAME {
+    return Err(format!("unsupported local backup kdf: {kdf}"));
+  }
+  let iv_encoded = value
+    .get("iv")
+    .and_then(serde_json::Value::as_str)
+    .ok_or_else(|| "local backup is missing iv".to_string())?;
+  let ciphertext_encoded = value
+    .get("cipherText")
+    .and_then(serde_json::Value::as_str)
+    .ok_or_else(|| "local backup is missing cipherText".to_string())?;
+  let iv = STANDARD.decode(iv_encoded).map_err(|error| format!("failed to decode iv: {error}"))?;
+  let ciphertext = STANDARD
+    .decode(ciphertext_encoded)
+    .map_err(|error| format!("failed to decode cipherText: {error}"))?;
+  let key = derive_local_backup_key(vault_key_hex);
+  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let plaintext = cipher
+    .decrypt(Nonce::from_slice(&iv), ciphertext.as_slice())
+    .map_err(|_| "local backup vault key is incorrect or the backup is corrupted".to_string())?;
+  String::from_utf8(plaintext)
+    .map_err(|error| format!("decrypted local backup payload is not valid UTF-8: {error}"))
+}
+
+/// Derive the local-backup AES key from the SQLCipher key hex via a
+/// domain-separated SHA-256 (no PBKDF2: the vault key is already full-entropy).
+fn derive_local_backup_key(vault_key_hex: &str) -> [u8; BACKUP_KEY_LEN] {
+  let mut hasher = Sha256::new();
+  hasher.update(b"lcv-local-backup-v1");
+  hasher.update(vault_key_hex.as_bytes());
+  hasher.finalize().into()
+}
+
 fn derive_backup_key(passphrase: &str, salt: &[u8], iterations: u32) -> Result<[u8; BACKUP_KEY_LEN], String> {
   let mut key = [0u8; BACKUP_KEY_LEN];
   pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, iterations, &mut key);
@@ -191,5 +267,34 @@ mod tests {
     })
     .to_string();
     assert!(import_encrypted_backup(&bogus, STRONG_PASSPHRASE).is_err());
+  }
+
+  const LOCAL_VAULT_KEY_HEX: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  #[test]
+  fn local_backup_round_trips_with_vault_key() {
+    let payload = r#"{"version":2,"facts":[]}"#;
+    let envelope = export_local_backup(payload, LOCAL_VAULT_KEY_HEX).expect("export");
+    let restored = import_local_backup(&envelope, LOCAL_VAULT_KEY_HEX).expect("import");
+    assert_eq!(restored, payload);
+  }
+
+  #[test]
+  fn local_backup_rejects_wrong_vault_key() {
+    let envelope = export_local_backup("payload", LOCAL_VAULT_KEY_HEX).expect("export");
+    let other =
+      "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    assert!(import_local_backup(&envelope, other).is_err());
+  }
+
+  #[test]
+  fn local_backup_envelope_uses_vault_key_kdf() {
+    let envelope = export_local_backup("payload", LOCAL_VAULT_KEY_HEX).expect("export");
+    let value: serde_json::Value = serde_json::from_str(&envelope).expect("envelope is JSON");
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["kdf"], "VAULT_KEY_SHA256");
+    assert!(value["iv"].is_string());
+    assert!(value["cipherText"].is_string());
   }
 }

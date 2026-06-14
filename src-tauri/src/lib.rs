@@ -1807,6 +1807,24 @@ pub fn import_encrypted_backup_at_path(
   Ok(payload)
 }
 
+pub fn export_local_backup_at_path(path: &Path) -> Result<String, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = vault.to_string();
+  let vault_key = vault_crypto::vault_key()?;
+  vault_backup::export_local_backup(&payload, &vault_key)
+}
+
+pub fn import_local_backup_at_path(path: &Path, backup_text: &str) -> Result<String, String> {
+  let vault_key = vault_crypto::vault_key()?;
+  let payload = vault_backup::import_local_backup(backup_text, &vault_key)?;
+  let vault: Value = serde_json::from_str(&payload)
+    .map_err(|error| format!("decrypted local backup is not a valid vault payload: {error}"))?;
+  let mut connection = open_vault_db_at_path(path)?;
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(payload)
+}
+
 #[tauri::command]
 fn export_native_encrypted_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
   let path = vault_db_path(&app)?;
@@ -8706,6 +8724,53 @@ mod tests {
     assert_eq!(facts[0]["id"], "fact_test");
     assert_eq!(facts[0]["factText"], "テスト用の事実");
 
+    remove_temp_vault(&source_path);
+    remove_temp_vault(&restore_path);
+  }
+
+  #[test]
+  fn local_backup_round_trips_through_vault_db_at_path() {
+    use_test_vault_key();
+    let source_path = temp_vault_path("local-backup-source");
+    let restore_path = temp_vault_path("local-backup-restore");
+    {
+      let mut connection = open_vault_db_at_path(&source_path).expect("open source");
+      let vault = json!({
+        "version": 2,
+        "sources": [],
+        "candidates": [],
+        "facts": [{
+          "id": "fact_x",
+          "factText": "ローカルバックアップテスト",
+          "domain": "identity_and_profile",
+          "factType": "identity",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "user_asserted",
+          "status": "active",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "approvedAt": "2026-01-01T00:00:00.000Z",
+          "updatedAt": "2026-01-01T00:00:00.000Z",
+          "supersedesFactIds": []
+        }],
+        "accessPolicies": [],
+        "passiveCaptureSettings": { "enabled": false, "retentionDays": 14, "allowedSites": [] },
+        "passiveCaptureEvents": [],
+        "connectorSessions": [],
+        "contextPackRequests": [],
+        "contextPacks": [],
+        "auditEvents": []
+      });
+      save_vault_json_with_projection(&mut connection, &vault).expect("seed source vault");
+    }
+    let envelope = export_local_backup_at_path(&source_path).expect("export local backup");
+    import_local_backup_at_path(&restore_path, &envelope).expect("import local backup");
+    let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
+    let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
+    let facts = restored.get("facts").and_then(Value::as_array).expect("facts array");
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["id"], "fact_x");
+    assert_eq!(facts[0]["factText"], "ローカルバックアップテスト");
     remove_temp_vault(&source_path);
     remove_temp_vault(&restore_path);
   }
