@@ -77,41 +77,66 @@ fn main() {
 /// Fixed-window per-IP request rate limiter for the public relay surface
 /// (P0-F abuse defense). Time is injected so the counting logic is testable
 /// without sleeping.
+///
+/// Tradeoff: a fixed window permits up to ~2x the quota at a window boundary
+/// (burst at the end of one window plus the start of the next). That is an
+/// acceptable property for an abuse-defense layer — the cap still bounds
+/// sustained abuse — and is far simpler than a sliding window. Buckets are
+/// pruned lazily and capped to bound memory under source-IP rotation.
+const DEFAULT_MAX_BUCKETS: usize = 10_000;
+
 #[derive(Debug)]
 struct RateLimiter {
   window: Duration,
   max_per_window: u32,
+  max_buckets: usize,
   buckets: HashMap<IpAddr, (Instant, u32)>,
 }
 
 impl RateLimiter {
   fn new(window: Duration, max_per_window: u32) -> Self {
+    Self::new_bounded(window, max_per_window, DEFAULT_MAX_BUCKETS)
+  }
+
+  fn new_bounded(window: Duration, max_per_window: u32, max_buckets: usize) -> Self {
     Self {
       window,
       max_per_window,
+      max_buckets,
       buckets: HashMap::new(),
     }
   }
 
   /// Returns true when the request is allowed, false when the peer has exceeded
-  /// its quota for the current window.
+  /// its quota for the current window or the bucket table is saturated.
   fn check(&mut self, ip: IpAddr, now: Instant) -> bool {
-    match self.buckets.get_mut(&ip) {
-      Some((window_start, count)) => {
-        if now.duration_since(*window_start) >= self.window {
-          *window_start = now;
-          *count = 1;
-          true
-        } else {
-          *count += 1;
-          *count <= self.max_per_window
-        }
-      }
-      None => {
-        self.buckets.insert(ip, (now, 1));
+    if let Some((window_start, count)) = self.buckets.get_mut(&ip) {
+      if now.duration_since(*window_start) >= self.window {
+        *window_start = now;
+        *count = 1;
         true
+      } else {
+        *count += 1;
+        *count <= self.max_per_window
       }
+    } else {
+      if self.buckets.len() >= self.max_buckets {
+        self.prune_expired(now);
+      }
+      if self.buckets.len() >= self.max_buckets {
+        // Fail closed under source-IP rotation: deny a brand-new peer rather
+        // than grow the table without bound.
+        return false;
+      }
+      self.buckets.insert(ip, (now, 1));
+      true
     }
+  }
+
+  fn prune_expired(&mut self, now: Instant) {
+    let window = self.window;
+    self.buckets
+      .retain(|_, (window_start, _)| now.duration_since(*window_start) < window);
   }
 }
 
@@ -150,6 +175,20 @@ mod rate_limiter_tests {
     assert!(!limiter.check(ip, now));
     let later = now + Duration::from_secs(61);
     assert!(limiter.check(ip, later));
+  }
+
+  #[test]
+  fn caps_bucket_count_and_prunes_expired_entries() {
+    let mut limiter = RateLimiter::new_bounded(Duration::from_secs(60), 5, 2);
+    let now = Instant::now();
+    let a: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let b: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    let c: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+    assert!(limiter.check(a, now));
+    assert!(limiter.check(b, now));
+    assert!(!limiter.check(c, now)); // cap reached; nothing expired yet -> deny
+    let later = now + Duration::from_secs(61);
+    assert!(limiter.check(c, later)); // prune frees slots -> admit
   }
 }
 
@@ -1362,19 +1401,21 @@ fn handle_stream(
   rate_limiter: &Mutex<RateLimiter>,
 ) -> Result<(), String> {
   let mut stream = stream;
-  let peer_ip = stream.peer_addr().ok().map(|socket_addr| socket_addr.ip());
-  if let Some(ip) = peer_ip {
-    let allowed = rate_limiter
+  // Fail closed: deny when the peer address is unavailable or the limiter
+  // mutex is poisoned, rather than silently allowing unbounded traffic.
+  let allowed = match stream.peer_addr() {
+    Ok(socket_addr) => rate_limiter
       .lock()
-      .map(|mut limiter| limiter.check(ip, Instant::now()))
-      .unwrap_or(true);
-    if !allowed {
-      return json_response(
-        429,
-        json!({ "error": "rate_limited", "message": "Too many requests. Please retry shortly." }),
-      )
-      .write_to(&mut stream);
-    }
+      .map(|mut limiter| limiter.check(socket_addr.ip(), Instant::now()))
+      .unwrap_or(false),
+    Err(_) => false,
+  };
+  if !allowed {
+    return json_response(
+      429,
+      json!({ "error": "rate_limited", "message": "Too many requests. Please retry shortly." }),
+    )
+    .write_to(&mut stream);
   }
   if is_agent_websocket_request(&stream)? {
     return handle_agent_websocket(stream, state);
