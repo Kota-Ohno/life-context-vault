@@ -467,6 +467,17 @@ export async function startAiAccessServices(): Promise<AiAccessServiceStatus | n
   return invoke<AiAccessServiceStatus>("start_ai_access_services");
 }
 
+/**
+ * Request a managed-relay pairing URL from the operator's hosted relay
+ * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then
+ * passed to `startAiAccessAgentForRelay` to complete one-click pairing.
+ */
+export async function requestManagedPairingUrl(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("request_managed_pairing_url");
+}
+
 export async function startAiAccessAgentForRelay(agentWebsocketUrl: string): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");

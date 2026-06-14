@@ -8388,6 +8388,39 @@ fn start_ai_access_services(
   Ok(supervisor_status(&mut supervisor))
 }
 
+const DEFAULT_MANAGED_RELAY_URL: &str = "https://relay.lifecontextvault.example";
+
+/// Request a managed-relay pairing URL from the operator's hosted relay's
+/// public `/pair` endpoint (no admin token needed). The returned
+/// `agentWebSocketUrl` is then passed to `start_ai_access_agent_for_relay`.
+/// Doing the fetch here (not in the webview) avoids CSP connect-src exposure
+/// and keeps the relay host configurable via LCV_MANAGED_RELAY_URL.
+#[tauri::command]
+fn request_managed_pairing_url() -> Result<String, String> {
+  let base = env::var("LCV_MANAGED_RELAY_URL")
+    .unwrap_or_else(|_| DEFAULT_MANAGED_RELAY_URL.to_string());
+  if base.contains(".example") {
+    return Err(
+      "Managed relay is not configured. Set LCV_MANAGED_RELAY_URL to your hosted relay.".to_string(),
+    );
+  }
+  let endpoint = format!("{}/pair", base.trim_end_matches('/'));
+  let response = ureq::post(&endpoint)
+    .timeout(Duration::from_secs(10))
+    .call()
+    .map_err(|error| format!("managed relay pairing request failed: {error}"))?;
+  let body = response
+    .into_string()
+    .map_err(|error| format!("failed to read managed relay response: {error}"))?;
+  let value: Value = serde_json::from_str(&body)
+    .map_err(|error| format!("managed relay response is not valid JSON: {error}"))?;
+  value
+    .get("agentWebSocketUrl")
+    .and_then(Value::as_str)
+    .map(|url| url.to_string())
+    .ok_or_else(|| "managed relay did not return agentWebSocketUrl".to_string())
+}
+
 #[tauri::command]
 fn start_ai_access_agent_for_relay(
   app: AppHandle,
@@ -8512,7 +8545,8 @@ pub fn run() {
       uninstall_login_item,
       export_native_encrypted_backup,
       import_native_encrypted_backup,
-      add_native_source_pending_runtime
+      add_native_source_pending_runtime,
+      request_managed_pairing_url
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);

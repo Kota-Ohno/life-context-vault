@@ -1446,6 +1446,7 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/oauth/authorize") => oauth_authorize(request, config, state),
     ("GET", "/oauth/approve") => oauth_approve(request, config, state),
     ("POST", "/oauth/token") => oauth_token(request, config, state),
+    ("POST", "/pair") => start_public_pairing(config, state),
     ("POST", "/pairing/start") => start_pairing(request, config, state),
     ("GET", "/pairing/status") => pairing_status(request, state),
     ("GET", "/agent/status") => json_response(200, state.agent_status()),
@@ -2534,6 +2535,30 @@ fn start_pairing(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       session.code
     )
   }))
+}
+
+/// Public pairing issuance for the managed-relay one-click flow. Unlike
+/// `/pairing/start` (admin-gated), this issues a short-lived pairing code
+/// without authentication so end-user apps can pair. A pairing code only
+/// establishes the agent<->relay tunnel; it grants no vault access (the MCP
+/// layer still requires OAuth/DCR). Abuse is bounded by the per-IP rate limiter
+/// and pairing-session TTL.
+fn start_public_pairing(config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  let session = state.start_pairing();
+  json_response(
+    200,
+    json!({
+      "pairingId": session.id,
+      "pairingCode": session.code,
+      "status": pairing_status_text(&session.status),
+      "expiresAt": system_time_seconds(session.expires_at),
+      "agentWebSocketUrl": format!(
+        "{}/agent/ws?pairing_code={}",
+        config.ws_base_url(),
+        session.code
+      )
+    }),
+  )
 }
 
 fn pairing_status(request: &HttpRequest, state: &RelayState) -> HttpResponse {
@@ -4299,6 +4324,22 @@ mod tests {
     let body = String::from_utf8(response.body).expect("response body");
     assert!(body.contains("not_acceptable"));
     assert!(body.contains("text/event-stream"));
+  }
+
+  #[test]
+  fn public_pair_endpoint_issues_agent_url_without_admin_token() {
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/pair".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    let response = route_request(&request, &test_config(), &RelayState::new());
+    assert_eq!(response.status, 200);
+    let body = String::from_utf8(response.body).expect("response body");
+    assert!(body.contains("agentWebSocketUrl"), "body was: {body}");
+    assert!(body.contains("/agent/ws?pairing_code="));
   }
 
   #[test]
