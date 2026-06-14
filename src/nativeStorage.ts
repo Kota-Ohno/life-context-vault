@@ -467,6 +467,31 @@ export async function startAiAccessServices(): Promise<AiAccessServiceStatus | n
   return invoke<AiAccessServiceStatus>("start_ai_access_services");
 }
 
+/** Write the recovery-key sidecar (wrapping the current vault key). Onboarding
+ * calls this after the user writes down the recovery key. */
+export async function writeNativeRecoveryEnvelope(recoveryKey: string): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("write_recovery_envelope", { recoveryKey });
+  return true;
+}
+
+/** Recover the vault key from the sidecar and re-establish it in Keychain
+ * (after a Keychain loss). Throws on a wrong recovery key. */
+export async function recoverVaultWithRecoveryKey(recoveryKey: string): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("recover_vault_with_recovery_key", { recoveryKey });
+  return true;
+}
+
+/** Write a vault-key-derived backup now to the default Backups directory. */
+export async function runLocalBackupNow(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("run_local_backup_now");
+}
+
 /**
  * Request a managed-relay pairing URL from the operator's hosted relay
  * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then

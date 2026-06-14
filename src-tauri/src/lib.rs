@@ -1878,6 +1878,15 @@ fn local_backup_default_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// Recover the SQLCipher key from the sidecar using the recovery key, then
 /// re-establish it in the OS credential store so normal opens succeed after a
 /// Keychain loss. Completes the recovery-key flow (P0-C).
+/// Write the recovery-key sidecar (wrapping the current SQLCipher key) so the
+/// user can recover after a Keychain loss. Called during onboarding after the
+/// user writes down the displayed recovery key.
+#[tauri::command]
+fn write_recovery_envelope(app: AppHandle, recovery_key: String) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  write_recovery_envelope_at_path(&path, &recovery_key)
+}
+
 #[tauri::command]
 fn recover_vault_with_recovery_key(app: AppHandle, recovery_key: String) -> Result<(), String> {
   let path = vault_db_path(&app)?;
@@ -8639,7 +8648,8 @@ pub fn run() {
       add_native_source_pending_runtime,
       request_managed_pairing_url,
       run_local_backup_now,
-      recover_vault_with_recovery_key
+      recover_vault_with_recovery_key,
+      write_recovery_envelope
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
