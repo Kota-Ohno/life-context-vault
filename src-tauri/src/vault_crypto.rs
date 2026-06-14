@@ -250,6 +250,19 @@ fn store_keychain_password(key: &str) -> Result<(), String> {
   }
 }
 
+/// Re-establish the vault key in the OS credential store after a recovery-key
+/// unwrap, so subsequent normal opens succeed after a Keychain loss. macOS-only
+/// (the release target); other platforms should restore from an encrypted backup.
+#[cfg(target_os = "macos")]
+pub(crate) fn reestablish_vault_key(key: &str) -> Result<(), String> {
+  store_keychain_password(key)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn reestablish_vault_key(_key: &str) -> Result<(), String> {
+  Err("Recovery re-key is macOS-only; restore from an encrypted backup instead.".to_string())
+}
+
 fn generate_hex_key() -> Result<String, String> {
   let mut bytes = [0u8; 32];
   let mut file = fs::File::open("/dev/urandom")

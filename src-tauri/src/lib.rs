@@ -1875,6 +1875,17 @@ fn local_backup_default_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// Write a vault-key-derived backup now to the default Backups directory next
 /// to the vault, keeping the last LCV_BACKUP_RETENTION (default 10). Usable as
 /// a "Back up now" action and as the body of a scheduled task.
+/// Recover the SQLCipher key from the sidecar using the recovery key, then
+/// re-establish it in the OS credential store so normal opens succeed after a
+/// Keychain loss. Completes the recovery-key flow (P0-C).
+#[tauri::command]
+fn recover_vault_with_recovery_key(app: AppHandle, recovery_key: String) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  let vault_key = recover_vault_key_at_path(&path, &recovery_key)?;
+  vault_crypto::reestablish_vault_key(&vault_key)?;
+  Ok(())
+}
+
 #[tauri::command]
 fn run_local_backup_now(app: AppHandle) -> Result<String, String> {
   let db_path = vault_db_path(&app)?;
@@ -8627,7 +8638,8 @@ pub fn run() {
       import_native_encrypted_backup,
       add_native_source_pending_runtime,
       request_managed_pairing_url,
-      run_local_backup_now
+      run_local_backup_now,
+      recover_vault_with_recovery_key
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
