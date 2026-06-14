@@ -2545,29 +2545,6 @@ export function HomeView({
         <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} compact />
       </div>
 
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI access</p>
-            <h3>普段使うAIとの接続</h3>
-          </div>
-          <button className="secondary-button" onClick={goConnections} type="button">
-            <Plug size={16} />
-            Open
-          </button>
-        </div>
-        <div className="connection-list compact">
-          {connectors.slice(0, 4).map((connector) => (
-            <div className="connection-row" key={connector.id}>
-              <div>
-                <strong>{connector.clientName}</strong>
-                <span>{connector.transport}</span>
-              </div>
-              <Badge>{connector.status}</Badge>
-            </div>
-          ))}
-        </div>
-      </div>
 
       <div className="panel background-panel">
         <div className="panel-heading">
