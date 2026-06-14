@@ -597,7 +597,12 @@ export function App() {
           setNativeRevision(result.updatedAt);
         }
       })
-      .catch((error) => console.warn("Native vault save failed", error));
+      .catch((error) => {
+        console.warn("Native vault save failed", error);
+        setNotice(
+          "Vaultの保存に失敗しました。変更が反映されていない可能性があります。Settings や Audit で状態をご確認ください。"
+        );
+      });
     return () => {
       cancelled = true;
     };
