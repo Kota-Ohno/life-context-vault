@@ -2647,11 +2647,32 @@ export function HomeView({
           </button>
         </div>
         {backgroundFacts.length === 0 ? (
-          <EmptyState
-            title="まだ背景情報がありません"
-            body="ガイド入力かデモデータから始められます。保存前に必ずMemory Inboxで確認します。"
-            action={<button className="primary-button" onClick={seedDemo} type="button"><Sparkles size={16} />デモ投入</button>}
-          />
+          <div className="onboarding-card" role="region" aria-label="初回ガイド">
+            <p className="eyebrow">Getting started</p>
+            <h3>まずは3ステップで始めましょう</h3>
+            <ol className="onboarding-steps">
+              <li>
+                <strong>1. 生活背景を少し書く</strong>
+                <span>ガイド入力またはデモデータで、AIに覚えておいてほしい背景を追加します。保存前にMemory Inboxで確認します。</span>
+                <button className="primary-button" onClick={seedDemo} type="button">
+                  <Sparkles size={16} />
+                  デモ投入
+                </button>
+              </li>
+              <li>
+                <strong>2. Memory Inbox で承認</strong>
+                <span>生成された候補を確認します。承認したものだけがAIの確定文脈になります。</span>
+                <button className="secondary-button" onClick={goInbox} type="button">
+                  <Inbox size={16} />
+                  Inboxを開く
+                </button>
+              </li>
+              <li>
+                <strong>3. 暗号化バックアップを作る</strong>
+                <span>機種変・故障に備え、左の Settings から暗号化バックアップを書き出します（パスフレーズは紛失しないよう管理してください）。</span>
+              </li>
+            </ol>
+          </div>
         ) : (
           <div className="domain-list">
             {Object.entries(grouped).map(([domain, items]) => (
