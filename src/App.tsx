@@ -2173,52 +2173,16 @@ export function App() {
           />
         )}
         {view === "connections" && (
-          <ConnectionsView
-            connectors={state.connectorSessions}
-            policies={state.accessPolicies}
-            sources={state.sources}
-            passiveCaptureEvents={state.passiveCaptureEvents}
-            captureSettings={state.passiveCaptureSettings}
-            updateCapture={updateCapture}
-            updatePolicy={updatePolicy}
-            purgePassiveCaptureEvent={purgePassiveCaptureEvent}
-            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
-            confirmAllCapturePurge={confirmAllCapturePurge}
-            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
+          <ConnectView
             nativePath={nativePath}
-            aiServiceStatus={aiServiceStatus}
-            aiServiceBusy={aiServiceBusy}
-            runtimePreferences={runtimePreferences}
-            updateRuntimePreference={updateRuntimePreference}
-            loginItemStatus={loginItemStatus}
-            loginItemBusy={loginItemBusy}
             claudeInstallBusy={claudeInstallBusy}
             claudeInstallResult={claudeInstallResult}
             claudeConfig={claudeConfig}
-            startAiAccess={startAiAccess}
-            startHostedRelayAgent={startHostedRelayAgent}
-            connectManagedRelay={connectManagedRelay}
-            stopAiAccess={stopAiAccess}
-            refreshAiAccess={refreshAiAccess}
-            hostedAgentWebsocketUrl={hostedAgentWebsocketUrl}
-            setHostedAgentWebsocketUrl={setHostedAgentWebsocketUrl}
-            refreshLoginItem={refreshLoginItem}
+            installClaudeConfig={installClaudeConfig}
+            loginItemStatus={loginItemStatus}
+            loginItemBusy={loginItemBusy}
             enableLoginItem={enableLoginItem}
             disableLoginItem={disableLoginItem}
-            installClaudeConfig={installClaudeConfig}
-            copyText={copyText}
-            captureClient={captureClient}
-            setCaptureClient={setCaptureClient}
-            captureConversationId={captureConversationId}
-            setCaptureConversationId={setCaptureConversationId}
-            captureText={captureText}
-            setCaptureText={setCaptureText}
-            captureExtensionId={captureExtensionId}
-            setCaptureExtensionId={setCaptureExtensionId}
-            captureHostInstallBusy={captureHostInstallBusy}
-            captureHostInstallResult={captureHostInstallResult}
-            installCaptureHostManifest={installCaptureHostManifest}
-            simulatePassiveCapture={simulatePassiveCapture}
             goRequests={() => setView("requests")}
           />
         )}
@@ -3399,6 +3363,92 @@ function SourceRow({
         )}
       </div>
     </div>
+  );
+}
+
+function ConnectView({
+  nativePath,
+  claudeInstallBusy,
+  claudeInstallResult,
+  claudeConfig,
+  installClaudeConfig,
+  loginItemStatus,
+  loginItemBusy,
+  enableLoginItem,
+  disableLoginItem,
+  goRequests
+}: {
+  nativePath: string | null;
+  claudeInstallBusy: boolean;
+  claudeInstallResult: ClaudeDesktopConfigInstallResult | null;
+  claudeConfig: string;
+  installClaudeConfig: () => void;
+  loginItemStatus: LoginItemStatus | null;
+  loginItemBusy: boolean;
+  enableLoginItem: () => void;
+  disableLoginItem: () => void;
+  goRequests: () => void;
+}) {
+  return (
+    <section className="view-grid">
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Claude Desktop (MCP)</p>
+            <h3>ローカルMCPで接続</h3>
+          </div>
+          <Plug size={18} />
+        </div>
+        <p className="muted">
+          Claude Desktop設定に Life Context Vault のMCPサーバーを追加します。追加後、Claude Desktopから承認済みの文脈(Context Pack)を要求できます。
+        </p>
+        <div className="service-actions">
+          <button
+            className="primary-button"
+            disabled={claudeInstallBusy || !nativePath}
+            onClick={installClaudeConfig}
+            type="button"
+          >
+            <Plug size={16} />
+            Claude設定へ追加
+          </button>
+          {loginItemStatus && loginItemStatus.supported ? (
+            <button
+              className="secondary-button"
+              disabled={loginItemBusy}
+              onClick={loginItemStatus.enabled ? disableLoginItem : enableLoginItem}
+              type="button"
+            >
+              {loginItemStatus.enabled ? "ログイン時起動を解除" : "ログイン時に起動"}
+            </button>
+          ) : null}
+        </div>
+        {claudeInstallResult ? <p className="muted">設定パス: {claudeInstallResult.configPath}</p> : null}
+        <details className="advanced-panel">
+          <summary>MCP設定（手動コピー用）</summary>
+          <pre className="code-box">{claudeConfig}</pre>
+        </details>
+      </div>
+
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Copy fallback</p>
+            <h3>コピーでAIに渡す</h3>
+          </div>
+          <MessageSquare size={18} />
+        </div>
+        <p className="muted">
+          MCPを使わず、Requests で Context Pack を作成してコピーし、任意のAI（ChatGPT / Claude 等）に貼り付けられます。設定不要です。
+        </p>
+        <div className="service-actions">
+          <button className="secondary-button" onClick={goRequests} type="button">
+            <MessageSquare size={16} />
+            Requestsへ
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
