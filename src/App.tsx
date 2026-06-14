@@ -2567,55 +2567,6 @@ export function HomeView({
             </div>
           ))}
         </div>
-        <div className={`home-capture-safety ${captureSafety.tone}`}>
-          <div className="home-capture-safety-heading">
-            <div>
-              <span>Capture safety</span>
-              <strong>{captureSafety.title}</strong>
-            </div>
-            {captureSettings.enabled ? <Radio size={18} /> : <PauseCircle size={18} />}
-          </div>
-          <p>{captureSafety.body}</p>
-          <div className="home-capture-meta">
-            <Metric label="許可サイト" value={captureSafety.allowedSitesLabel} />
-            <Metric label="直近Capture" value={captureSafety.lastCaptureLabel} />
-            <Metric label="消去できる本文" value={`${captureSafety.purgeableCount}件`} />
-          </div>
-          {captureSafety.lastPreview ? <p className="home-capture-preview">{captureSafety.lastPreview}</p> : null}
-          {confirmAllCapturePurge && (
-            <div className="danger-confirm-card" role="status">
-              <strong>{captureSafety.purgeableCount}件のCapture本文を消去します</strong>
-              <span>Raw transcript本文だけを消去します。承認済みFact、未承認候補の履歴、Auditの件数記録は残ります。</span>
-              <button className="secondary-button" onClick={cancelAllCapturePurge} type="button">
-                <X size={16} />
-                取消
-              </button>
-            </div>
-          )}
-          <div className="service-actions">
-            <button
-              className={captureSettings.enabled ? "danger-button" : "primary-button"}
-              onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
-              type="button"
-            >
-              {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-              {captureSettings.enabled ? "Captureを一時停止" : "Captureを開始"}
-            </button>
-            <button className="secondary-button" onClick={goConnections} type="button">
-              <Settings size={16} />
-              Capture詳細
-            </button>
-            <button
-              className="danger-button"
-              disabled={captureSafety.purgeableCount === 0}
-              onClick={purgeAllPassiveCaptures}
-              type="button"
-            >
-              <Trash2 size={16} />
-              {confirmAllCapturePurge ? "確認して全本文を消去" : "全本文を消去"}
-            </button>
-          </div>
-        </div>
       </div>
 
       <div className="panel background-panel">
