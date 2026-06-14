@@ -1864,6 +1864,29 @@ fn prune_local_backups(dest_dir: &Path, retention: usize) -> Result<(), String> 
   Ok(())
 }
 
+fn local_backup_default_dir(app: &AppHandle) -> Result<PathBuf, String> {
+  let db_path = vault_db_path(app)?;
+  let parent = db_path
+    .parent()
+    .ok_or_else(|| "vault path has no parent directory".to_string())?;
+  Ok(parent.join("Backups"))
+}
+
+/// Write a vault-key-derived backup now to the default Backups directory next
+/// to the vault, keeping the last LCV_BACKUP_RETENTION (default 10). Usable as
+/// a "Back up now" action and as the body of a scheduled task.
+#[tauri::command]
+fn run_local_backup_now(app: AppHandle) -> Result<String, String> {
+  let db_path = vault_db_path(&app)?;
+  let dest = local_backup_default_dir(&app)?;
+  let retention = env::var("LCV_BACKUP_RETENTION")
+    .ok()
+    .and_then(|value| value.parse().ok())
+    .unwrap_or(10);
+  let written = write_local_backup_to_dir(&db_path, &dest, retention)?;
+  Ok(written.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn export_native_encrypted_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
   let path = vault_db_path(&app)?;
@@ -8603,7 +8626,8 @@ pub fn run() {
       export_native_encrypted_backup,
       import_native_encrypted_backup,
       add_native_source_pending_runtime,
-      request_managed_pairing_url
+      request_managed_pairing_url,
+      run_local_backup_now
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
