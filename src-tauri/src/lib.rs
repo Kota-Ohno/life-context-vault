@@ -31,6 +31,7 @@ mod mcp_stdio;
 mod vault_backup;
 mod vault_crypto;
 mod vault_recovery;
+mod embeddings;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
@@ -3815,6 +3816,7 @@ fn rank_context_facts_in_connection(
   let task_domain = classify_domain(task_text);
   let lower_task = task_text.to_lowercase();
   let tokens = search_tokens(task_text);
+  let task_vec = embeddings::embed(task_text);
   let mut candidates = Vec::<NativeFactSearchResult>::new();
 
   for fact in search_facts_in_connection(connection, task_text, None, None, 200)? {
@@ -3828,6 +3830,7 @@ fn rank_context_facts_in_connection(
     .into_iter()
     .map(|fact| {
       let haystack = format!("{} {}", fact.fact_text.to_lowercase(), fact.domain.to_lowercase());
+      let fact_vec = embeddings::embed(&format!("{} {}", fact.fact_text, fact.domain));
       let token_score = tokens
         .iter()
         .filter(|token| haystack.contains(token.as_str()))
@@ -3851,8 +3854,9 @@ fn rank_context_facts_in_connection(
       } else {
         0
       };
+      let semantic_score = (embeddings::cosine(&task_vec, &fact_vec) * 6.0).round() as i64;
       (
-        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus,
+        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus + semantic_score,
         fact,
       )
     })
