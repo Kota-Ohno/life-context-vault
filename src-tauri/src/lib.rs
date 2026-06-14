@@ -30,6 +30,7 @@ use tauri::{
 mod mcp_stdio;
 mod vault_backup;
 mod vault_crypto;
+mod vault_recovery;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
