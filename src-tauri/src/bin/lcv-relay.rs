@@ -16,7 +16,7 @@ use std::{
     Arc, Mutex,
   },
   thread,
-  time::{Duration, SystemTime, UNIX_EPOCH},
+  time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tungstenite::{accept_hdr, Message};
 
@@ -74,6 +74,124 @@ fn main() {
   }
 }
 
+/// Fixed-window per-IP request rate limiter for the public relay surface
+/// (P0-F abuse defense). Time is injected so the counting logic is testable
+/// without sleeping.
+///
+/// Tradeoff: a fixed window permits up to ~2x the quota at a window boundary
+/// (burst at the end of one window plus the start of the next). That is an
+/// acceptable property for an abuse-defense layer — the cap still bounds
+/// sustained abuse — and is far simpler than a sliding window. Buckets are
+/// pruned lazily and capped to bound memory under source-IP rotation.
+const DEFAULT_MAX_BUCKETS: usize = 10_000;
+
+#[derive(Debug)]
+struct RateLimiter {
+  window: Duration,
+  max_per_window: u32,
+  max_buckets: usize,
+  buckets: HashMap<IpAddr, (Instant, u32)>,
+}
+
+impl RateLimiter {
+  fn new(window: Duration, max_per_window: u32) -> Self {
+    Self::new_bounded(window, max_per_window, DEFAULT_MAX_BUCKETS)
+  }
+
+  fn new_bounded(window: Duration, max_per_window: u32, max_buckets: usize) -> Self {
+    Self {
+      window,
+      max_per_window,
+      max_buckets,
+      buckets: HashMap::new(),
+    }
+  }
+
+  /// Returns true when the request is allowed, false when the peer has exceeded
+  /// its quota for the current window or the bucket table is saturated.
+  fn check(&mut self, ip: IpAddr, now: Instant) -> bool {
+    if let Some((window_start, count)) = self.buckets.get_mut(&ip) {
+      if now.duration_since(*window_start) >= self.window {
+        *window_start = now;
+        *count = 1;
+        true
+      } else {
+        *count += 1;
+        *count <= self.max_per_window
+      }
+    } else {
+      if self.buckets.len() >= self.max_buckets {
+        self.prune_expired(now);
+      }
+      if self.buckets.len() >= self.max_buckets {
+        // Fail closed under source-IP rotation: deny a brand-new peer rather
+        // than grow the table without bound.
+        return false;
+      }
+      self.buckets.insert(ip, (now, 1));
+      true
+    }
+  }
+
+  fn prune_expired(&mut self, now: Instant) {
+    let window = self.window;
+    self.buckets
+      .retain(|_, (window_start, _)| now.duration_since(*window_start) < window);
+  }
+}
+
+#[cfg(test)]
+mod rate_limiter_tests {
+  use super::*;
+
+  #[test]
+  fn allows_up_to_max_then_denies_within_window() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 3);
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let now = Instant::now();
+    assert!(limiter.check(ip, now));
+    assert!(limiter.check(ip, now));
+    assert!(limiter.check(ip, now));
+    assert!(!limiter.check(ip, now));
+  }
+
+  #[test]
+  fn tracks_ips_independently() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 1);
+    let now = Instant::now();
+    let a: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let b: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    assert!(limiter.check(a, now));
+    assert!(limiter.check(b, now));
+    assert!(!limiter.check(a, now));
+  }
+
+  #[test]
+  fn resets_after_window_elapses() {
+    let mut limiter = RateLimiter::new(Duration::from_secs(60), 1);
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let now = Instant::now();
+    assert!(limiter.check(ip, now));
+    assert!(!limiter.check(ip, now));
+    let later = now + Duration::from_secs(61);
+    assert!(limiter.check(ip, later));
+  }
+
+  #[test]
+  fn caps_bucket_count_and_prunes_expired_entries() {
+    let mut limiter = RateLimiter::new_bounded(Duration::from_secs(60), 5, 2);
+    let now = Instant::now();
+    let a: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let b: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    let c: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
+    assert!(limiter.check(a, now));
+    assert!(limiter.check(b, now));
+    assert!(!limiter.check(c, now)); // cap reached; nothing expired yet -> deny
+    let later = now + Duration::from_secs(61);
+    assert!(limiter.check(c, later)); // prune frees slots -> admit
+  }
+}
+
 fn run() -> Result<(), String> {
   let config = Arc::new(RelayConfig::from_env()?);
   let state = RelayState::load_with_retention(
@@ -85,13 +203,26 @@ fn run() -> Result<(), String> {
   let listener = TcpListener::bind(&config.bind)
     .map_err(|error| format!("failed to bind {}: {error}", config.bind))?;
 
+  let rate_limit_window = Duration::from_secs(
+    env::var("LCV_RELAY_RATE_LIMIT_WINDOW_SECS")
+      .ok()
+      .and_then(|value| value.parse().ok())
+      .unwrap_or(60),
+  );
+  let rate_limit_max = env::var("LCV_RELAY_RATE_LIMIT_MAX")
+    .ok()
+    .and_then(|value| value.parse().ok())
+    .unwrap_or(120);
+  let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(rate_limit_window, rate_limit_max)));
+
   for stream in listener.incoming() {
     match stream {
       Ok(stream) => {
         let config = config.clone();
         let state = state.clone();
+        let rate_limiter = rate_limiter.clone();
         thread::spawn(move || {
-          if let Err(error) = handle_stream(stream, &config, &state) {
+          if let Err(error) = handle_stream(stream, &config, &state, &rate_limiter) {
             eprintln!("relay request error: {error}");
           }
         });
@@ -1263,11 +1394,32 @@ impl PersistedRelayState {
   }
 }
 
-fn handle_stream(stream: TcpStream, config: &RelayConfig, state: &RelayState) -> Result<(), String> {
+fn handle_stream(
+  stream: TcpStream,
+  config: &RelayConfig,
+  state: &RelayState,
+  rate_limiter: &Mutex<RateLimiter>,
+) -> Result<(), String> {
+  let mut stream = stream;
+  // Fail closed: deny when the peer address is unavailable or the limiter
+  // mutex is poisoned, rather than silently allowing unbounded traffic.
+  let allowed = match stream.peer_addr() {
+    Ok(socket_addr) => rate_limiter
+      .lock()
+      .map(|mut limiter| limiter.check(socket_addr.ip(), Instant::now()))
+      .unwrap_or(false),
+    Err(_) => false,
+  };
+  if !allowed {
+    return json_response(
+      429,
+      json!({ "error": "rate_limited", "message": "Too many requests. Please retry shortly." }),
+    )
+    .write_to(&mut stream);
+  }
   if is_agent_websocket_request(&stream)? {
     return handle_agent_websocket(stream, state);
   }
-  let mut stream = stream;
   let request = match HttpRequest::read(&mut stream) {
     Ok(request) => request,
     Err(error) => return error.to_response().write_to(&mut stream),
@@ -1294,6 +1446,7 @@ fn route_request(request: &HttpRequest, config: &RelayConfig, state: &RelayState
     ("GET", "/oauth/authorize") => oauth_authorize(request, config, state),
     ("GET", "/oauth/approve") => oauth_approve(request, config, state),
     ("POST", "/oauth/token") => oauth_token(request, config, state),
+    ("POST", "/pair") => start_public_pairing(config, state),
     ("POST", "/pairing/start") => start_pairing(request, config, state),
     ("GET", "/pairing/status") => pairing_status(request, state),
     ("GET", "/agent/status") => json_response(200, state.agent_status()),
@@ -2382,6 +2535,30 @@ fn start_pairing(request: &HttpRequest, config: &RelayConfig, state: &RelayState
       session.code
     )
   }))
+}
+
+/// Public pairing issuance for the managed-relay one-click flow. Unlike
+/// `/pairing/start` (admin-gated), this issues a short-lived pairing code
+/// without authentication so end-user apps can pair. A pairing code only
+/// establishes the agent<->relay tunnel; it grants no vault access (the MCP
+/// layer still requires OAuth/DCR). Abuse is bounded by the per-IP rate limiter
+/// and pairing-session TTL.
+fn start_public_pairing(config: &RelayConfig, state: &RelayState) -> HttpResponse {
+  let session = state.start_pairing();
+  json_response(
+    200,
+    json!({
+      "pairingId": session.id,
+      "pairingCode": session.code,
+      "status": pairing_status_text(&session.status),
+      "expiresAt": system_time_seconds(session.expires_at),
+      "agentWebSocketUrl": format!(
+        "{}/agent/ws?pairing_code={}",
+        config.ws_base_url(),
+        session.code
+      )
+    }),
+  )
 }
 
 fn pairing_status(request: &HttpRequest, state: &RelayState) -> HttpResponse {
@@ -4147,6 +4324,22 @@ mod tests {
     let body = String::from_utf8(response.body).expect("response body");
     assert!(body.contains("not_acceptable"));
     assert!(body.contains("text/event-stream"));
+  }
+
+  #[test]
+  fn public_pair_endpoint_issues_agent_url_without_admin_token() {
+    let request = HttpRequest {
+      method: "POST".to_string(),
+      path: "/pair".to_string(),
+      query: String::new(),
+      headers: Vec::new(),
+      body: String::new(),
+    };
+    let response = route_request(&request, &test_config(), &RelayState::new());
+    assert_eq!(response.status, 200);
+    let body = String::from_utf8(response.body).expect("response body");
+    assert!(body.contains("agentWebSocketUrl"), "body was: {body}");
+    assert!(body.contains("/agent/ws?pairing_code="));
   }
 
   #[test]

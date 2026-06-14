@@ -3,7 +3,7 @@ name = "life-context-vault"
 version = "0.1.0"
 description = "Local-first life context vault"
 authors = ["Kota"]
-license = ""
+license = "MIT"
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
@@ -55,3 +55,6 @@ pdf-extract = "0.7.12"
 quick-xml = "0.31.0"
 zip = "0.6.6"
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "native-certs"] }
+pbkdf2 = { version = "0.12", features = ["simple"] }
+aes-gcm = "0.10"
+sqlite-vec = "0.1"

@@ -145,7 +145,7 @@ fn keep_plaintext_migration_backup() -> bool {
     .unwrap_or(false)
 }
 
-fn vault_key() -> Result<String, String> {
+pub(crate) fn vault_key() -> Result<String, String> {
   if let Ok(key) = std::env::var("LCV_VAULT_DB_KEY") {
     if key.len() >= 32 {
       return Ok(key);
@@ -248,6 +248,19 @@ fn store_keychain_password(key: &str) -> Result<(), String> {
   } else {
     Err(format!("failed to store vault key in Keychain: {status}"))
   }
+}
+
+/// Re-establish the vault key in the OS credential store after a recovery-key
+/// unwrap, so subsequent normal opens succeed after a Keychain loss. macOS-only
+/// (the release target); other platforms should restore from an encrypted backup.
+#[cfg(target_os = "macos")]
+pub(crate) fn reestablish_vault_key(key: &str) -> Result<(), String> {
+  store_keychain_password(key)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn reestablish_vault_key(_key: &str) -> Result<(), String> {
+  Err("Recovery re-key is macOS-only; restore from an encrypted backup instead.".to_string())
 }
 
 fn generate_hex_key() -> Result<String, String> {

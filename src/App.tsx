@@ -40,6 +40,7 @@ import {
   NativeOcrProviderCandidate,
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
+  addNativeSourcePendingRuntime,
   approveNativeCandidate,
   confirmNativeContextPack,
   createNativeContextPackRequest,
@@ -60,6 +61,7 @@ import {
   saveNativeVault,
   searchNativeFacts,
   startAiAccessAgentForRelay,
+  requestManagedPairingUrl,
   startAiAccessServices,
   stopAiAccessServices,
   updateNativeAccessPolicy,
@@ -71,8 +73,14 @@ import {
   updateNativeSourceMetadata,
   updateNativeSourceBody,
   updateNativeSourceLifecycle,
-  uninstallLoginItem
+  uninstallLoginItem,
+  exportNativeEncryptedBackup,
+  importNativeEncryptedBackup,
+  isTauriRuntime,
+  getNativeRuntimePreferences,
+  saveNativeRuntimePreferences
 } from "./nativeStorage";
+import { detectLang, Lang, t } from "./i18n";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -397,6 +405,18 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
+  const [lang, setLang] = useState<Lang>(() => {
+    const stored = typeof localStorage !== "undefined" ? localStorage.getItem("lcv-lang") : null;
+    if (stored === "en" || stored === "ja") return stored;
+    return detectLang();
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("lcv-lang", lang);
+    } catch {
+      /* localStorage unavailable; language stays in-memory for this session */
+    }
+  }, [lang]);
   const [setup, setSetup] = useState<BackgroundSetupInput>(blankSetup);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
@@ -448,6 +468,7 @@ export function App() {
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
   const autoStartAttemptedRef = useRef(false);
+  const nativePrefsSyncedRef = useRef(false);
 
   useEffect(() => {
     nativeRevisionRef.current = nativeRevision;
@@ -455,7 +476,27 @@ export function App() {
 
   useEffect(() => {
     saveRuntimePreferences(runtimePreferences);
+    if (nativePrefsSyncedRef.current && isTauriRuntime()) {
+      void saveNativeRuntimePreferences(runtimePreferences);
+    }
   }, [runtimePreferences]);
+
+  // In the Tauri runtime, runtime preferences are the authoritative source in
+  // the vault (they survive reinstall and migrate with encrypted backups).
+  // localStorage stays as the browser-preview fallback. We only write to the
+  // vault AFTER this sync to avoid clobbering saved prefs with defaults on mount.
+  useEffect(() => {
+    if (!storageReady || !isTauriRuntime()) {
+      nativePrefsSyncedRef.current = true;
+      return;
+    }
+    void getNativeRuntimePreferences().then((native) => {
+      if (native && Object.keys(native).length > 0) {
+        setRuntimePreferences((current) => ({ ...current, ...native }));
+      }
+      nativePrefsSyncedRef.current = true;
+    });
+  }, [storageReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -594,7 +635,12 @@ export function App() {
           setNativeRevision(result.updatedAt);
         }
       })
-      .catch((error) => console.warn("Native vault save failed", error));
+      .catch((error) => {
+        console.warn("Native vault save failed", error);
+        setNotice(
+          "Vaultの保存に失敗しました。変更が反映されていない可能性があります。Settings や Audit で状態をご確認ください。"
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -861,6 +907,35 @@ export function App() {
       legacyOfficeConversionAvailable
     );
     if (!support.supported) {
+      if (
+        nativePath &&
+        (support.reason === "ocr_required" ||
+          support.reason === "legacy_office" ||
+          support.reason === "native_required")
+      ) {
+        // Graceful fallback: register the file as a needs_runtime source so the
+        // user keeps a record and can re-extract after configuring the runtime,
+        // instead of a hard rejection.
+        try {
+          const added = await addNativeSourcePendingRuntime({
+            kind: "document",
+            origin: "user_upload",
+            title: file.name
+          });
+          if (added) {
+            nativeRevisionRef.current = added.updatedAt;
+            setNativeRevision(added.updatedAt);
+            setState(added.state);
+            setNotice(
+              `${file.name} を保留中Sourceとして保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
+            );
+            setView("sources");
+            return;
+          }
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : "保留中Sourceの保存に失敗しました。");
+        }
+      }
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
       return;
     }
@@ -1683,7 +1758,10 @@ export function App() {
 
   async function exportBackup() {
     try {
-      const payload = await exportEncryptedBackup(state, backupPassphrase);
+      const payload = isTauriRuntime()
+        ? (await exportNativeEncryptedBackup(backupPassphrase)) ??
+          (await exportEncryptedBackup(state, backupPassphrase))
+        : await exportEncryptedBackup(state, backupPassphrase);
       const blob = new Blob([payload], { type: "application/json" });
       const href = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -1700,7 +1778,10 @@ export function App() {
 
   async function previewRestoreBackup() {
     try {
-      const restored = await importEncryptedBackup(backupText, backupPassphrase);
+      const restored = isTauriRuntime()
+        ? (await importNativeEncryptedBackup(backupText, backupPassphrase)) ??
+          (await importEncryptedBackup(backupText, backupPassphrase))
+        : await importEncryptedBackup(backupText, backupPassphrase);
       setRestorePreview(makeRestorePreview(restored, state));
       setRestoreConfirmText("");
       setNotice("バックアップを読み取りました。移行内容と上書き範囲を確認し、復元する場合はRESTOREと入力してください。");
@@ -1721,7 +1802,10 @@ export function App() {
       return;
     }
     try {
-      const restored = await importEncryptedBackup(backupText, backupPassphrase);
+      const restored = isTauriRuntime()
+        ? (await importNativeEncryptedBackup(backupText, backupPassphrase)) ??
+          (await importEncryptedBackup(backupText, backupPassphrase))
+        : await importEncryptedBackup(backupText, backupPassphrase);
       apply(restored, "バックアップを復元しました。");
       setActivePackId(null);
       setActiveRequestId(null);
@@ -1792,6 +1876,31 @@ export function App() {
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Hosted Relay Agentの接続に失敗しました。");
+      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
+    } finally {
+      setAiServiceBusy(false);
+    }
+  }
+
+  async function connectManagedRelay() {
+    setAiServiceBusy(true);
+    try {
+      const url = await requestManagedPairingUrl();
+      if (!url) {
+        setNotice("Desktop appでのみ管理リレーに接続できます。");
+        return;
+      }
+      const status = await startAiAccessAgentForRelay(url);
+      setAiServiceStatus(status);
+      setNotice(
+        status?.agentConnected
+          ? "管理リレーとのpairingを確認しました。Web AIへMCP URLを登録できます。"
+          : status?.agentManagedRunning
+          ? "管理リレーへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
+          : "管理リレーAgentの接続を開始しました。"
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "管理リレーへの接続に失敗しました。");
       void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
     } finally {
       setAiServiceBusy(false);
@@ -1932,21 +2041,30 @@ export function App() {
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
-          <NavButton icon={<Home size={18} />} label="Home" ariaLabel="Home画面を開く" active={view === "home"} onClick={() => setView("home")} />
-          <NavButton icon={<Inbox size={18} />} label="Inbox" ariaLabel="Inbox画面を開く" active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
-          <NavButton icon={<FileText size={18} />} label="Sources" ariaLabel="Sources画面を開く" active={view === "sources"} onClick={() => setView("sources")} />
-          <NavButton icon={<Plug size={18} />} label="Connections" ariaLabel="Connections画面を開く" active={view === "connections"} onClick={() => setView("connections")} />
+          <NavButton icon={<Home size={18} />} label={t(lang, "nav.home")} ariaLabel={t(lang, "nav.home")} active={view === "home"} onClick={() => setView("home")} />
+          <NavButton icon={<Inbox size={18} />} label={t(lang, "nav.inbox")} ariaLabel={t(lang, "nav.inbox")} active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
+          <NavButton icon={<FileText size={18} />} label={t(lang, "nav.sources")} ariaLabel={t(lang, "nav.sources")} active={view === "sources"} onClick={() => setView("sources")} />
+          <NavButton icon={<Plug size={18} />} label={t(lang, "nav.connections")} ariaLabel={t(lang, "nav.connections")} active={view === "connections"} onClick={() => setView("connections")} />
           <NavButton
             icon={<MessageSquare size={18} />}
-            label="Requests"
-            ariaLabel="Requests画面を開く"
+            label={t(lang, "nav.requests")}
+            ariaLabel={t(lang, "nav.requests")}
             active={view === "requests"}
             onClick={() => setView("requests")}
             badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
           />
-          <NavButton icon={<Search size={18} />} label="Search" ariaLabel="Search画面を開く" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Activity size={18} />} label="Audit" ariaLabel="Audit画面を開く" active={view === "audit"} onClick={() => setView("audit")} />
-          <NavButton icon={<Settings size={18} />} label="Settings" ariaLabel="Settings画面を開く" active={view === "settings"} onClick={() => setView("settings")} />
+          <NavButton icon={<Search size={18} />} label={t(lang, "nav.search")} ariaLabel={t(lang, "nav.search")} active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
+          <NavButton icon={<Activity size={18} />} label={t(lang, "nav.audit")} ariaLabel={t(lang, "nav.audit")} active={view === "audit"} onClick={() => setView("audit")} />
+          <NavButton icon={<Settings size={18} />} label={t(lang, "nav.settings")} ariaLabel={t(lang, "nav.settings")} active={view === "settings"} onClick={() => setView("settings")} />
+          <button
+            className="lang-toggle"
+            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
+            aria-label="Toggle language"
+            title={lang === "ja" ? "Switch to English" : "日本語に切り替え"}
+            type="button"
+          >
+            {lang.toUpperCase()}
+          </button>
         </nav>
         <div className="sidebar-stats">
           <Metric label="元データ" value={state.sources.length} />
@@ -2081,6 +2199,7 @@ export function App() {
             claudeConfig={claudeConfig}
             startAiAccess={startAiAccess}
             startHostedRelayAgent={startHostedRelayAgent}
+            connectManagedRelay={connectManagedRelay}
             stopAiAccess={stopAiAccess}
             refreshAiAccess={refreshAiAccess}
             hostedAgentWebsocketUrl={hostedAgentWebsocketUrl}
@@ -2600,11 +2719,32 @@ export function HomeView({
           </button>
         </div>
         {backgroundFacts.length === 0 ? (
-          <EmptyState
-            title="まだ背景情報がありません"
-            body="ガイド入力かデモデータから始められます。保存前に必ずMemory Inboxで確認します。"
-            action={<button className="primary-button" onClick={seedDemo} type="button"><Sparkles size={16} />デモ投入</button>}
-          />
+          <div className="onboarding-card" role="region" aria-label="初回ガイド">
+            <p className="eyebrow">Getting started</p>
+            <h3>まずは3ステップで始めましょう</h3>
+            <ol className="onboarding-steps">
+              <li>
+                <strong>1. 生活背景を少し書く</strong>
+                <span>ガイド入力またはデモデータで、AIに覚えておいてほしい背景を追加します。保存前にMemory Inboxで確認します。</span>
+                <button className="primary-button" onClick={seedDemo} type="button">
+                  <Sparkles size={16} />
+                  デモ投入
+                </button>
+              </li>
+              <li>
+                <strong>2. Memory Inbox で承認</strong>
+                <span>生成された候補を確認します。承認したものだけがAIの確定文脈になります。</span>
+                <button className="secondary-button" onClick={goInbox} type="button">
+                  <Inbox size={16} />
+                  Inboxを開く
+                </button>
+              </li>
+              <li>
+                <strong>3. 暗号化バックアップを作る</strong>
+                <span>機種変・故障に備え、左の Settings から暗号化バックアップを書き出します（パスフレーズは紛失しないよう管理してください）。</span>
+              </li>
+            </ol>
+          </div>
         ) : (
           <div className="domain-list">
             {Object.entries(grouped).map(([domain, items]) => (
@@ -3291,6 +3431,7 @@ function ConnectionsView({
   claudeConfig,
   startAiAccess,
   startHostedRelayAgent,
+  connectManagedRelay,
   stopAiAccess,
   refreshAiAccess,
   hostedAgentWebsocketUrl,
@@ -3340,6 +3481,7 @@ function ConnectionsView({
   claudeConfig: string;
   startAiAccess: () => void;
   startHostedRelayAgent: () => void;
+  connectManagedRelay: () => void;
   stopAiAccess: () => void;
   refreshAiAccess: () => void;
   hostedAgentWebsocketUrl: string;
@@ -3779,6 +3921,15 @@ function ConnectionsView({
               </div>
             </div>
             <div className="service-actions">
+              <button
+                className="primary-button"
+                disabled={!nativePath || aiServiceBusy}
+                onClick={connectManagedRelay}
+                type="button"
+              >
+                <Plug size={16} />
+                管理リレーにワンクリック接続
+              </button>
               <button
                 className="primary-button"
                 disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}

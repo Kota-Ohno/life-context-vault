@@ -13,6 +13,7 @@ import {
   VaultState
 } from "./types";
 import { normalizeVaultState } from "./vault";
+import { RuntimePreferences } from "./runtimePreferences";
 
 declare global {
   interface Window {
@@ -113,6 +114,34 @@ export async function getNativeVaultPath(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("vault_storage_path");
+}
+
+/**
+ * Export the entire vault as an encrypted backup envelope (PBKDF2-SHA256 +
+ * AES-GCM-256). The envelope contains every raw source, so it is as sensitive
+ * as the vault itself; the passphrase protects it. Returns null in the browser
+ * preview (which has no native vault).
+ */
+export async function exportNativeEncryptedBackup(passphrase: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("export_native_encrypted_backup", { passphrase });
+}
+
+/**
+ * Restore a vault from an encrypted backup envelope. Overwrites the current
+ * vault on disk; callers must confirm destructively before invoking. Returns
+ * the restored, normalized vault state so the UI can refresh. Returns null in
+ * the browser preview.
+ */
+export async function importNativeEncryptedBackup(
+  backupText: string,
+  passphrase: string
+): Promise<VaultState | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const payload = await invoke<string>("import_native_encrypted_backup", { backupText, passphrase });
+  return normalizeVaultState(JSON.parse(payload));
 }
 
 export async function extractNativeDocumentText(input: {
@@ -439,6 +468,60 @@ export async function startAiAccessServices(): Promise<AiAccessServiceStatus | n
   return invoke<AiAccessServiceStatus>("start_ai_access_services");
 }
 
+/** Write the recovery-key sidecar (wrapping the current vault key). Onboarding
+ * calls this after the user writes down the recovery key. */
+export async function writeNativeRecoveryEnvelope(recoveryKey: string): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("write_recovery_envelope", { recoveryKey });
+  return true;
+}
+
+/** Recover the vault key from the sidecar and re-establish it in Keychain
+ * (after a Keychain loss). Throws on a wrong recovery key. */
+export async function recoverVaultWithRecoveryKey(recoveryKey: string): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("recover_vault_with_recovery_key", { recoveryKey });
+  return true;
+}
+
+/** Write a vault-key-derived backup now to the default Backups directory. */
+export async function runLocalBackupNow(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("run_local_backup_now");
+}
+
+/** Read runtime preferences (OCR/Office/autoStart) persisted in the vault. */
+export async function getNativeRuntimePreferences(): Promise<Partial<RuntimePreferences> | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Partial<RuntimePreferences>>("get_native_runtime_preferences");
+}
+
+/** Persist runtime preferences into the vault (so they survive reinstall and
+ * migrate with encrypted backups). */
+export async function saveNativeRuntimePreferences(
+  preferences: RuntimePreferences
+): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("save_native_runtime_preferences", { prefs: preferences });
+  return true;
+}
+
+/**
+ * Request a managed-relay pairing URL from the operator's hosted relay
+ * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then
+ * passed to `startAiAccessAgentForRelay` to complete one-click pairing.
+ */
+export async function requestManagedPairingUrl(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("request_managed_pairing_url");
+}
+
 export async function startAiAccessAgentForRelay(agentWebsocketUrl: string): Promise<AiAccessServiceStatus | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -608,6 +691,28 @@ export async function denyNativeContextPackRequest(
     requestId: result.requestId,
     packId: result.packId,
     generatedBy: result.generatedBy
+  };
+}
+
+export async function addNativeSourcePendingRuntime(input: {
+  kind: SourceKind;
+  origin: SourceOrigin;
+  title: string;
+}): Promise<NativeSourceIngestResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceIngestPayload>("add_native_source_pending_runtime", {
+    kind: input.kind,
+    origin: input.origin,
+    title: input.title
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
+    candidateIds: result.candidateIds,
+    detectedSensitivity: result.detectedSensitivity,
+    generatedBy: "native_vault_core"
   };
 }
 

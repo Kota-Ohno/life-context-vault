@@ -28,7 +28,10 @@ use tauri::{
 };
 
 mod mcp_stdio;
+mod vault_backup;
 mod vault_crypto;
+mod vault_recovery;
+mod embeddings;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
@@ -1778,6 +1781,196 @@ fn save_vault_json_with_projection(
   Ok((saved_snapshot.payload.unwrap_or(payload), save_result.updated_at))
 }
 
+pub fn export_encrypted_backup_at_path(path: &Path, passphrase: &str) -> Result<String, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = vault.to_string();
+  vault_backup::export_encrypted_backup(&payload, passphrase)
+}
+
+pub fn import_encrypted_backup_at_path(
+  path: &Path,
+  backup_text: &str,
+  passphrase: &str,
+) -> Result<String, String> {
+  let payload = vault_backup::import_encrypted_backup(backup_text, passphrase)?;
+  let vault: Value = serde_json::from_str(&payload)
+    .map_err(|error| format!("decrypted backup is not a valid vault payload: {error}"))?;
+  let version = vault.get("version").and_then(Value::as_u64);
+  if version != Some(2) {
+    return Err(format!(
+      "decrypted backup is not a supported vault version (got {:?})",
+      version
+    ));
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(payload)
+}
+
+pub fn get_runtime_preferences_at_path(path: &Path) -> Result<Value, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  Ok(vault.get("runtimePreferences").cloned().unwrap_or_else(|| json!({})))
+}
+
+pub fn save_runtime_preferences_at_path(path: &Path, prefs: &Value) -> Result<(), String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  vault["runtimePreferences"] = prefs.clone();
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn get_native_runtime_preferences(app: AppHandle) -> Result<Value, String> {
+  let path = vault_db_path(&app)?;
+  get_runtime_preferences_at_path(&path)
+}
+
+#[tauri::command]
+fn save_native_runtime_preferences(app: AppHandle, prefs: Value) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  save_runtime_preferences_at_path(&path, &prefs)
+}
+
+pub fn export_local_backup_at_path(path: &Path) -> Result<String, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = vault.to_string();
+  let vault_key = vault_crypto::vault_key()?;
+  vault_backup::export_local_backup(&payload, &vault_key)
+}
+
+pub fn import_local_backup_at_path(path: &Path, backup_text: &str) -> Result<String, String> {
+  let vault_key = vault_crypto::vault_key()?;
+  let payload = vault_backup::import_local_backup(backup_text, &vault_key)?;
+  let vault: Value = serde_json::from_str(&payload)
+    .map_err(|error| format!("decrypted local backup is not a valid vault payload: {error}"))?;
+  let mut connection = open_vault_db_at_path(path)?;
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(payload)
+}
+
+/// Write a vault-key-derived local backup into `dest_dir`, keeping only the
+/// `retention` most-recent `vault-<timestamp>.lcvbak` files. Used by the
+/// scheduled automatic-backup task.
+pub fn write_local_backup_to_dir(
+  db_path: &Path,
+  dest_dir: &Path,
+  retention: usize,
+) -> Result<PathBuf, String> {
+  fs::create_dir_all(dest_dir).map_err(|error| format!("failed to create backup directory: {error}"))?;
+  let envelope = export_local_backup_at_path(db_path)?;
+  let stamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_secs())
+    .unwrap_or(0);
+  let backup_path = dest_dir.join(format!("vault-{stamp}.lcvbak"));
+  fs::write(&backup_path, envelope).map_err(|error| format!("failed to write backup: {error}"))?;
+  prune_local_backups(dest_dir, retention)?;
+  Ok(backup_path)
+}
+
+fn prune_local_backups(dest_dir: &Path, retention: usize) -> Result<(), String> {
+  let mut backups: Vec<(PathBuf, u64)> = fs::read_dir(dest_dir)
+    .map_err(|error| format!("failed to read backup directory: {error}"))?
+    .filter_map(Result::ok)
+    .filter_map(|entry| {
+      let path = entry.path();
+      let name = path.file_name()?.to_str()?;
+      let stamp = name.strip_prefix("vault-")?.strip_suffix(".lcvbak")?.parse::<u64>().ok()?;
+      Some((path, stamp))
+    })
+    .collect();
+  backups.sort_by_key(|(_, stamp)| *stamp);
+  while backups.len() > retention {
+    let (path, _) = backups.remove(0);
+    let _ = fs::remove_file(path);
+  }
+  Ok(())
+}
+
+fn local_backup_default_dir(app: &AppHandle) -> Result<PathBuf, String> {
+  let db_path = vault_db_path(app)?;
+  let parent = db_path
+    .parent()
+    .ok_or_else(|| "vault path has no parent directory".to_string())?;
+  Ok(parent.join("Backups"))
+}
+
+/// Write a vault-key-derived backup now to the default Backups directory next
+/// to the vault, keeping the last LCV_BACKUP_RETENTION (default 10). Usable as
+/// a "Back up now" action and as the body of a scheduled task.
+/// Recover the SQLCipher key from the sidecar using the recovery key, then
+/// re-establish it in the OS credential store so normal opens succeed after a
+/// Keychain loss. Completes the recovery-key flow (P0-C).
+/// Write the recovery-key sidecar (wrapping the current SQLCipher key) so the
+/// user can recover after a Keychain loss. Called during onboarding after the
+/// user writes down the displayed recovery key.
+#[tauri::command]
+fn write_recovery_envelope(app: AppHandle, recovery_key: String) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  write_recovery_envelope_at_path(&path, &recovery_key)
+}
+
+#[tauri::command]
+fn recover_vault_with_recovery_key(app: AppHandle, recovery_key: String) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  let vault_key = recover_vault_key_at_path(&path, &recovery_key)?;
+  vault_crypto::reestablish_vault_key(&vault_key)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn run_local_backup_now(app: AppHandle) -> Result<String, String> {
+  let db_path = vault_db_path(&app)?;
+  let dest = local_backup_default_dir(&app)?;
+  let retention = env::var("LCV_BACKUP_RETENTION")
+    .ok()
+    .and_then(|value| value.parse().ok())
+    .unwrap_or(10);
+  let written = write_local_backup_to_dir(&db_path, &dest, retention)?;
+  Ok(written.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn export_native_encrypted_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
+  let path = vault_db_path(&app)?;
+  export_encrypted_backup_at_path(&path, &passphrase)
+}
+
+#[tauri::command]
+fn import_native_encrypted_backup(
+  app: AppHandle,
+  backup_text: String,
+  passphrase: String,
+) -> Result<String, String> {
+  let path = vault_db_path(&app)?;
+  import_encrypted_backup_at_path(&path, &backup_text, &passphrase)
+}
+
+pub fn write_recovery_envelope_at_path(db_path: &Path, recovery_key: &str) -> Result<(), String> {
+  let vault_key = vault_crypto::vault_key()?;
+  let envelope = vault_recovery::wrap_vault_key(&vault_key, recovery_key)?;
+  let sidecar = recovery_sidecar_path(db_path);
+  fs::write(&sidecar, envelope)
+    .map_err(|error| format!("failed to write recovery envelope to {}: {error}", sidecar.display()))
+}
+
+pub fn recover_vault_key_at_path(db_path: &Path, recovery_key: &str) -> Result<String, String> {
+  let sidecar = recovery_sidecar_path(db_path);
+  let envelope = fs::read_to_string(&sidecar)
+    .map_err(|error| format!("failed to read recovery envelope at {}: {error}", sidecar.display()))?;
+  vault_recovery::unwrap_vault_key(&envelope, recovery_key)
+}
+
+/// Path of the recovery-key sidecar file stored next to (not inside) the
+/// encrypted vault DB. `vault.sqlite3` -> `vault.recovery.json`.
+fn recovery_sidecar_path(db_path: &Path) -> PathBuf {
+  db_path.with_extension("recovery.json")
+}
+
 pub fn propose_memory_at_path(
   path: &Path,
   client_id: &str,
@@ -1960,6 +2153,84 @@ pub fn add_source_with_candidates_at_path(
     source_id,
     candidate_ids,
     detected_sensitivity,
+  })
+}
+
+pub fn add_source_pending_runtime_at_path(
+  path: &Path,
+  kind: &str,
+  origin: &str,
+  title: &str,
+) -> Result<VaultCoreSourceIngestResult, String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let source_id = new_id("src");
+  let normalized_title = normalized_text(title);
+  let source_title = if normalized_title.trim().is_empty() {
+    "Untitled source".to_string()
+  } else {
+    normalized_title
+  };
+  let kind = source_kind(kind);
+  let origin = source_origin(origin);
+  let body = "[needs_runtime] このSourceは抽出ランタイム(OCRまたはOffice変換)が未設定のため本文を抽出していません。SettingsでProviderを設定後に再処理できます。";
+  let source = json!({
+    "id": source_id,
+    "kind": kind,
+    "title": source_title,
+    "origin": origin,
+    "body": body,
+    "createdAt": now,
+    "capturedAt": now,
+    "defaultSensitivity": "personal",
+    "processingStatus": "needs_runtime",
+    "deletionState": "active"
+  });
+  push_json_array(&mut vault, "sources", source);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "source_added",
+      "source",
+      &source_id,
+      "personal",
+      json!({
+        "title": source_title,
+        "kind": kind,
+        "origin": origin,
+        "pendingRuntime": true,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceIngestResult {
+    payload,
+    updated_at,
+    source_id,
+    candidate_ids: vec![],
+    detected_sensitivity: "personal".to_string(),
+  })
+}
+
+#[tauri::command]
+fn add_native_source_pending_runtime(
+  app: AppHandle,
+  kind: String,
+  origin: String,
+  title: String,
+) -> Result<NativeSourceIngestResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = add_source_pending_runtime_at_path(&path, &kind, &origin, &title)?;
+  Ok(NativeSourceIngestResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    candidate_ids: result.candidate_ids,
+    detected_sensitivity: result.detected_sensitivity,
+    generated_by: "native_vault_core".to_string(),
   })
 }
 
@@ -3545,6 +3816,7 @@ fn rank_context_facts_in_connection(
   let task_domain = classify_domain(task_text);
   let lower_task = task_text.to_lowercase();
   let tokens = search_tokens(task_text);
+  let task_vec = embeddings::embed(task_text);
   let mut candidates = Vec::<NativeFactSearchResult>::new();
 
   for fact in search_facts_in_connection(connection, task_text, None, None, 200)? {
@@ -3558,6 +3830,7 @@ fn rank_context_facts_in_connection(
     .into_iter()
     .map(|fact| {
       let haystack = format!("{} {}", fact.fact_text.to_lowercase(), fact.domain.to_lowercase());
+      let fact_vec = embeddings::embed(&format!("{} {}", fact.fact_text, fact.domain));
       let token_score = tokens
         .iter()
         .filter(|token| haystack.contains(token.as_str()))
@@ -3581,8 +3854,9 @@ fn rank_context_facts_in_connection(
       } else {
         0
       };
+      let semantic_score = (embeddings::cosine(&task_vec, &fact_vec) * 6.0).round() as i64;
       (
-        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus,
+        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus + semantic_score,
         fact,
       )
     })
@@ -8244,6 +8518,39 @@ fn start_ai_access_services(
   Ok(supervisor_status(&mut supervisor))
 }
 
+const DEFAULT_MANAGED_RELAY_URL: &str = "https://relay.lifecontextvault.example";
+
+/// Request a managed-relay pairing URL from the operator's hosted relay's
+/// public `/pair` endpoint (no admin token needed). The returned
+/// `agentWebSocketUrl` is then passed to `start_ai_access_agent_for_relay`.
+/// Doing the fetch here (not in the webview) avoids CSP connect-src exposure
+/// and keeps the relay host configurable via LCV_MANAGED_RELAY_URL.
+#[tauri::command]
+fn request_managed_pairing_url() -> Result<String, String> {
+  let base = env::var("LCV_MANAGED_RELAY_URL")
+    .unwrap_or_else(|_| DEFAULT_MANAGED_RELAY_URL.to_string());
+  if base.contains(".example") {
+    return Err(
+      "Managed relay is not configured. Set LCV_MANAGED_RELAY_URL to your hosted relay.".to_string(),
+    );
+  }
+  let endpoint = format!("{}/pair", base.trim_end_matches('/'));
+  let response = ureq::post(&endpoint)
+    .timeout(Duration::from_secs(10))
+    .call()
+    .map_err(|error| format!("managed relay pairing request failed: {error}"))?;
+  let body = response
+    .into_string()
+    .map_err(|error| format!("failed to read managed relay response: {error}"))?;
+  let value: Value = serde_json::from_str(&body)
+    .map_err(|error| format!("managed relay response is not valid JSON: {error}"))?;
+  value
+    .get("agentWebSocketUrl")
+    .and_then(Value::as_str)
+    .map(|url| url.to_string())
+    .ok_or_else(|| "managed relay did not return agentWebSocketUrl".to_string())
+}
+
 #[tauri::command]
 fn start_ai_access_agent_for_relay(
   app: AppHandle,
@@ -8365,7 +8672,16 @@ pub fn run() {
       install_chrome_capture_host_manifest,
       login_item_status,
       install_login_item,
-      uninstall_login_item
+      uninstall_login_item,
+      export_native_encrypted_backup,
+      import_native_encrypted_backup,
+      add_native_source_pending_runtime,
+      request_managed_pairing_url,
+      run_local_backup_now,
+      recover_vault_with_recovery_key,
+      write_recovery_envelope,
+      get_native_runtime_preferences,
+      save_native_runtime_preferences
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -8454,6 +8770,236 @@ mod tests {
 
   fn use_test_vault_key() {
     std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+  }
+
+  #[test]
+  fn recovery_sidecar_round_trips_vault_key_at_path() {
+    use_test_vault_key();
+    let path = temp_vault_path("recovery-io");
+    {
+      let _connection = open_vault_db_at_path(&path).expect("open vault");
+    }
+    let recovery_key = vault_recovery::generate_recovery_key();
+    write_recovery_envelope_at_path(&path, &recovery_key).expect("write envelope");
+    let recovered = recover_vault_key_at_path(&path, &recovery_key).expect("recover key");
+    let expected = std::env::var("LCV_VAULT_DB_KEY").expect("test key set");
+    assert_eq!(recovered, expected);
+    let _ = fs::remove_file(recovery_sidecar_path(&path));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn encrypted_backup_round_trips_through_vault_db_at_path() {
+    use_test_vault_key();
+    let passphrase = "Correct-Horse-42!";
+    let source_path = temp_vault_path("backup-source");
+    let restore_path = temp_vault_path("backup-restore");
+
+    {
+      let mut connection = open_vault_db_at_path(&source_path).expect("open source vault");
+      let vault = json!({
+        "version": 2,
+        "sources": [],
+        "candidates": [],
+        "facts": [{
+          "id": "fact_test",
+          "factText": "テスト用の事実",
+          "domain": "identity_and_profile",
+          "factType": "identity",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "user_asserted",
+          "status": "active",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "approvedAt": "2026-01-01T00:00:00.000Z",
+          "updatedAt": "2026-01-01T00:00:00.000Z",
+          "supersedesFactIds": []
+        }],
+        "accessPolicies": [],
+        "passiveCaptureSettings": { "enabled": false, "retentionDays": 14, "allowedSites": [] },
+        "passiveCaptureEvents": [],
+        "connectorSessions": [],
+        "contextPackRequests": [],
+        "contextPacks": [],
+        "auditEvents": []
+      });
+      save_vault_json_with_projection(&mut connection, &vault).expect("seed source vault");
+    }
+
+    let envelope =
+      export_encrypted_backup_at_path(&source_path, passphrase).expect("export should succeed");
+    let _restored_payload =
+      import_encrypted_backup_at_path(&restore_path, &envelope, passphrase).expect("import should succeed");
+
+    let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
+    let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
+    let facts = restored
+      .get("facts")
+      .and_then(Value::as_array)
+      .expect("restored vault has facts array");
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["id"], "fact_test");
+    assert_eq!(facts[0]["factText"], "テスト用の事実");
+
+    remove_temp_vault(&source_path);
+    remove_temp_vault(&restore_path);
+  }
+
+  #[test]
+  fn write_local_backup_to_dir_creates_file_and_prunes_old() {
+    use_test_vault_key();
+    let db_path = temp_vault_path("scheduled-source");
+    {
+      let mut connection = open_vault_db_at_path(&db_path).expect("open source vault");
+      save_vault_json_with_projection(
+        &mut connection,
+        &json!({"version":2,"sources":[],"candidates":[],"facts":[],"accessPolicies":[],"passiveCaptureSettings":{"enabled":false,"retentionDays":14,"allowedSites":[]},"passiveCaptureEvents":[],"connectorSessions":[],"contextPackRequests":[],"contextPacks":[],"auditEvents":[]}),
+      )
+      .expect("seed vault");
+    }
+    let dest = std::env::temp_dir().join(format!(
+      "lcv-scheduled-test-{}",
+      SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default()
+    ));
+    fs::create_dir_all(&dest).expect("test dest dir");
+    fs::write(dest.join("vault-100.lcvbak"), "old").expect("seed old backup");
+    let written = write_local_backup_to_dir(&db_path, &dest, 1).expect("write backup");
+    assert!(written.exists());
+    let count = fs::read_dir(&dest)
+      .expect("read dest")
+      .filter_map(Result::ok)
+      .filter(|entry| entry.file_name().to_string_lossy().ends_with(".lcvbak"))
+      .count();
+    assert_eq!(count, 1, "retention=1 should prune the old backup");
+    let _ = fs::remove_dir_all(&dest);
+    remove_temp_vault(&db_path);
+  }
+
+  #[test]
+  fn local_backup_round_trips_through_vault_db_at_path() {
+    use_test_vault_key();
+    let source_path = temp_vault_path("local-backup-source");
+    let restore_path = temp_vault_path("local-backup-restore");
+    {
+      let mut connection = open_vault_db_at_path(&source_path).expect("open source");
+      let vault = json!({
+        "version": 2,
+        "sources": [],
+        "candidates": [],
+        "facts": [{
+          "id": "fact_x",
+          "factText": "ローカルバックアップテスト",
+          "domain": "identity_and_profile",
+          "factType": "identity",
+          "sourceIds": [],
+          "sensitivity": "personal",
+          "confidence": "user_asserted",
+          "status": "active",
+          "createdAt": "2026-01-01T00:00:00.000Z",
+          "approvedAt": "2026-01-01T00:00:00.000Z",
+          "updatedAt": "2026-01-01T00:00:00.000Z",
+          "supersedesFactIds": []
+        }],
+        "accessPolicies": [],
+        "passiveCaptureSettings": { "enabled": false, "retentionDays": 14, "allowedSites": [] },
+        "passiveCaptureEvents": [],
+        "connectorSessions": [],
+        "contextPackRequests": [],
+        "contextPacks": [],
+        "auditEvents": []
+      });
+      save_vault_json_with_projection(&mut connection, &vault).expect("seed source vault");
+    }
+    let envelope = export_local_backup_at_path(&source_path).expect("export local backup");
+    import_local_backup_at_path(&restore_path, &envelope).expect("import local backup");
+    let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
+    let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
+    let facts = restored.get("facts").and_then(Value::as_array).expect("facts array");
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["id"], "fact_x");
+    assert_eq!(facts[0]["factText"], "ローカルバックアップテスト");
+    remove_temp_vault(&source_path);
+    remove_temp_vault(&restore_path);
+  }
+
+  #[test]
+  fn sqlite_vec_loads_alongside_sqlcipher() {
+    use_test_vault_key();
+    // Register the sqlite-vec extension process-wide (same pattern as the
+    // sqlite-vec crate's own test), then open a SQLCipher-encrypted connection.
+    unsafe {
+      rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+        sqlite_vec::sqlite3_vec_init as *const (),
+      )));
+    }
+    let path = temp_vault_path("sqlite-vec-spike");
+    let connection = open_vault_db_at_path(&path).expect("open encrypted vault");
+    let version: String = connection
+      .query_row("SELECT vec_version()", [], |row| row.get(0))
+      .expect("vec_version() available on SQLCipher connection");
+    assert!(version.starts_with("v"), "vec_version was: {version}");
+    connection
+      .execute_batch("CREATE VIRTUAL TABLE vec_spike USING vec0(embedding float[4])")
+      .expect("create vec0 virtual table on SQLCipher connection");
+    connection
+      .execute(
+        "INSERT INTO vec_spike(rowid, embedding) VALUES (1, ?)",
+        [rusqlite::types::Value::Blob(vec![
+          0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64,
+        ])],
+      )
+      .expect("insert vector");
+    let distance: f64 = connection
+      .query_row(
+        "SELECT distance FROM vec_spike WHERE embedding MATCH ? ORDER BY distance LIMIT 1",
+        [rusqlite::types::Value::Blob(vec![
+          0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64,
+        ])],
+        |row| row.get(0),
+      )
+      .expect("knn query");
+    assert!(distance.is_finite(), "vec0 knn distance should be finite, got {distance}");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn runtime_preferences_round_trip_through_vault() {
+    use_test_vault_key();
+    let path = temp_vault_path("prefs");
+    let prefs = json!({
+      "autoStartAiAccess": true,
+      "ocrCommand": "/opt/homebrew/bin/tesseract",
+      "ocrArgs": "{input}",
+      "ocrTimeoutSeconds": 45,
+      "legacyOfficeCommand": "",
+      "legacyOfficeArgs": "--headless --convert-to {target_ext} --outdir {output_dir} {input}",
+      "legacyOfficeTimeoutSeconds": 60
+    });
+    save_runtime_preferences_at_path(&path, &prefs).expect("save prefs");
+    let loaded = get_runtime_preferences_at_path(&path).expect("load prefs");
+    assert_eq!(loaded, prefs);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn pending_runtime_source_registers_without_candidates() {
+    use_test_vault_key();
+    let path = temp_vault_path("pending-runtime");
+    let result = add_source_pending_runtime_at_path(&path, "document", "user_upload", "scan.png")
+      .expect("add pending source");
+    assert!(result.candidate_ids.is_empty());
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    let sources = vault.get("sources").and_then(Value::as_array).expect("sources array");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["processingStatus"], "needs_runtime");
+    assert_eq!(sources[0]["title"], "scan.png");
+    let candidates = vault
+      .get("candidates")
+      .and_then(Value::as_array)
+      .expect("candidates array");
+    assert!(candidates.is_empty());
+    remove_temp_vault(&path);
   }
 
   fn zipped_document(entries: &[(&str, &str)]) -> Vec<u8> {
