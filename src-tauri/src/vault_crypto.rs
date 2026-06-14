@@ -145,7 +145,7 @@ fn keep_plaintext_migration_backup() -> bool {
     .unwrap_or(false)
 }
 
-fn vault_key() -> Result<String, String> {
+pub(crate) fn vault_key() -> Result<String, String> {
   if let Ok(key) = std::env::var("LCV_VAULT_DB_KEY") {
     if key.len() >= 32 {
       return Ok(key);

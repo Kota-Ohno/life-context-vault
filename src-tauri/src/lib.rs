@@ -1823,6 +1823,27 @@ fn import_native_encrypted_backup(
   import_encrypted_backup_at_path(&path, &backup_text, &passphrase)
 }
 
+pub fn write_recovery_envelope_at_path(db_path: &Path, recovery_key: &str) -> Result<(), String> {
+  let vault_key = vault_crypto::vault_key()?;
+  let envelope = vault_recovery::wrap_vault_key(&vault_key, recovery_key)?;
+  let sidecar = recovery_sidecar_path(db_path);
+  fs::write(&sidecar, envelope)
+    .map_err(|error| format!("failed to write recovery envelope to {}: {error}", sidecar.display()))
+}
+
+pub fn recover_vault_key_at_path(db_path: &Path, recovery_key: &str) -> Result<String, String> {
+  let sidecar = recovery_sidecar_path(db_path);
+  let envelope = fs::read_to_string(&sidecar)
+    .map_err(|error| format!("failed to read recovery envelope at {}: {error}", sidecar.display()))?;
+  vault_recovery::unwrap_vault_key(&envelope, recovery_key)
+}
+
+/// Path of the recovery-key sidecar file stored next to (not inside) the
+/// encrypted vault DB. `vault.sqlite3` -> `vault.recovery.json`.
+fn recovery_sidecar_path(db_path: &Path) -> PathBuf {
+  db_path.with_extension("recovery.json")
+}
+
 pub fn propose_memory_at_path(
   path: &Path,
   client_id: &str,
@@ -8501,6 +8522,22 @@ mod tests {
 
   fn use_test_vault_key() {
     std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+  }
+
+  #[test]
+  fn recovery_sidecar_round_trips_vault_key_at_path() {
+    use_test_vault_key();
+    let path = temp_vault_path("recovery-io");
+    {
+      let _connection = open_vault_db_at_path(&path).expect("open vault");
+    }
+    let recovery_key = vault_recovery::generate_recovery_key();
+    write_recovery_envelope_at_path(&path, &recovery_key).expect("write envelope");
+    let recovered = recover_vault_key_at_path(&path, &recovery_key).expect("recover key");
+    let expected = std::env::var("LCV_VAULT_DB_KEY").expect("test key set");
+    assert_eq!(recovered, expected);
+    let _ = fs::remove_file(recovery_sidecar_path(&path));
+    remove_temp_vault(&path);
   }
 
   #[test]
