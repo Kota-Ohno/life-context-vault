@@ -57,3 +57,4 @@ zip = "0.6.6"
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "native-certs"] }
 pbkdf2 = { version = "0.12", features = ["simple"] }
 aes-gcm = "0.10"
+sqlite-vec = "0.1"

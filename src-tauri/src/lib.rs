@@ -8891,6 +8891,46 @@ mod tests {
   }
 
   #[test]
+  fn sqlite_vec_loads_alongside_sqlcipher() {
+    use_test_vault_key();
+    // Register the sqlite-vec extension process-wide (same pattern as the
+    // sqlite-vec crate's own test), then open a SQLCipher-encrypted connection.
+    unsafe {
+      rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+        sqlite_vec::sqlite3_vec_init as *const (),
+      )));
+    }
+    let path = temp_vault_path("sqlite-vec-spike");
+    let connection = open_vault_db_at_path(&path).expect("open encrypted vault");
+    let version: String = connection
+      .query_row("SELECT vec_version()", [], |row| row.get(0))
+      .expect("vec_version() available on SQLCipher connection");
+    assert!(version.starts_with("v"), "vec_version was: {version}");
+    connection
+      .execute_batch("CREATE VIRTUAL TABLE vec_spike USING vec0(embedding float[4])")
+      .expect("create vec0 virtual table on SQLCipher connection");
+    connection
+      .execute(
+        "INSERT INTO vec_spike(rowid, embedding) VALUES (1, ?)",
+        [rusqlite::types::Value::Blob(vec![
+          0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64,
+        ])],
+      )
+      .expect("insert vector");
+    let distance: f64 = connection
+      .query_row(
+        "SELECT distance FROM vec_spike WHERE embedding MATCH ? ORDER BY distance LIMIT 1",
+        [rusqlite::types::Value::Blob(vec![
+          0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64,
+        ])],
+        |row| row.get(0),
+      )
+      .expect("knn query");
+    assert!(distance.is_finite(), "vec0 knn distance should be finite, got {distance}");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
   fn pending_runtime_source_registers_without_candidates() {
     use_test_vault_key();
     let path = temp_vault_path("pending-runtime");
