@@ -71,7 +71,10 @@ import {
   updateNativeSourceMetadata,
   updateNativeSourceBody,
   updateNativeSourceLifecycle,
-  uninstallLoginItem
+  uninstallLoginItem,
+  exportNativeEncryptedBackup,
+  importNativeEncryptedBackup,
+  isTauriRuntime
 } from "./nativeStorage";
 import {
   RuntimePreferences,
@@ -1683,7 +1686,10 @@ export function App() {
 
   async function exportBackup() {
     try {
-      const payload = await exportEncryptedBackup(state, backupPassphrase);
+      const payload = isTauriRuntime()
+        ? (await exportNativeEncryptedBackup(backupPassphrase)) ??
+          (await exportEncryptedBackup(state, backupPassphrase))
+        : await exportEncryptedBackup(state, backupPassphrase);
       const blob = new Blob([payload], { type: "application/json" });
       const href = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -1700,7 +1706,10 @@ export function App() {
 
   async function previewRestoreBackup() {
     try {
-      const restored = await importEncryptedBackup(backupText, backupPassphrase);
+      const restored = isTauriRuntime()
+        ? (await importNativeEncryptedBackup(backupText, backupPassphrase)) ??
+          (await importEncryptedBackup(backupText, backupPassphrase))
+        : await importEncryptedBackup(backupText, backupPassphrase);
       setRestorePreview(makeRestorePreview(restored, state));
       setRestoreConfirmText("");
       setNotice("バックアップを読み取りました。移行内容と上書き範囲を確認し、復元する場合はRESTOREと入力してください。");
@@ -1721,7 +1730,10 @@ export function App() {
       return;
     }
     try {
-      const restored = await importEncryptedBackup(backupText, backupPassphrase);
+      const restored = isTauriRuntime()
+        ? (await importNativeEncryptedBackup(backupText, backupPassphrase)) ??
+          (await importEncryptedBackup(backupText, backupPassphrase))
+        : await importEncryptedBackup(backupText, backupPassphrase);
       apply(restored, "バックアップを復元しました。");
       setActivePackId(null);
       setActiveRequestId(null);

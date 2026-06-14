@@ -9,11 +9,11 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version tag to publish (e.g. v0.2.0)"
-        required: true
+
+# Both the tag-push trigger and any dispatch require write access to the
+# repository, so forks cannot trigger this workflow or access its secrets.
+# There is no pull_request_target trigger and no untrusted input is expanded
+# into `run:` steps. Follow-up hardening: pin each `actions/*` to a commit SHA.
 
 permissions:
   contents: write
