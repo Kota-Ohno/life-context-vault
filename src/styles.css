@@ -3441,3 +3441,20 @@ button:focus-visible {
   font-size: 0.85rem;
   opacity: 0.8;
 }
+
+.lang-toggle {
+  align-self: center;
+  margin-top: 0.5rem;
+  background: transparent;
+  border: 1px solid rgba(125, 125, 125, 0.3);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: inherit;
+}
+
+.lang-toggle:hover {
+  background: rgba(125, 125, 125, 0.1);
+}

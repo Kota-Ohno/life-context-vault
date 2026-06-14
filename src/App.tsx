@@ -78,6 +78,7 @@ import {
   importNativeEncryptedBackup,
   isTauriRuntime
 } from "./nativeStorage";
+import { detectLang, Lang, t } from "./i18n";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -402,6 +403,18 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
+  const [lang, setLang] = useState<Lang>(() => {
+    const stored = typeof localStorage !== "undefined" ? localStorage.getItem("lcv-lang") : null;
+    if (stored === "en" || stored === "ja") return stored;
+    return detectLang();
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("lcv-lang", lang);
+    } catch {
+      /* localStorage unavailable; language stays in-memory for this session */
+    }
+  }, [lang]);
   const [setup, setSetup] = useState<BackgroundSetupInput>(blankSetup);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
@@ -2005,21 +2018,30 @@ export function App() {
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
-          <NavButton icon={<Home size={18} />} label="Home" ariaLabel="Home画面を開く" active={view === "home"} onClick={() => setView("home")} />
-          <NavButton icon={<Inbox size={18} />} label="Inbox" ariaLabel="Inbox画面を開く" active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
-          <NavButton icon={<FileText size={18} />} label="Sources" ariaLabel="Sources画面を開く" active={view === "sources"} onClick={() => setView("sources")} />
-          <NavButton icon={<Plug size={18} />} label="Connections" ariaLabel="Connections画面を開く" active={view === "connections"} onClick={() => setView("connections")} />
+          <NavButton icon={<Home size={18} />} label={t(lang, "nav.home")} ariaLabel={t(lang, "nav.home")} active={view === "home"} onClick={() => setView("home")} />
+          <NavButton icon={<Inbox size={18} />} label={t(lang, "nav.inbox")} ariaLabel={t(lang, "nav.inbox")} active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
+          <NavButton icon={<FileText size={18} />} label={t(lang, "nav.sources")} ariaLabel={t(lang, "nav.sources")} active={view === "sources"} onClick={() => setView("sources")} />
+          <NavButton icon={<Plug size={18} />} label={t(lang, "nav.connections")} ariaLabel={t(lang, "nav.connections")} active={view === "connections"} onClick={() => setView("connections")} />
           <NavButton
             icon={<MessageSquare size={18} />}
-            label="Requests"
-            ariaLabel="Requests画面を開く"
+            label={t(lang, "nav.requests")}
+            ariaLabel={t(lang, "nav.requests")}
             active={view === "requests"}
             onClick={() => setView("requests")}
             badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
           />
-          <NavButton icon={<Search size={18} />} label="Search" ariaLabel="Search画面を開く" active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Activity size={18} />} label="Audit" ariaLabel="Audit画面を開く" active={view === "audit"} onClick={() => setView("audit")} />
-          <NavButton icon={<Settings size={18} />} label="Settings" ariaLabel="Settings画面を開く" active={view === "settings"} onClick={() => setView("settings")} />
+          <NavButton icon={<Search size={18} />} label={t(lang, "nav.search")} ariaLabel={t(lang, "nav.search")} active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
+          <NavButton icon={<Activity size={18} />} label={t(lang, "nav.audit")} ariaLabel={t(lang, "nav.audit")} active={view === "audit"} onClick={() => setView("audit")} />
+          <NavButton icon={<Settings size={18} />} label={t(lang, "nav.settings")} ariaLabel={t(lang, "nav.settings")} active={view === "settings"} onClick={() => setView("settings")} />
+          <button
+            className="lang-toggle"
+            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
+            aria-label="Toggle language"
+            title={lang === "ja" ? "Switch to English" : "日本語に切り替え"}
+            type="button"
+          >
+            {lang.toUpperCase()}
+          </button>
         </nav>
         <div className="sidebar-stats">
           <Metric label="元データ" value={state.sources.length} />
