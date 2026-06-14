@@ -1825,6 +1825,45 @@ pub fn import_local_backup_at_path(path: &Path, backup_text: &str) -> Result<Str
   Ok(payload)
 }
 
+/// Write a vault-key-derived local backup into `dest_dir`, keeping only the
+/// `retention` most-recent `vault-<timestamp>.lcvbak` files. Used by the
+/// scheduled automatic-backup task.
+pub fn write_local_backup_to_dir(
+  db_path: &Path,
+  dest_dir: &Path,
+  retention: usize,
+) -> Result<PathBuf, String> {
+  fs::create_dir_all(dest_dir).map_err(|error| format!("failed to create backup directory: {error}"))?;
+  let envelope = export_local_backup_at_path(db_path)?;
+  let stamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_secs())
+    .unwrap_or(0);
+  let backup_path = dest_dir.join(format!("vault-{stamp}.lcvbak"));
+  fs::write(&backup_path, envelope).map_err(|error| format!("failed to write backup: {error}"))?;
+  prune_local_backups(dest_dir, retention)?;
+  Ok(backup_path)
+}
+
+fn prune_local_backups(dest_dir: &Path, retention: usize) -> Result<(), String> {
+  let mut backups: Vec<(PathBuf, u64)> = fs::read_dir(dest_dir)
+    .map_err(|error| format!("failed to read backup directory: {error}"))?
+    .filter_map(Result::ok)
+    .filter_map(|entry| {
+      let path = entry.path();
+      let name = path.file_name()?.to_str()?;
+      let stamp = name.strip_prefix("vault-")?.strip_suffix(".lcvbak")?.parse::<u64>().ok()?;
+      Some((path, stamp))
+    })
+    .collect();
+  backups.sort_by_key(|(_, stamp)| *stamp);
+  while backups.len() > retention {
+    let (path, _) = backups.remove(0);
+    let _ = fs::remove_file(path);
+  }
+  Ok(())
+}
+
 #[tauri::command]
 fn export_native_encrypted_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
   let path = vault_db_path(&app)?;
@@ -8726,6 +8765,36 @@ mod tests {
 
     remove_temp_vault(&source_path);
     remove_temp_vault(&restore_path);
+  }
+
+  #[test]
+  fn write_local_backup_to_dir_creates_file_and_prunes_old() {
+    use_test_vault_key();
+    let db_path = temp_vault_path("scheduled-source");
+    {
+      let mut connection = open_vault_db_at_path(&db_path).expect("open source vault");
+      save_vault_json_with_projection(
+        &mut connection,
+        &json!({"version":2,"sources":[],"candidates":[],"facts":[],"accessPolicies":[],"passiveCaptureSettings":{"enabled":false,"retentionDays":14,"allowedSites":[]},"passiveCaptureEvents":[],"connectorSessions":[],"contextPackRequests":[],"contextPacks":[],"auditEvents":[]}),
+      )
+      .expect("seed vault");
+    }
+    let dest = std::env::temp_dir().join(format!(
+      "lcv-scheduled-test-{}",
+      SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default()
+    ));
+    fs::create_dir_all(&dest).expect("test dest dir");
+    fs::write(dest.join("vault-100.lcvbak"), "old").expect("seed old backup");
+    let written = write_local_backup_to_dir(&db_path, &dest, 1).expect("write backup");
+    assert!(written.exists());
+    let count = fs::read_dir(&dest)
+      .expect("read dest")
+      .filter_map(Result::ok)
+      .filter(|entry| entry.file_name().to_string_lossy().ends_with(".lcvbak"))
+      .count();
+    assert_eq!(count, 1, "retention=1 should prune the old backup");
+    let _ = fs::remove_dir_all(&dest);
+    remove_temp_vault(&db_path);
   }
 
   #[test]
