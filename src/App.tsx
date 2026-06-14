@@ -40,6 +40,7 @@ import {
   NativeOcrProviderCandidate,
   addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
+  addNativeSourcePendingRuntime,
   approveNativeCandidate,
   confirmNativeContextPack,
   createNativeContextPackRequest,
@@ -869,6 +870,35 @@ export function App() {
       legacyOfficeConversionAvailable
     );
     if (!support.supported) {
+      if (
+        nativePath &&
+        (support.reason === "ocr_required" ||
+          support.reason === "legacy_office" ||
+          support.reason === "native_required")
+      ) {
+        // Graceful fallback: register the file as a needs_runtime source so the
+        // user keeps a record and can re-extract after configuring the runtime,
+        // instead of a hard rejection.
+        try {
+          const added = await addNativeSourcePendingRuntime({
+            kind: "document",
+            origin: "user_upload",
+            title: file.name
+          });
+          if (added) {
+            nativeRevisionRef.current = added.updatedAt;
+            setNativeRevision(added.updatedAt);
+            setState(added.state);
+            setNotice(
+              `${file.name} を保留中Sourceとして保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
+            );
+            setView("sources");
+            return;
+          }
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : "保留中Sourceの保存に失敗しました。");
+        }
+      }
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
       return;
     }

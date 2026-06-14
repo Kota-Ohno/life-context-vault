@@ -130,7 +130,7 @@ export type RawSource = {
   retentionUntil?: string;
   promotedToLongTerm?: boolean;
   defaultSensitivity: SensitivityTier;
-  processingStatus: "ready" | "failed" | "deleted";
+  processingStatus: "ready" | "failed" | "deleted" | "needs_runtime";
   deletionState: "active" | "soft_deleted" | "purged";
 };
 

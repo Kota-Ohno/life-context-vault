@@ -2029,6 +2029,84 @@ pub fn add_source_with_candidates_at_path(
   })
 }
 
+pub fn add_source_pending_runtime_at_path(
+  path: &Path,
+  kind: &str,
+  origin: &str,
+  title: &str,
+) -> Result<VaultCoreSourceIngestResult, String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  let now = now_iso();
+  let source_id = new_id("src");
+  let normalized_title = normalized_text(title);
+  let source_title = if normalized_title.trim().is_empty() {
+    "Untitled source".to_string()
+  } else {
+    normalized_title
+  };
+  let kind = source_kind(kind);
+  let origin = source_origin(origin);
+  let body = "[needs_runtime] このSourceは抽出ランタイム(OCRまたはOffice変換)が未設定のため本文を抽出していません。SettingsでProviderを設定後に再処理できます。";
+  let source = json!({
+    "id": source_id,
+    "kind": kind,
+    "title": source_title,
+    "origin": origin,
+    "body": body,
+    "createdAt": now,
+    "capturedAt": now,
+    "defaultSensitivity": "personal",
+    "processingStatus": "needs_runtime",
+    "deletionState": "active"
+  });
+  push_json_array(&mut vault, "sources", source);
+  push_json_array(
+    &mut vault,
+    "auditEvents",
+    audit_event(
+      "source_added",
+      "source",
+      &source_id,
+      "personal",
+      json!({
+        "title": source_title,
+        "kind": kind,
+        "origin": origin,
+        "pendingRuntime": true,
+        "generatedBy": "native_vault_core"
+      }),
+    ),
+  );
+  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(VaultCoreSourceIngestResult {
+    payload,
+    updated_at,
+    source_id,
+    candidate_ids: vec![],
+    detected_sensitivity: "personal".to_string(),
+  })
+}
+
+#[tauri::command]
+fn add_native_source_pending_runtime(
+  app: AppHandle,
+  kind: String,
+  origin: String,
+  title: String,
+) -> Result<NativeSourceIngestResult, String> {
+  let path = vault_db_path(&app)?;
+  let result = add_source_pending_runtime_at_path(&path, &kind, &origin, &title)?;
+  Ok(NativeSourceIngestResult {
+    payload: result.payload,
+    updated_at: result.updated_at,
+    source_id: result.source_id,
+    candidate_ids: result.candidate_ids,
+    detected_sensitivity: result.detected_sensitivity,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
 pub fn add_passive_capture_event_at_path(
   path: &Path,
   source_client: &str,
@@ -8433,7 +8511,8 @@ pub fn run() {
       install_login_item,
       uninstall_login_item,
       export_native_encrypted_backup,
-      import_native_encrypted_backup
+      import_native_encrypted_backup,
+      add_native_source_pending_runtime
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -8595,6 +8674,27 @@ mod tests {
 
     remove_temp_vault(&source_path);
     remove_temp_vault(&restore_path);
+  }
+
+  #[test]
+  fn pending_runtime_source_registers_without_candidates() {
+    use_test_vault_key();
+    let path = temp_vault_path("pending-runtime");
+    let result = add_source_pending_runtime_at_path(&path, "document", "user_upload", "scan.png")
+      .expect("add pending source");
+    assert!(result.candidate_ids.is_empty());
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    let sources = vault.get("sources").and_then(Value::as_array).expect("sources array");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["processingStatus"], "needs_runtime");
+    assert_eq!(sources[0]["title"], "scan.png");
+    let candidates = vault
+      .get("candidates")
+      .and_then(Value::as_array)
+      .expect("candidates array");
+    assert!(candidates.is_empty());
+    remove_temp_vault(&path);
   }
 
   fn zipped_document(entries: &[(&str, &str)]) -> Vec<u8> {

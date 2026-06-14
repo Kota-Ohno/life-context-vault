@@ -639,6 +639,28 @@ export async function denyNativeContextPackRequest(
   };
 }
 
+export async function addNativeSourcePendingRuntime(input: {
+  kind: SourceKind;
+  origin: SourceOrigin;
+  title: string;
+}): Promise<NativeSourceIngestResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeSourceIngestPayload>("add_native_source_pending_runtime", {
+    kind: input.kind,
+    origin: input.origin,
+    title: input.title
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    sourceId: result.sourceId,
+    candidateIds: result.candidateIds,
+    detectedSensitivity: result.detectedSensitivity,
+    generatedBy: "native_vault_core"
+  };
+}
+
 export async function addNativeSourceWithCandidates(input: {
   kind: SourceKind;
   origin: SourceOrigin;
