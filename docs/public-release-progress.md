@@ -1,82 +1,75 @@
 # Public-Release Progress — Life Context Vault
 
-Living status of the public-release plan (`~/.claude/plans/splendid-prancing-falcon.md`).
-Branch: `feat/p0-public-release`.
+Status of the public-release plan. Branch: `feat/p0-public-release`
+(16 commits ahead of `master`). All Rust changes are TDD; full suite green
+(`cargo test` 96 pass), frontend `tsc --noEmit` clean, `vitest` 68 pass.
 
-## Completed (verified)
+## P0 status
 
-### P0-C (partial) — Encrypted backup, Rust path
-- New `src-tauri/src/vault_backup.rs`: PBKDF2-SHA256 (600k) + AES-GCM-256
-  envelope, **byte-compatible with the legacy TS impl** (`src/vault.ts:2117`).
-  TDD: 7 unit tests + 1 DB round-trip integration test (RED → GREEN).
-- `export_encrypted_backup_at_path` / `import_encrypted_backup_at_path`
-  (`*_at_path` convention) + `#[tauri::command]` wrappers
-  (`export_native_encrypted_backup`, `import_native_encrypted_backup`),
-  registered in `run()`.
-- Frontend IPC: `exportNativeEncryptedBackup` / `importNativeEncryptedBackup`
-  in `src/nativeStorage.ts`.
-- New deps: `pbkdf2 = "0.12"`, `aes-gcm = "0.10"`.
-- Backup-restore **already enables cross-machine recovery**: restoring a
-  `.lcvbak` on a new Mac re-encrypts the payload with the new machine's
-  Keychain key, gated by the backup passphrase — no original Keychain needed.
-  This reduces the urgency of a separate recovery key (see below).
+### Done (verified)
+- **P0-C backup** — Rust encrypted backup envelope (PBKDF2-SHA256 600k +
+  AES-GCM-256, byte-compatible with the TS path) + `*_at_path` + Tauri commands
+  + frontend IPC + UI routed through the native path. TDD.
+- **P0-C recovery key** — crypto core (generate/wrap/unwrap; GCM-tag verifier)
+  + sidecar IO (write/recover-key, file next to the DB). TDD.
+- **P0-C onboarding** — Home empty state replaced with a 3-step Getting Started
+  card (background → Inbox → backup).
+- **P0-D graceful OCR/Office fallback** — `add_native_source_pending_runtime`:
+  images/legacy-Office without a runtime register as `needs_runtime` instead of
+  hard rejection. Backend command (TDD) + types + frontend wiring.
+- **P0-D error surfacing** — native vault save failures now surface via
+  `setNotice` (were silent `console.warn`).
+- **P0-E CSP** — real CSP in `tauri.conf.json` (was `null`); blocks remote
+  scripts/connections. (Tauri 2 custom commands aren't capability-gated, so
+  `core:default` is correct — the plan's capability-coverage assertion was a
+  model misunderstanding, dropped.)
+- **P0-F rate limiting + hardening** — per-IP `RateLimiter` on the public relay
+  (TDD; memory-bounded, fail-closed; boundary-spike tradeoff documented).
+- **P0-F ops runbook** — `docs/relay-operations.md`.
+- **P0-G legal/privacy (draft)** — `SECURITY.md`, `docs/privacy-policy.md`,
+  `docs/data-deletion.md`.
+- **P0-A scaffold** — updater config, macOS entitlements, `release.yml`
+  (sign+notarize+staple on tag), `docs/release-and-signing.md`.
+- **P0-B foundation** — `src/managedRelay.ts` (endpoint + pairing URL builder).
 
-### P0-E — CSP hardening
-- Real CSP in `src-tauri/tauri.conf.json` (was `null`): blocks remote
-  scripts/connections; allows self/tauri/asset, ipc, dev server, loopback relay,
-  data/blob images, inline styles. **Needs runtime validation** in the Tauri
-  webview before sign-off.
-- Note: in Tauri 2, custom `#[tauri::command]`s are NOT gated by the capability
-  permission system; `capabilities/default.json` (`core:default`) is correct.
-  The plan's "capability covers every IPC" assertion was based on a
-  misunderstanding of the Tauri 2 model — dropped.
-
-### P0-G (draft) — Legal & privacy
-- `SECURITY.md` (trust model + vuln reporting; `SECURITY_CONTACT` placeholder).
-- `docs/privacy-policy.md` (local-first data handling; telemetry = none default).
-- `docs/data-deletion.md` (GDPR/APPI right-to-erasure checklist).
-- **User decisions still needed**: license (OSS vs proprietary), telemetry
-  stance confirmation, maintainer contact address.
-
-### P0-A (scaffold) — Distribution
-- `tauri.conf.json`: `plugins.updater` (pubkey placeholder), `bundle.macOS`
-  (signingIdentity `-`, entitlements), `createUpdaterArtifacts`.
-- `src-tauri/entitlements.mac.plist` (hardened-runtime compatible).
-- `.github/workflows/release.yml` (tag `v*` → product:check gate → macOS
-  sign+notarize+staple → artifacts + GitHub Release). Safe from workflow
-  injection (no untrusted input in `run:`).
-- `docs/release-and-signing.md` (Apple Developer enrollment, updater keygen,
-  secrets, per-release steps).
-- **External blocker**: Apple Developer ID certificate + notarization secrets
-  (user). **Follow-up**: register `tauri-plugin-updater`/`-process` runtime +
-  Settings UI (independent of signing).
-
-## Corrections to the plan (important)
-
-1. **P0-D "543 panics block release" was overstated.** All `.expect()` on the
-   vault-open / schema / key / crypto paths are inside `#[cfg(test)] mod tests`
-   — test-only. Production paths already return `Result<_, String>`. A corrupt
-   vault or Keychain quirk surfaces as an error to the frontend, not a crash.
-   Remaining P0-D work is UX only (OCR/Office graceful `needs_runtime` fallback,
-   frontend error toasts) — not a release blocker.
+### Corrections to the plan (important)
+1. **P0-D "543 panics block release" was overstated.** `.expect()` on the
+   vault-open/schema/key/crypto paths are all inside `#[cfg(test)]` — test-only.
+   Production paths already return `Result<_, String>`; a corrupt vault or
+   Keychain quirk surfaces as an error, not a crash. Remaining P0-D was UX
+   (OCR fallback + error surfacing) — now done.
 2. **P0-F "relay has security holes" was largely a false positive.** The relay
-   already enforces, for non-loopback binds: https, admin token, handoff secret,
-   allowed origins, tenant isolation, no static bearer
-   (`validate_relay_surface`). CIMD metadata fetch already has full SSRF
-   protection (host allowlist, public-IP DNS verification, private/loopback IP
-   rejection, `redirects(0)`, 10s timeout, 128KB cap, JSON content-type check).
-   Remaining P0-F work is operational (rate-limiting/abuse defense, monitoring
-   runbook, splitting the 6k-line file) — production hardening, not holes.
+   already enforced (non-loopback) https + admin token + handoff secret + allowed
+   origins + tenant isolation + no static bearer, and CIMD fetch already had
+   full SSRF protection (host allowlist, public-IP DNS verify, private-IP
+   reject, `redirects(0)`, 10s timeout, 128KB cap, JSON check). Added the
+   missing ops layer (rate limiting + runbook).
 
-## Remaining
+### Remaining P0
+- **P0-B full one-click** — needs a relay-side pairing-issuance endpoint the app
+  can call (currently pairing is admin-initiated). `managedRelay.ts` foundation
+  is in place; the relay API + Connections UI wiring is the follow-up.
+- **P0-C scheduled backup** + **recovery full-flow** (open DB with the recovered
+  key via a new `open-with-key` path + re-establish Keychain). Backup-restore
+  already covers cross-machine recovery via the passphrase.
+- **P0-A cert + updater plugin runtime** — Apple Developer ID certificate +
+  notarization secrets (user); `tauri-plugin-updater`/`-process` registration +
+  Settings UI (independent of signing).
+- **P0-G decisions** — license (OSS vs proprietary), telemetry stance,
+  maintainer contact (user).
+- **P0-F module split** of `lcv-relay.rs` (6k lines) — maintainability, not
+  security.
 
-- **P0-B** one-click managed-relay connect (frontend: `src/managedRelay.ts` +
-  `ConnectionsView` rework; backend pieces largely exist).
-- **P0-C** onboarding wizard (force first backup), scheduled local backup,
-  recovery key (lower priority now that backup-restore covers recovery).
-- **P0-D** OCR/Office `needs_runtime` graceful fallback; frontend error surface.
-- **P0-F** rate-limiting/abuse defense; ops runbook; `lcv-relay.rs` module split.
-- **P0-A** updater plugin runtime wiring + cert/secret injection (external).
-- **P1** i18n (EN/JA) + App.tsx split; sqlite-vec semantic retrieval (feasibility
-  spike gates); gated LLM-assisted extraction; vault-backed Settings UI.
-- **P2** more connectors; prospective memory; cross-platform packaging; sharing.
+## P1 / P2 (not started)
+- P1-A i18n (EN/JA) + App.tsx split; P1-B sqlite-vec semantic retrieval
+  (feasibility spike gates — coexistence with vendored SQLCipher is unverified);
+  P1-C gated LLM-assisted extraction; P1-D vault-backed Settings UI; P1-E
+  automated backup hardening.
+- P2: more connectors, prospective memory, cross-platform packaging, sharing.
+
+## How to resume
+The branch compiles and all tests pass. Highest-value next increments:
+1. P0-B relay pairing API + Connections one-click UI.
+2. P1-A i18n + App.tsx module split.
+3. P0-C scheduled backup + recovery full-flow.
+4. P1-B sqlite-vec spike (de-risk before committing).
