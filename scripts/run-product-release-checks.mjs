@@ -69,47 +69,6 @@ run("Rust release binaries", "cargo", [
   "--bins"
 ]);
 
-run("HTTP relay smoke", "npm", ["run", "relay:smoke"]);
-run("hosted Relay config baseline", "npm", ["run", "hosted-relay:check", "--", "--example"]);
-run("hosted Relay env template", "npm", [
-  "run",
-  "hosted-relay:check",
-  "--",
-  "--env-file",
-  "deploy/relay/relay.env.example",
-  "--compose-env-file",
-  "deploy/relay/compose.env.example",
-  "--allow-placeholders",
-  "--name",
-  "deploy/relay templates"
-]);
-run("hosted Relay init syntax", "node", ["--check", "scripts/init-hosted-relay-config.mjs"]);
-run("hosted Relay init sample", "npm", [
-  "run",
-  "hosted-relay:init",
-  "--",
-  "--public-host",
-  "relay.lcv.test",
-  "--email",
-  "ops@lcv.test",
-  "--tenant-id",
-  "release-check",
-  "--dry-run"
-]);
-run("hosted Relay smoke syntax", "node", ["--check", "scripts/hosted-relay-smoke.mjs"]);
-run("Web AI connector packet syntax", "node", ["--check", "scripts/web-ai-connector-packet.mjs"]);
-run("Web AI connector packet sample", "node", [
-  "scripts/web-ai-connector-packet.mjs",
-  "--mcp-url",
-  "https://relay.example.com/mcp",
-  "--format",
-  "json"
-]);
-
-if (includeSseSoak) {
-  run("HTTP relay SSE soak", "npm", ["run", "relay:sse-soak"]);
-}
-
 if (includeTauriBuild) {
   run("Tauri sidecar integration build", "npm", ["run", "tauri:build"]);
 }

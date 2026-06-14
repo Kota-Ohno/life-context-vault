@@ -7,7 +7,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(repoRoot, "src-tauri", "Cargo.toml");
 const releaseDir = join(repoRoot, "src-tauri", "target", "release");
 const sidecarDir = join(repoRoot, "src-tauri", "binaries");
-const bins = ["lcv-mcp", "lcv-relay", "lcv-agent", "lcv-capture-host"];
+const bins = ["lcv-mcp"];
 
 function hostTriple() {
   const output = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
