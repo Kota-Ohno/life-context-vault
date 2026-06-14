@@ -170,7 +170,6 @@ type View =
   | "connections"
   | "requests"
   | "search"
-  | "audit"
   | "settings";
 
 type ConnectionDiagnosticTone = "ready" | "attention" | "blocked" | "neutral";
@@ -2054,7 +2053,6 @@ export function App() {
             badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
           />
           <NavButton icon={<Search size={18} />} label={t(lang, "nav.search")} ariaLabel={t(lang, "nav.search")} active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Activity size={18} />} label={t(lang, "nav.audit")} ariaLabel={t(lang, "nav.audit")} active={view === "audit"} onClick={() => setView("audit")} />
           <NavButton icon={<Settings size={18} />} label={t(lang, "nav.settings")} ariaLabel={t(lang, "nav.settings")} active={view === "settings"} onClick={() => setView("settings")} />
           <button
             className="lang-toggle"
@@ -2271,9 +2269,6 @@ export function App() {
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
           />
-        )}
-        {view === "audit" && (
-          <AuditView events={state.auditEvents} />
         )}
         {view === "settings" && (
           <SettingsView
