@@ -76,7 +76,9 @@ import {
   uninstallLoginItem,
   exportNativeEncryptedBackup,
   importNativeEncryptedBackup,
-  isTauriRuntime
+  isTauriRuntime,
+  getNativeRuntimePreferences,
+  saveNativeRuntimePreferences
 } from "./nativeStorage";
 import { detectLang, Lang, t } from "./i18n";
 import {
@@ -466,6 +468,7 @@ export function App() {
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
   const autoStartAttemptedRef = useRef(false);
+  const nativePrefsSyncedRef = useRef(false);
 
   useEffect(() => {
     nativeRevisionRef.current = nativeRevision;
@@ -473,7 +476,27 @@ export function App() {
 
   useEffect(() => {
     saveRuntimePreferences(runtimePreferences);
+    if (nativePrefsSyncedRef.current && isTauriRuntime()) {
+      void saveNativeRuntimePreferences(runtimePreferences);
+    }
   }, [runtimePreferences]);
+
+  // In the Tauri runtime, runtime preferences are the authoritative source in
+  // the vault (they survive reinstall and migrate with encrypted backups).
+  // localStorage stays as the browser-preview fallback. We only write to the
+  // vault AFTER this sync to avoid clobbering saved prefs with defaults on mount.
+  useEffect(() => {
+    if (!storageReady || !isTauriRuntime()) {
+      nativePrefsSyncedRef.current = true;
+      return;
+    }
+    void getNativeRuntimePreferences().then((native) => {
+      if (native && Object.keys(native).length > 0) {
+        setRuntimePreferences((current) => ({ ...current, ...native }));
+      }
+      nativePrefsSyncedRef.current = true;
+    });
+  }, [storageReady]);
 
   useEffect(() => {
     let cancelled = false;

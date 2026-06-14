@@ -13,6 +13,7 @@ import {
   VaultState
 } from "./types";
 import { normalizeVaultState } from "./vault";
+import { RuntimePreferences } from "./runtimePreferences";
 
 declare global {
   interface Window {
@@ -490,6 +491,24 @@ export async function runLocalBackupNow(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("run_local_backup_now");
+}
+
+/** Read runtime preferences (OCR/Office/autoStart) persisted in the vault. */
+export async function getNativeRuntimePreferences(): Promise<Partial<RuntimePreferences> | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Partial<RuntimePreferences>>("get_native_runtime_preferences");
+}
+
+/** Persist runtime preferences into the vault (so they survive reinstall and
+ * migrate with encrypted backups). */
+export async function saveNativeRuntimePreferences(
+  preferences: RuntimePreferences
+): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("save_native_runtime_preferences", { prefs: preferences });
+  return true;
 }
 
 /**

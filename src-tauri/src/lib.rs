@@ -1807,6 +1807,32 @@ pub fn import_encrypted_backup_at_path(
   Ok(payload)
 }
 
+pub fn get_runtime_preferences_at_path(path: &Path) -> Result<Value, String> {
+  let connection = open_vault_db_at_path(path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  Ok(vault.get("runtimePreferences").cloned().unwrap_or_else(|| json!({})))
+}
+
+pub fn save_runtime_preferences_at_path(path: &Path, prefs: &Value) -> Result<(), String> {
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  vault["runtimePreferences"] = prefs.clone();
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn get_native_runtime_preferences(app: AppHandle) -> Result<Value, String> {
+  let path = vault_db_path(&app)?;
+  get_runtime_preferences_at_path(&path)
+}
+
+#[tauri::command]
+fn save_native_runtime_preferences(app: AppHandle, prefs: Value) -> Result<(), String> {
+  let path = vault_db_path(&app)?;
+  save_runtime_preferences_at_path(&path, &prefs)
+}
+
 pub fn export_local_backup_at_path(path: &Path) -> Result<String, String> {
   let connection = open_vault_db_at_path(path)?;
   let vault = load_vault_json_from_connection(&connection)?;
@@ -8649,7 +8675,9 @@ pub fn run() {
       request_managed_pairing_url,
       run_local_backup_now,
       recover_vault_with_recovery_key,
-      write_recovery_envelope
+      write_recovery_envelope,
+      get_native_runtime_preferences,
+      save_native_runtime_preferences
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -8927,6 +8955,25 @@ mod tests {
       )
       .expect("knn query");
     assert!(distance.is_finite(), "vec0 knn distance should be finite, got {distance}");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn runtime_preferences_round_trip_through_vault() {
+    use_test_vault_key();
+    let path = temp_vault_path("prefs");
+    let prefs = json!({
+      "autoStartAiAccess": true,
+      "ocrCommand": "/opt/homebrew/bin/tesseract",
+      "ocrArgs": "{input}",
+      "ocrTimeoutSeconds": 45,
+      "legacyOfficeCommand": "",
+      "legacyOfficeArgs": "--headless --convert-to {target_ext} --outdir {output_dir} {input}",
+      "legacyOfficeTimeoutSeconds": 60
+    });
+    save_runtime_preferences_at_path(&path, &prefs).expect("save prefs");
+    let loaded = get_runtime_preferences_at_path(&path).expect("load prefs");
+    assert_eq!(loaded, prefs);
     remove_temp_vault(&path);
   }
 
