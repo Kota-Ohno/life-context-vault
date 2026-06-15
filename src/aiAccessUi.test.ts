@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  aiConnectionDiagnostic,
-  aiMcpEndpointDisplay,
   auditReceiptBody,
-  canCopyAiMcpEndpoint,
   clearVaultImpactSections,
-  connectionDiagnosticSummaryBadge,
   contextPackDeliveryState,
   contextPackBoundaryReceipt,
   documentIngestionReadiness,
@@ -18,16 +14,11 @@ import {
   homeCaptureSafetySummary,
   homeNextActionKind,
   HomeView,
-  hostedRelayRegistrationReadiness,
   InboxView,
-  aiAccessChecklistItems,
-  isHostedRelayConfirmed,
   makeRestorePreview,
   manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
-  webAiRegistrationGuides,
-  webAiMcpEndpoint
 } from "./App";
 import { createEmptyVault } from "./vault";
 import type {
@@ -38,264 +29,8 @@ import type {
   PassiveCaptureSettings,
   RawSource
 } from "./types";
-import type { AiAccessServiceStatus } from "./nativeStorage";
 
 describe("AI access UI safety", () => {
-  it("blocks public MCP endpoint copying while hosted relay pairing is unconfirmed", () => {
-    const pendingHosted = { relayMode: "hosted_agent", agentConnected: false } as const;
-
-    expect(isHostedRelayConfirmed(pendingHosted)).toBe(false);
-    expect(canCopyAiMcpEndpoint(pendingHosted)).toBe(false);
-    expect(aiMcpEndpointDisplay(pendingHosted, "https://relay.example.com/mcp")).toBe("pairing確認後に表示");
-    expect(webAiMcpEndpoint(pendingHosted, "https://relay.example.com/mcp")).toBeNull();
-  });
-
-  it("allows MCP endpoint copying for confirmed hosted and local modes", () => {
-    const confirmedHosted = { relayMode: "hosted_agent", agentConnected: true } as const;
-    const localRelay = { relayMode: "local_managed", agentConnected: false } as const;
-
-    expect(isHostedRelayConfirmed(confirmedHosted)).toBe(true);
-    expect(canCopyAiMcpEndpoint(confirmedHosted)).toBe(true);
-    expect(aiMcpEndpointDisplay(confirmedHosted, "https://relay.example.com/mcp")).toBe("https://relay.example.com/mcp");
-    expect(webAiMcpEndpoint(confirmedHosted, "https://relay.example.com/mcp")).toBe("https://relay.example.com/mcp");
-    expect(canCopyAiMcpEndpoint(localRelay)).toBe(true);
-    expect(aiMcpEndpointDisplay(localRelay, "http://127.0.0.1:8765/mcp")).toBe("http://127.0.0.1:8765/mcp");
-    expect(webAiMcpEndpoint(localRelay, "http://127.0.0.1:8765/mcp")).toBeNull();
-    expect(webAiMcpEndpoint(localRelay, "https://relay.example.com/mcp")).toBe("https://relay.example.com/mcp");
-  });
-
-  it("summarizes connection diagnostics without leaking hosted pairing secrets", () => {
-    const hostedStatus = {
-      managedByApp: true,
-      relayMode: "hosted_agent",
-      relayReachable: true,
-      relayManagedRunning: false,
-      agentManagedRunning: true,
-      agentConnected: false,
-      relayUrl: "https://relay.example.com",
-      mcpServerUrl: "https://relay.example.com/mcp",
-      relayStateStatusUrl: "https://relay.example.com/relay/state",
-      agentRuntimeStatus: {
-        state: "connecting",
-        relayBaseUrl: "https://relay.example.com",
-        updatedAt: 1781280000,
-        lastConnectedAt: null,
-        lastError: "failed wss://relay.example.com/agent/ws?pairing_code=secret-code Authorization: Bearer secret-token",
-        statusToken: null,
-        processId: null
-      },
-      pairingCode: null,
-      lastError: null
-    } satisfies AiAccessServiceStatus;
-
-    const diagnostic = aiConnectionDiagnostic(
-      hostedStatus,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
-      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
-      null
-    );
-
-    expect(diagnostic.tone).toBe("attention");
-    expect(diagnostic.primaryAction).toBe("start_hosted_agent");
-    expect(diagnostic.issue).toContain("pairing_code=...");
-    expect(diagnostic.issue).toContain("Bearer ...");
-    expect(diagnostic.issue).not.toContain("secret-code");
-    expect(diagnostic.issue).not.toContain("secret-token");
-    expect(diagnostic.items.find((item) => item.label === "Web AI")?.state).toBe("pending");
-
-    const summary = connectionDiagnosticSummaryBadge(diagnostic);
-    expect(summary).toEqual({ label: "要確認", detail: "1/4 ready" });
-    expect(JSON.stringify(summary)).not.toContain("secret-code");
-    expect(JSON.stringify(summary)).not.toContain("secret-token");
-  });
-
-  it("marks confirmed hosted relay diagnostics ready for Web AI connector setup", () => {
-    const hostedStatus = {
-      managedByApp: true,
-      relayMode: "hosted_agent",
-      relayReachable: true,
-      relayManagedRunning: false,
-      agentManagedRunning: true,
-      agentConnected: true,
-      relayUrl: "https://relay.example.com",
-      mcpServerUrl: "https://relay.example.com/mcp",
-      relayStateStatusUrl: "https://relay.example.com/relay/state",
-      agentRuntimeStatus: null,
-      pairingCode: null,
-      lastError: null
-    } satisfies AiAccessServiceStatus;
-
-    const diagnostic = aiConnectionDiagnostic(
-      hostedStatus,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
-      "",
-      "https://relay.example.com/mcp"
-    );
-
-    expect(diagnostic.tone).toBe("ready");
-    expect(diagnostic.primaryAction).toBe("copy_web_connector");
-    expect(diagnostic.items.find((item) => item.label === "Web AI")?.value).toBe("Remote MCP登録可");
-    expect(connectionDiagnosticSummaryBadge(diagnostic)).toEqual({ label: "Ready", detail: "4/4 ready" });
-  });
-
-  it("keeps the connection diagnostic summary useful when desktop is unavailable", () => {
-    const diagnostic = aiConnectionDiagnostic(null, null, "", null);
-
-    expect(diagnostic.tone).toBe("blocked");
-    expect(connectionDiagnosticSummaryBadge(diagnostic)).toEqual({ label: "利用不可", detail: "0/4 ready" });
-  });
-
-  it("marks hosted relay registration ready only after confirmed public HTTPS pairing", () => {
-    const hostedStatus = {
-      managedByApp: true,
-      relayMode: "hosted_agent",
-      relayReachable: true,
-      relayManagedRunning: false,
-      agentManagedRunning: true,
-      agentConnected: true,
-      relayUrl: "https://relay.example.com",
-      mcpServerUrl: "https://relay.example.com/mcp",
-      relayStateStatusUrl: "https://relay.example.com/relay/state",
-      agentRuntimeStatus: null,
-      pairingCode: null,
-      lastError: null
-    } satisfies AiAccessServiceStatus;
-
-    const readiness = hostedRelayRegistrationReadiness(
-      hostedStatus,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
-      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
-      "https://relay.example.com/mcp"
-    );
-
-    expect(readiness.tone).toBe("ready");
-    expect(readiness.title).toBe("Web AIへ登録できます");
-    expect(readiness.items.find((item) => item.label === "Public MCP URL")?.state).toBe("ready");
-    expect(readiness.items.find((item) => item.label === "OAuth metadata")?.state).toBe("ready");
-    expect(JSON.stringify(readiness)).not.toContain("secret-code");
-  });
-
-  it("turns hosted relay readiness into provider-specific Web AI registration steps", () => {
-    const readiness = {
-      tone: "ready" as const,
-      title: "Web AIへ登録できます",
-      summary: "公開HTTPS Relayとのpairing確認済みです。",
-      nextStep: "Web AI用接続情報をコピーします。",
-      items: []
-    };
-
-    const guides = webAiRegistrationGuides(readiness, {
-      name: "Life Context Vault",
-      url: "https://relay.example.com/mcp"
-    });
-
-    expect(guides).toHaveLength(3);
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("ready");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.steps).toContain("ChatGPTに接続情報を貼り付け");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.boundary).toContain("登録方式を切り替え");
-    expect(guides.find((guide) => guide.provider === "Claude Web")?.actionLabel).toBe("Claude用JSONをコピー");
-    expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
-    expect(JSON.stringify(guides)).toContain("確認済みContext Pack");
-  });
-
-  it("keeps Web AI registration steps pending until connector info is available", () => {
-    const readiness = {
-      tone: "attention" as const,
-      title: "pairing確認待ちです",
-      summary: "公開MCP URLは推定できます。",
-      nextStep: "Hosted RelayへAgent接続を実行します。",
-      items: []
-    };
-
-    const guides = webAiRegistrationGuides(readiness, null);
-
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.status).toBe("pending");
-    expect(guides.find((guide) => guide.provider === "ChatGPT")?.actionLabel).toBe("pairing後にコピー");
-    expect(guides.find((guide) => guide.provider === "MCPなしのAI")?.status).toBe("ready");
-  });
-
-  it("keeps hosted relay registration pending until pairing is confirmed", () => {
-    const pendingStatus = {
-      managedByApp: true,
-      relayMode: "hosted_agent",
-      relayReachable: true,
-      relayManagedRunning: false,
-      agentManagedRunning: true,
-      agentConnected: false,
-      relayUrl: "https://relay.example.com",
-      mcpServerUrl: "https://relay.example.com/mcp",
-      relayStateStatusUrl: "https://relay.example.com/relay/state",
-      agentRuntimeStatus: null,
-      pairingCode: null,
-      lastError: null
-    } satisfies AiAccessServiceStatus;
-
-    const readiness = hostedRelayRegistrationReadiness(
-      pendingStatus,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
-      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
-      null
-    );
-
-    expect(readiness.tone).toBe("attention");
-    expect(readiness.title).toBe("pairing確認待ちです");
-    expect(readiness.items.find((item) => item.label === "短命Agent URL")?.state).toBe("ready");
-    expect(readiness.items.find((item) => item.label === "Public MCP URL")?.state).toBe("pending");
-    expect(JSON.stringify(readiness)).not.toContain("secret-code");
-  });
-
-  it("blocks hosted relay registration for invalid agent URLs or browser-only use", () => {
-    const invalidUrl = hostedRelayRegistrationReadiness(
-      null,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
-      "https://relay.example.com/agent/ws?pairing_code=secret-code",
-      null
-    );
-
-    expect(invalidUrl.tone).toBe("blocked");
-    expect(invalidUrl.title).toBe("Agent URLの形式を確認してください");
-    expect(invalidUrl.items.find((item) => item.label === "短命Agent URL")?.state).toBe("blocked");
-    expect(JSON.stringify(invalidUrl)).not.toContain("secret-code");
-
-    const browserOnly = hostedRelayRegistrationReadiness(
-      null,
-      null,
-      "wss://relay.example.com/agent/ws?pairing_code=secret-code",
-      "https://relay.example.com/mcp"
-    );
-
-    expect(browserOnly.tone).toBe("blocked");
-    expect(browserOnly.title).toBe("Desktop appでVaultを開いてください");
-    expect(browserOnly.items.find((item) => item.label === "Desktop Vault")?.state).toBe("blocked");
-    expect(JSON.stringify(browserOnly)).not.toContain("secret-code");
-  });
-
-  it("separates SSE ready diagnostics from metadata-only event replay in the AI access checklist", () => {
-    const status = {
-      managedByApp: true,
-      relayMode: "local_managed",
-      relayReachable: true,
-      relayManagedRunning: true,
-      agentManagedRunning: true,
-      agentConnected: true,
-      relayUrl: "http://127.0.0.1:8765",
-      mcpServerUrl: "http://127.0.0.1:8765/mcp",
-      relayStateStatusUrl: "http://127.0.0.1:8765/relay/state",
-      agentRuntimeStatus: null,
-      pairingCode: null,
-      lastError: null
-    } satisfies AiAccessServiceStatus;
-
-    const streamableHttp = aiAccessChecklistItems(
-      status,
-      "/Users/kota/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3"
-    ).find((item) => item.label === "Streamable HTTP");
-
-    expect(streamableHttp?.state).toBe("ready");
-    expect(streamableHttp?.detail).toContain("GET SSE ready");
-    expect(streamableHttp?.detail).toContain("SSE再開はメタデータ限定");
-    expect(streamableHttp?.detail).toContain("Context Pack本文は保存しません");
-  });
 
   it("shows source titles for source-backed facts", () => {
     expect(
@@ -955,146 +690,6 @@ describe("AI access UI safety", () => {
     expect(summary.purgeableCount).toBe(0);
   });
 
-  it("renders passive capture controls on Home so users can pause or purge without hunting", () => {
-    const noop = () => undefined;
-    const settings: PassiveCaptureSettings = {
-      enabled: true,
-      retentionDays: 14,
-      allowedSites: ["chatgpt.com"]
-    };
-    const event: PassiveCaptureEvent = {
-      id: "capture_1",
-      sourceClient: "chatgpt",
-      conversationId: "thread_1",
-      urlHash: "urlhash_1",
-      textFragmentRef: "source_capture_1:0-24",
-      capturedAt: "2026-06-13T00:00:00.000Z",
-      retentionUntil: "2026-06-27T00:00:00.000Z",
-      sensitivityGuess: "personal",
-      processingStatus: "candidate_generated",
-      sourceId: "source_capture_1",
-      candidateIds: ["candidate_1"]
-    };
-    const source: RawSource = {
-      id: "source_capture_1",
-      kind: "passive_capture",
-      title: "Passive capture from ChatGPT",
-      origin: "passive_browser",
-      body: "来月引っ越す予定。住所変更が必要な契約を確認したい。",
-      createdAt: "2026-06-13T00:00:00.000Z",
-      capturedAt: "2026-06-13T00:00:00.000Z",
-      retentionUntil: "2026-06-27T00:00:00.000Z",
-      defaultSensitivity: "personal",
-      processingStatus: "ready",
-      deletionState: "active"
-    };
-
-    const html = renderToStaticMarkup(
-      createElement(HomeView, {
-        facts: [],
-        candidates: [],
-        connectors: [
-          {
-            id: "connector_capture",
-            clientKind: "chatgpt",
-            clientName: "ChatGPT Capture",
-            transport: "browser_extension",
-            scopes: ["passive_capture.write"],
-            status: "available",
-            createdAt: "2026-06-13T00:00:00.000Z",
-            lastUsedAt: "2026-06-13T00:00:00.000Z"
-          }
-        ],
-        captureSettings: settings,
-        captureEvents: [event],
-        sources: [source],
-        requests: [],
-        contextPacks: [],
-        nativePath: null,
-        aiServiceStatus: null,
-        aiServiceBusy: false,
-        setup: {
-          displayName: "",
-          tonePreference: "",
-          activeLifeAreas: "",
-          recurringConstraints: "",
-          confirmationTopics: ""
-        },
-        setSetup: noop,
-        submitBackground: noop,
-        startAiAccess: noop,
-        updateCapture: noop,
-        purgeAllPassiveCaptures: noop,
-        confirmAllCapturePurge: false,
-        cancelAllCapturePurge: noop,
-        seedDemo: noop,
-        goInbox: noop,
-        goSources: noop,
-        goRequests: noop,
-        goConnections: noop
-      })
-    );
-
-    expect(html).toContain("Capture safety");
-    expect(html).toContain("許可サイトだけをローカルで候補化中");
-    expect(html).toContain("Captureを一時停止");
-    expect(html).toContain("Capture詳細");
-    expect(html).toContain("全本文を消去");
-    expect(html).toContain("chatgpt.com");
-    expect(html).toContain("来月引っ越す予定");
-    expect(html).toContain("未承認候補");
-
-    const confirmHtml = renderToStaticMarkup(
-      createElement(HomeView, {
-        facts: [],
-        candidates: [],
-        connectors: [
-          {
-            id: "connector_capture",
-            clientKind: "chatgpt",
-            clientName: "ChatGPT Capture",
-            transport: "browser_extension",
-            scopes: ["passive_capture.write"],
-            status: "available",
-            createdAt: "2026-06-13T00:00:00.000Z",
-            lastUsedAt: "2026-06-13T00:00:00.000Z"
-          }
-        ],
-        captureSettings: settings,
-        captureEvents: [event],
-        sources: [source],
-        requests: [],
-        contextPacks: [],
-        nativePath: null,
-        aiServiceStatus: null,
-        aiServiceBusy: false,
-        setup: {
-          displayName: "",
-          tonePreference: "",
-          activeLifeAreas: "",
-          recurringConstraints: "",
-          confirmationTopics: ""
-        },
-        setSetup: noop,
-        submitBackground: noop,
-        startAiAccess: noop,
-        updateCapture: noop,
-        purgeAllPassiveCaptures: noop,
-        confirmAllCapturePurge: true,
-        cancelAllCapturePurge: noop,
-        seedDemo: noop,
-        goInbox: noop,
-        goSources: noop,
-        goRequests: noop,
-        goConnections: noop
-      })
-    );
-
-    expect(confirmHtml).toContain("1件のCapture本文を消去します");
-    expect(confirmHtml).toContain("Raw transcript本文だけを消去します");
-    expect(confirmHtml).toContain("確認して全本文を消去");
-  });
-
   it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {
     expect(
       homeNextActionKind({
@@ -1212,18 +807,10 @@ describe("AI access UI safety", () => {
         facts: [],
         candidates: [],
         connectors: [],
-        captureSettings: {
-          enabled: false,
-          retentionDays: 14,
-          allowedSites: []
-        },
-        captureEvents: [],
         sources: [],
         requests: [],
         contextPacks: [],
         nativePath: null,
-        aiServiceStatus: null,
-        aiServiceBusy: false,
         setup: {
           displayName: "",
           tonePreference: "",
@@ -1233,11 +820,6 @@ describe("AI access UI safety", () => {
         },
         setSetup: noop,
         submitBackground: noop,
-        startAiAccess: noop,
-        updateCapture: noop,
-        purgeAllPassiveCaptures: noop,
-        confirmAllCapturePurge: false,
-        cancelAllCapturePurge: noop,
         seedDemo: noop,
         goInbox: noop,
         goSources: noop,
@@ -1249,9 +831,6 @@ describe("AI access UI safety", () => {
     expect(html).toContain("生活背景を入れる");
     expect(html).toContain("入力欄へ");
     expect(html).toContain("生活背景を追加");
-    expect(html).toContain("AI Boundary Today");
-    expect(html).toContain("保存されたこととAIへ渡ること");
-    expect(html).toContain("Sourceや候補だけではAIに渡る文脈になりません");
   });
 
   it("describes AI delivery receipts by life domain without storing body text", () => {

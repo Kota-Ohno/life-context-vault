@@ -31,14 +31,11 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  AiAccessServiceStatus,
-  BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
   NativeDocumentExtractionCapabilities,
   NativeLegacyOfficeProviderCandidate,
   NativeOcrProviderCandidate,
-  addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   addNativeSourcePendingRuntime,
   approveNativeCandidate,
@@ -48,28 +45,20 @@ import {
   detectNativeLegacyOfficeProviderCandidates,
   detectNativeOcrProviderCandidates,
   extractNativeDocumentText,
-  getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
   getNativeDocumentExtractionCapabilities,
   getNativeVaultPath,
-  handoffConfirmedContextPackToRelay,
-  installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
   installLoginItem,
   loadNativeVaultSnapshot,
   saveNativeVault,
   searchNativeFacts,
-  startAiAccessAgentForRelay,
-  requestManagedPairingUrl,
-  startAiAccessServices,
-  stopAiAccessServices,
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
   updateNativeContextPackItemVisibility,
   updateNativeFactLifecycle,
   updateNativeFactMetadata,
-  updateNativePassiveCaptureSettings,
   updateNativeSourceMetadata,
   updateNativeSourceBody,
   updateNativeSourceLifecycle,
@@ -81,6 +70,11 @@ import {
   saveNativeRuntimePreferences
 } from "./nativeStorage";
 import { detectLang, Lang, t } from "./i18n";
+import { Metric } from "./components/Metric";
+import { Badge } from "./components/Badge";
+import { SensitivityBadge } from "./components/SensitivityBadge";
+import { EmptyState } from "./components/EmptyState";
+import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -170,7 +164,6 @@ type View =
   | "connections"
   | "requests"
   | "search"
-  | "audit"
   | "settings";
 
 type ConnectionDiagnosticTone = "ready" | "attention" | "blocked" | "neutral";
@@ -434,7 +427,7 @@ export function App() {
   const [captureExtensionId, setCaptureExtensionId] = useState("");
   const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
   const [captureHostInstallResult, setCaptureHostInstallResult] =
-    useState<BrowserCaptureHostInstallResult | null>(null);
+    useState<any | null>(null);
   const [confirmAllCapturePurge, setConfirmAllCapturePurge] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
@@ -448,9 +441,6 @@ export function App() {
   const [restoreConfirmText, setRestoreConfirmText] = useState("");
   const [clearConfirmText, setClearConfirmText] = useState("");
   const [notice, setNotice] = useState("");
-  const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
-  const [aiServiceBusy, setAiServiceBusy] = useState(false);
-  const [hostedAgentWebsocketUrl, setHostedAgentWebsocketUrl] = useState("");
   const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
     useState<NativeDocumentExtractionCapabilities | null>(null);
   const [ocrProviderCandidates, setOcrProviderCandidates] = useState<NativeOcrProviderCandidate[]>([]);
@@ -564,48 +554,6 @@ export function App() {
     };
   }, [storageReady]);
 
-  useEffect(() => {
-    if (
-      !storageReady ||
-      !nativePath ||
-      !runtimePreferences.autoStartAiAccess ||
-      autoStartAttemptedRef.current
-    ) {
-      return;
-    }
-    autoStartAttemptedRef.current = true;
-    let cancelled = false;
-    async function autoStartAiAccess() {
-      try {
-        const current = await getAiAccessServiceStatus();
-        if (cancelled) return;
-        if (current?.agentConnected) {
-          setAiServiceStatus(current);
-          return;
-        }
-        setAiServiceBusy(true);
-        const status = await startAiAccessServices();
-        if (cancelled) return;
-        setAiServiceStatus(status);
-        setNotice(
-          status?.agentConnected
-            ? "設定に従ってAI連携を自動起動しました。"
-            : "AI連携の自動起動を開始しました。"
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setNotice(error instanceof Error ? error.message : "AI連携の自動起動に失敗しました。");
-          void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-        }
-      } finally {
-        if (!cancelled) setAiServiceBusy(false);
-      }
-    }
-    void autoStartAiAccess();
-    return () => {
-      cancelled = true;
-    };
-  }, [nativePath, runtimePreferences.autoStartAiAccess, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -697,34 +645,6 @@ export function App() {
       window.clearInterval(interval);
     };
   }, [nativePath, storageReady]);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    let cancelled = false;
-    async function refreshStatus() {
-      try {
-        const status = await getAiAccessServiceStatus();
-        if (!cancelled) setAiServiceStatus(status);
-      } catch (error) {
-        if (!cancelled) {
-          setAiServiceStatus((current) =>
-            current
-              ? {
-                  ...current,
-                  lastError: error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。"
-                }
-              : current
-          );
-        }
-      }
-    }
-    void refreshStatus();
-    const interval = window.setInterval(refreshStatus, 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [storageReady]);
 
   useEffect(() => {
     if (!storageReady || !nativePath) {
@@ -1425,47 +1345,6 @@ export function App() {
     apply(updateContextPackItemVisibility(state, pack.id, factId, included), verb);
   }
 
-  async function tryRelayHandoff(nextState: VaultState, requestId: string | null | undefined) {
-    if (!nativePath || !requestId) {
-      return { status: "skipped" as const };
-    }
-    const request = nextState.contextPackRequests.find((item) => item.id === requestId);
-    if (!request) {
-      return { status: "skipped" as const };
-    }
-    try {
-      const handoff = await handoffConfirmedContextPackToRelay({
-        clientId: request.clientId,
-        requestId: request.id
-      });
-      if (handoff?.stored) {
-        if (handoff.state) {
-          nativeRevisionRef.current = handoff.updatedAt;
-          setNativeRevision(handoff.updatedAt);
-          setState(handoff.state);
-        }
-        return { status: "stored" as const, ttlSeconds: handoff.ttlSeconds };
-      }
-      return { status: "skipped" as const };
-    } catch (error) {
-      return {
-        status: "failed" as const,
-        message: error instanceof Error ? error.message : "Relay handoffに失敗しました。"
-      };
-    }
-  }
-
-  function relayHandoffNotice(outcome: Awaited<ReturnType<typeof tryRelayHandoff>>): string {
-    if (outcome.status === "stored") {
-      const minutes = outcome.ttlSeconds ? Math.max(1, Math.round(outcome.ttlSeconds / 60)) : 10;
-      return `Context Packを承認し、Relayへ${minutes}分の短命handoffを登録しました。外部AIはget_request_statusで取得できます。`;
-    }
-    if (outcome.status === "failed") {
-      return `Context Packを承認しました。Relay handoffは未完了です: ${outcome.message}`;
-    }
-    return "Context Packを承認しました。外部AIはget_request_statusで取得できます。";
-  }
-
   async function approvePackForAi(pack: ContextPack) {
     const request = pack.requestId
       ? state.contextPackRequests.find((item) => item.id === pack.requestId)
@@ -1475,12 +1354,7 @@ export function App() {
         setNotice("このContext Packは現在のAI接続ポリシーでは送信できません。新しいContext Packを作成してください。");
         return;
       }
-      const handoff = await tryRelayHandoff(state, request.id);
-      setNotice(
-        handoff.status !== "skipped"
-          ? relayHandoffNotice(handoff)
-          : "このContext PackはすでにAIへ返せる状態です。"
-      );
+      setNotice("このContext PackはすでにAIへ返せる状態です。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
       return;
     }
     if (nativePath) {
@@ -1492,8 +1366,7 @@ export function App() {
           setState(updated.state);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
-          const handoff = await tryRelayHandoff(updated.state, updated.requestId ?? request?.id);
-          setNotice(relayHandoffNotice(handoff));
+          setNotice("Context Packを承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
           return;
         }
       } catch (error) {
@@ -1510,7 +1383,7 @@ export function App() {
       );
       return;
     }
-    apply(confirmedState, "Context Packを承認しました。外部AIはget_request_statusで取得できます。");
+    apply(confirmedState, "Context Packを承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
   }
 
   async function copyPackForAi(pack: ContextPack) {
@@ -1621,29 +1494,6 @@ export function App() {
     apply(denyContextPackRequest(state, activeRequestId), "このContext Requestを拒否しました。");
   }
 
-  function updateCapture(settings: Partial<PassiveCaptureSettings>) {
-    void updateCaptureThroughCore(settings);
-  }
-
-  async function updateCaptureThroughCore(settings: Partial<PassiveCaptureSettings>) {
-    if (nativePath) {
-      try {
-        const updated = await updateNativePassiveCaptureSettings(settings);
-        if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
-          setNotice("Capture設定をVault Coreで保存しました。");
-          return;
-        }
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでCapture設定を保存できませんでした。");
-        return;
-      }
-    }
-    apply(updatePassiveCaptureSettings(state, settings), "Capture設定を更新しました。");
-  }
-
   function updatePolicy(
     clientId: string,
     settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
@@ -1674,75 +1524,6 @@ export function App() {
       }
     }
     apply(updateAccessPolicy(state, clientId, settings), "AI接続ポリシーを更新しました。");
-  }
-
-  function simulatePassiveCapture() {
-    void simulatePassiveCaptureThroughCore();
-  }
-
-  async function simulatePassiveCaptureThroughCore() {
-    if (!captureText.trim()) {
-      setNotice("Captureする会話断片を入力してください。");
-      return;
-    }
-    const conversationId = captureConversationId || "demo-thread";
-    const url = captureUrlForClient(captureClient, conversationId);
-    if (nativePath) {
-      try {
-        const saved = await saveNativeVault(state, nativeRevisionRef.current);
-        if (saved?.conflict && saved.currentState) {
-          const mergedState = mergeVaultStates(saved.currentState, state);
-          nativeRevisionRef.current = saved.currentUpdatedAt;
-          setNativeRevision(saved.currentUpdatedAt);
-          setState(mergedState);
-          setNotice("外部AI接続からの更新を取り込みました。Captureをもう一度実行してください。");
-          return;
-        }
-        if (saved?.updatedAt) {
-          nativeRevisionRef.current = saved.updatedAt;
-          setNativeRevision(saved.updatedAt);
-        }
-        const captured = await addNativePassiveCaptureEvent({
-          sourceClient: captureClient,
-          conversationId,
-          url,
-          text: captureText,
-          pageTitle: "Manual capture",
-          selected: true
-        });
-        if (!captured) {
-          setNotice("Desktop app外ではローカルCaptureとして処理します。");
-        } else {
-          nativeRevisionRef.current = captured.updatedAt;
-          setNativeRevision(captured.updatedAt);
-          setState(captured.state);
-          setNotice(
-            captured.accepted
-              ? `CaptureからMemory候補を${captured.candidateIds.length}件生成しました。承認されるまでAIには使われません。`
-              : captured.message
-          );
-          if (captured.accepted) {
-            setCaptureText("");
-            setView("inbox");
-          }
-          return;
-        }
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでCaptureを保存できませんでした。");
-        return;
-      }
-    }
-    const next = addPassiveCaptureEvent(state, {
-      sourceClient: captureClient,
-      conversationId,
-      url,
-      text: captureText
-    });
-    apply(next, state.passiveCaptureSettings.enabled ? "CaptureからMemory候補を生成しました。" : "Captureは停止中です。");
-    if (state.passiveCaptureSettings.enabled) {
-      setCaptureText("");
-      setView("inbox");
-    }
   }
 
   async function copyText(value: string, message: string): Promise<boolean> {
@@ -1832,95 +1613,6 @@ export function App() {
     }
   }
 
-  async function refreshAiAccess() {
-    try {
-      const status = await getAiAccessServiceStatus();
-      setAiServiceStatus(status);
-      setNotice(status ? "AI連携の状態を更新しました。" : "Desktop appでのみAI連携を管理できます。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。");
-    }
-  }
-
-  async function startAiAccess() {
-    setAiServiceBusy(true);
-    try {
-      const status = await startAiAccessServices();
-      setAiServiceStatus(status);
-      setNotice(status?.agentConnected ? "AI連携を起動しました。" : "AI連携の起動を開始しました。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の起動に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function startHostedRelayAgent() {
-    const trimmedUrl = hostedAgentWebsocketUrl.trim();
-    if (!trimmedUrl || !hostedRelayMcpUrlFromAgentWs(trimmedUrl)) {
-      setNotice("Hosted Relayで発行したwss://のAgent WebSocket URLを入力してください。");
-      return;
-    }
-    setAiServiceBusy(true);
-    try {
-      const status = await startAiAccessAgentForRelay(trimmedUrl);
-      setAiServiceStatus(status);
-      setHostedAgentWebsocketUrl("");
-      setNotice(
-        status?.agentConnected
-          ? "Hosted Relayとのpairingを確認しました。Web AIへMCP URLを登録できます。"
-          : status?.agentManagedRunning
-          ? "Hosted Relayへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
-          : "Hosted Relay Agentの接続を開始しました。"
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Hosted Relay Agentの接続に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function connectManagedRelay() {
-    setAiServiceBusy(true);
-    try {
-      const url = await requestManagedPairingUrl();
-      if (!url) {
-        setNotice("Desktop appでのみ管理リレーに接続できます。");
-        return;
-      }
-      const status = await startAiAccessAgentForRelay(url);
-      setAiServiceStatus(status);
-      setNotice(
-        status?.agentConnected
-          ? "管理リレーとのpairingを確認しました。Web AIへMCP URLを登録できます。"
-          : status?.agentManagedRunning
-          ? "管理リレーへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
-          : "管理リレーAgentの接続を開始しました。"
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "管理リレーへの接続に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function stopAiAccess() {
-    setAiServiceBusy(true);
-    try {
-      const status = await stopAiAccessServices();
-      setAiServiceStatus(status);
-      setNotice("AI連携を停止しました。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の停止に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
   function updateRuntimePreference(next: Partial<RuntimePreferences>) {
     setRuntimePreferences((current) => {
       const updated = {
@@ -1994,26 +1686,6 @@ export function App() {
     }
   }
 
-  async function installCaptureHostManifest() {
-    setCaptureHostInstallBusy(true);
-    setCaptureHostInstallResult(null);
-    try {
-      const result = await installChromeCaptureHostManifest(captureExtensionId);
-      setCaptureHostInstallResult(result);
-      if (!result) {
-        setNotice("Desktop appでのみChrome Native Messaging hostをインストールできます。");
-      } else if (result.alreadyConfigured) {
-        setNotice("Chrome Native Messaging hostはすでに最新です。");
-      } else {
-        setNotice("Chrome Native Messaging hostをインストールしました。拡張popupからCaptureできます。");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Chrome Native Messaging hostのインストールに失敗しました。");
-    } finally {
-      setCaptureHostInstallBusy(false);
-    }
-  }
-
   function clearVault() {
     if (clearConfirmText !== "CLEAR") {
       setNotice("Vaultをクリアするには確認欄へCLEARと入力してください。");
@@ -2054,7 +1726,6 @@ export function App() {
             badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
           />
           <NavButton icon={<Search size={18} />} label={t(lang, "nav.search")} ariaLabel={t(lang, "nav.search")} active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Activity size={18} />} label={t(lang, "nav.audit")} ariaLabel={t(lang, "nav.audit")} active={view === "audit"} onClick={() => setView("audit")} />
           <NavButton icon={<Settings size={18} />} label={t(lang, "nav.settings")} ariaLabel={t(lang, "nav.settings")} active={view === "settings"} onClick={() => setView("settings")} />
           <button
             className="lang-toggle"
@@ -2102,22 +1773,13 @@ export function App() {
             facts={activeFacts}
             candidates={activeCandidates}
             connectors={state.connectorSessions}
-            captureSettings={state.passiveCaptureSettings}
-            captureEvents={state.passiveCaptureEvents}
             sources={state.sources}
             requests={state.contextPackRequests}
             contextPacks={state.contextPacks}
             nativePath={nativePath}
-            aiServiceStatus={aiServiceStatus}
-            aiServiceBusy={aiServiceBusy}
             setup={setup}
             setSetup={setSetup}
             submitBackground={submitBackground}
-            startAiAccess={startAiAccess}
-            updateCapture={updateCapture}
-            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
-            confirmAllCapturePurge={confirmAllCapturePurge}
-            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
             seedDemo={seedDemo}
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
@@ -2175,52 +1837,16 @@ export function App() {
           />
         )}
         {view === "connections" && (
-          <ConnectionsView
-            connectors={state.connectorSessions}
-            policies={state.accessPolicies}
-            sources={state.sources}
-            passiveCaptureEvents={state.passiveCaptureEvents}
-            captureSettings={state.passiveCaptureSettings}
-            updateCapture={updateCapture}
-            updatePolicy={updatePolicy}
-            purgePassiveCaptureEvent={purgePassiveCaptureEvent}
-            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
-            confirmAllCapturePurge={confirmAllCapturePurge}
-            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
+          <ConnectView
             nativePath={nativePath}
-            aiServiceStatus={aiServiceStatus}
-            aiServiceBusy={aiServiceBusy}
-            runtimePreferences={runtimePreferences}
-            updateRuntimePreference={updateRuntimePreference}
-            loginItemStatus={loginItemStatus}
-            loginItemBusy={loginItemBusy}
             claudeInstallBusy={claudeInstallBusy}
             claudeInstallResult={claudeInstallResult}
             claudeConfig={claudeConfig}
-            startAiAccess={startAiAccess}
-            startHostedRelayAgent={startHostedRelayAgent}
-            connectManagedRelay={connectManagedRelay}
-            stopAiAccess={stopAiAccess}
-            refreshAiAccess={refreshAiAccess}
-            hostedAgentWebsocketUrl={hostedAgentWebsocketUrl}
-            setHostedAgentWebsocketUrl={setHostedAgentWebsocketUrl}
-            refreshLoginItem={refreshLoginItem}
+            installClaudeConfig={installClaudeConfig}
+            loginItemStatus={loginItemStatus}
+            loginItemBusy={loginItemBusy}
             enableLoginItem={enableLoginItem}
             disableLoginItem={disableLoginItem}
-            installClaudeConfig={installClaudeConfig}
-            copyText={copyText}
-            captureClient={captureClient}
-            setCaptureClient={setCaptureClient}
-            captureConversationId={captureConversationId}
-            setCaptureConversationId={setCaptureConversationId}
-            captureText={captureText}
-            setCaptureText={setCaptureText}
-            captureExtensionId={captureExtensionId}
-            setCaptureExtensionId={setCaptureExtensionId}
-            captureHostInstallBusy={captureHostInstallBusy}
-            captureHostInstallResult={captureHostInstallResult}
-            installCaptureHostManifest={installCaptureHostManifest}
-            simulatePassiveCapture={simulatePassiveCapture}
             goRequests={() => setView("requests")}
           />
         )}
@@ -2271,9 +1897,6 @@ export function App() {
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
           />
-        )}
-        {view === "audit" && (
-          <AuditView events={state.auditEvents} />
         )}
         {view === "settings" && (
           <SettingsView
@@ -2337,35 +1960,17 @@ function NavButton({
   );
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong><span className="sr-only">: </span>{value}</strong>
-    </div>
-  );
-}
-
 export function HomeView({
   facts,
   candidates,
   connectors,
-  captureSettings,
-  captureEvents,
   sources,
   requests,
   contextPacks,
   nativePath,
-  aiServiceStatus,
-  aiServiceBusy,
   setup,
   setSetup,
   submitBackground,
-  startAiAccess,
-  updateCapture,
-  purgeAllPassiveCaptures,
-  confirmAllCapturePurge,
-  cancelAllCapturePurge,
   seedDemo,
   goInbox,
   goSources,
@@ -2375,22 +1980,13 @@ export function HomeView({
   facts: ApprovedFact[];
   candidates: MemoryCandidate[];
   connectors: ConnectorSession[];
-  captureSettings: PassiveCaptureSettings;
-  captureEvents: PassiveCaptureEvent[];
   sources: VaultState["sources"];
   requests: ContextPackRequest[];
   contextPacks: ContextPack[];
   nativePath: string | null;
-  aiServiceStatus: AiAccessServiceStatus | null;
-  aiServiceBusy: boolean;
   setup: BackgroundSetupInput;
   setSetup: (input: BackgroundSetupInput) => void;
   submitBackground: () => void;
-  startAiAccess: () => void;
-  updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
-  purgeAllPassiveCaptures: () => void;
-  confirmAllCapturePurge: boolean;
-  cancelAllCapturePurge: () => void;
   seedDemo: () => void;
   goInbox: () => void;
   goSources: () => void;
@@ -2412,7 +2008,7 @@ export function HomeView({
   const grouped = groupByDomain(backgroundFacts);
   const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
   const approvedContextReady = facts.length > 0;
-  const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
+  const aiAccessReady = Boolean(nativePath);
   const nowMs = Date.now();
   const deliverablePackCount = contextPacks.filter((pack) =>
     contextPackDeliveryState(
@@ -2422,9 +2018,8 @@ export function HomeView({
     ).canDeliver
   ).length;
   const packTried = deliverablePackCount > 0;
-  const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const accessReadiness = { tone: "ready" as const, title: "MCPで接続", body: "Claude Desktop等のMCPクライアントから接続できます。", badge: "ok" };
   const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request, nowMs)).length;
-  const captureSafety = homeCaptureSafetySummary(captureSettings, captureEvents, sources);
   const aiBoundarySections = homeAiBoundarySections({
     facts,
     candidates,
@@ -2483,8 +2078,8 @@ export function HomeView({
           : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
       status: aiAccessReady ? "done" : packTried ? "current" : "blocked",
       actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
-      action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
-      disabled: aiServiceBusy
+      action: aiAccessReady || !nativePath ? goConnections : goConnections,
+      disabled: false
     }
   ];
   const nextAction = (() => {
@@ -2529,7 +2124,7 @@ export function HomeView({
         title: packTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
         body: accessReadiness.body,
         label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
-        action: nativePath ? startAiAccess : goConnections,
+        action: nativePath ? goConnections : goConnections,
         icon: <Plug size={18} />
       };
     }
@@ -2562,7 +2157,7 @@ export function HomeView({
             </div>
             <button
               className="primary-button"
-              disabled={aiServiceBusy && nextAction.action === startAiAccess}
+              disabled={false && nextAction.action === goConnections}
               onClick={nextAction.action}
               type="button"
             >
@@ -2570,6 +2165,8 @@ export function HomeView({
               {nextAction.label}
             </button>
           </div>
+          <details className="onboarding-details">
+            <summary>セットアップの手順を見る</summary>
           <div className="onboarding-checklist">
             {onboardingSteps.map((step, index) => (
               <button
@@ -2592,35 +2189,7 @@ export function HomeView({
               </button>
             ))}
           </div>
-        </div>
-      </div>
-
-      <div className="panel wide home-ai-boundary-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI Boundary Today</p>
-            <h3>保存されたこととAIへ渡ること</h3>
-          </div>
-          <ShieldCheck size={18} />
-        </div>
-        <div className="home-ai-boundary-grid" aria-label="Home AI boundary summary">
-          {aiBoundarySections.map((section) => (
-            <div className={`home-ai-boundary-card ${section.tone}`} key={section.label}>
-              <span>{section.label}</span>
-              <strong>{section.value}</strong>
-              <small>{section.detail}</small>
-            </div>
-          ))}
-        </div>
-        <div className="service-actions">
-          <button className="secondary-button" onClick={goInbox} type="button">
-            <Inbox size={16} />
-            保存候補を確認
-          </button>
-          <button className="primary-button" onClick={goRequests} type="button">
-            <MessageSquare size={16} />
-            AIへ渡すPackを見る
-          </button>
+          </details>
         </div>
       </div>
 
@@ -2634,78 +2203,6 @@ export function HomeView({
         <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} compact />
       </div>
 
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI access</p>
-            <h3>普段使うAIとの接続</h3>
-          </div>
-          <button className="secondary-button" onClick={goConnections} type="button">
-            <Plug size={16} />
-            Open
-          </button>
-        </div>
-        <div className="connection-list compact">
-          {connectors.slice(0, 4).map((connector) => (
-            <div className="connection-row" key={connector.id}>
-              <div>
-                <strong>{connector.clientName}</strong>
-                <span>{connector.transport}</span>
-              </div>
-              <Badge>{connector.status}</Badge>
-            </div>
-          ))}
-        </div>
-        <div className={`home-capture-safety ${captureSafety.tone}`}>
-          <div className="home-capture-safety-heading">
-            <div>
-              <span>Capture safety</span>
-              <strong>{captureSafety.title}</strong>
-            </div>
-            {captureSettings.enabled ? <Radio size={18} /> : <PauseCircle size={18} />}
-          </div>
-          <p>{captureSafety.body}</p>
-          <div className="home-capture-meta">
-            <Metric label="許可サイト" value={captureSafety.allowedSitesLabel} />
-            <Metric label="直近Capture" value={captureSafety.lastCaptureLabel} />
-            <Metric label="消去できる本文" value={`${captureSafety.purgeableCount}件`} />
-          </div>
-          {captureSafety.lastPreview ? <p className="home-capture-preview">{captureSafety.lastPreview}</p> : null}
-          {confirmAllCapturePurge && (
-            <div className="danger-confirm-card" role="status">
-              <strong>{captureSafety.purgeableCount}件のCapture本文を消去します</strong>
-              <span>Raw transcript本文だけを消去します。承認済みFact、未承認候補の履歴、Auditの件数記録は残ります。</span>
-              <button className="secondary-button" onClick={cancelAllCapturePurge} type="button">
-                <X size={16} />
-                取消
-              </button>
-            </div>
-          )}
-          <div className="service-actions">
-            <button
-              className={captureSettings.enabled ? "danger-button" : "primary-button"}
-              onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
-              type="button"
-            >
-              {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-              {captureSettings.enabled ? "Captureを一時停止" : "Captureを開始"}
-            </button>
-            <button className="secondary-button" onClick={goConnections} type="button">
-              <Settings size={16} />
-              Capture詳細
-            </button>
-            <button
-              className="danger-button"
-              disabled={captureSafety.purgeableCount === 0}
-              onClick={purgeAllPassiveCaptures}
-              type="button"
-            >
-              <Trash2 size={16} />
-              {confirmAllCapturePurge ? "確認して全本文を消去" : "全本文を消去"}
-            </button>
-          </div>
-        </div>
-      </div>
 
       <div className="panel background-panel">
         <div className="panel-heading">
@@ -3404,1448 +2901,6 @@ function SourceRow({
         )}
       </div>
     </div>
-  );
-}
-
-function ConnectionsView({
-  connectors,
-  policies,
-  sources,
-  passiveCaptureEvents,
-  captureSettings,
-  updateCapture,
-  updatePolicy,
-  purgePassiveCaptureEvent,
-  purgeAllPassiveCaptures,
-  confirmAllCapturePurge,
-  cancelAllCapturePurge,
-  nativePath,
-  aiServiceStatus,
-  aiServiceBusy,
-  runtimePreferences,
-  updateRuntimePreference,
-  loginItemStatus,
-  loginItemBusy,
-  claudeInstallBusy,
-  claudeInstallResult,
-  claudeConfig,
-  startAiAccess,
-  startHostedRelayAgent,
-  connectManagedRelay,
-  stopAiAccess,
-  refreshAiAccess,
-  hostedAgentWebsocketUrl,
-  setHostedAgentWebsocketUrl,
-  refreshLoginItem,
-  enableLoginItem,
-  disableLoginItem,
-  installClaudeConfig,
-  copyText,
-  captureClient,
-  setCaptureClient,
-  captureConversationId,
-  setCaptureConversationId,
-  captureText,
-  setCaptureText,
-  captureExtensionId,
-  setCaptureExtensionId,
-  captureHostInstallBusy,
-  captureHostInstallResult,
-  installCaptureHostManifest,
-  simulatePassiveCapture,
-  goRequests
-}: {
-  connectors: ConnectorSession[];
-  policies: VaultState["accessPolicies"];
-  sources: VaultState["sources"];
-  passiveCaptureEvents: PassiveCaptureEvent[];
-  captureSettings: PassiveCaptureSettings;
-  updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
-  updatePolicy: (
-    clientId: string,
-    settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
-  ) => void;
-  purgePassiveCaptureEvent: (eventId: string) => void;
-  purgeAllPassiveCaptures: () => void;
-  confirmAllCapturePurge: boolean;
-  cancelAllCapturePurge: () => void;
-  nativePath: string | null;
-  aiServiceStatus: AiAccessServiceStatus | null;
-  aiServiceBusy: boolean;
-  runtimePreferences: RuntimePreferences;
-  updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
-  loginItemStatus: LoginItemStatus | null;
-  loginItemBusy: boolean;
-  claudeInstallBusy: boolean;
-  claudeInstallResult: ClaudeDesktopConfigInstallResult | null;
-  claudeConfig: string;
-  startAiAccess: () => void;
-  startHostedRelayAgent: () => void;
-  connectManagedRelay: () => void;
-  stopAiAccess: () => void;
-  refreshAiAccess: () => void;
-  hostedAgentWebsocketUrl: string;
-  setHostedAgentWebsocketUrl: (value: string) => void;
-  refreshLoginItem: () => void;
-  enableLoginItem: () => void;
-  disableLoginItem: () => void;
-  installClaudeConfig: () => void;
-  copyText: (value: string, message: string) => void;
-  captureClient: ConnectorKind;
-  setCaptureClient: (value: ConnectorKind) => void;
-  captureConversationId: string;
-  setCaptureConversationId: (value: string) => void;
-  captureText: string;
-  setCaptureText: (value: string) => void;
-  captureExtensionId: string;
-  setCaptureExtensionId: (value: string) => void;
-  captureHostInstallBusy: boolean;
-  captureHostInstallResult: BrowserCaptureHostInstallResult | null;
-  installCaptureHostManifest: () => void;
-  simulatePassiveCapture: () => void;
-  goRequests: () => void;
-}) {
-  const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
-  const aiAccessChecklist = aiAccessChecklistItems(aiServiceStatus, nativePath);
-  const mcpEndpoint = aiServiceStatus?.mcpServerUrl ?? localRelayUrl;
-  const hostedRelayMcpPreview = hostedRelayMcpUrlFromAgentWs(hostedAgentWebsocketUrl);
-  const hostedRelayConfirmed = isHostedRelayConfirmed(aiServiceStatus);
-  const canCopyMcpEndpoint = canCopyAiMcpEndpoint(aiServiceStatus);
-  const mcpEndpointDisplay = aiMcpEndpointDisplay(aiServiceStatus, mcpEndpoint);
-  const webMcpEndpoint = webAiMcpEndpoint(aiServiceStatus, mcpEndpoint);
-  const webConnectorInfo = webMcpEndpoint ? makeRemoteConnectorInfo(webMcpEndpoint) : null;
-  const currentConnectorInfo = canCopyMcpEndpoint ? makeRemoteConnectorInfo(mcpEndpoint) : null;
-  const connectionDiagnostic = aiConnectionDiagnostic(
-    aiServiceStatus,
-    nativePath,
-    hostedAgentWebsocketUrl,
-    webMcpEndpoint
-  );
-  const connectionDiagnosticSummary = connectionDiagnosticSummaryBadge(connectionDiagnostic);
-  const hostedRelayReadiness = hostedRelayRegistrationReadiness(
-    aiServiceStatus,
-    nativePath,
-    hostedAgentWebsocketUrl,
-    webMcpEndpoint
-  );
-  const webAiGuides = webAiRegistrationGuides(hostedRelayReadiness, webConnectorInfo);
-  const captureExtensionIdReady = isLikelyChromeExtensionId(captureExtensionId);
-  const recentCaptures = [...passiveCaptureEvents]
-    .sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt))
-    .slice(0, 6);
-  const purgeableCaptureCount = passiveCaptureSourceIdsForEvents(passiveCaptureEvents, sources).length;
-  const [allowedSitesDraft, setAllowedSitesDraft] = useState(captureSettings.allowedSites.join(", "));
-  const [confirmCapturePurgeId, setConfirmCapturePurgeId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setAllowedSitesDraft(captureSettings.allowedSites.join(", "));
-  }, [captureSettings.allowedSites]);
-
-  const cautiousDomains = policyDomainOptions.filter(
-    (domain) =>
-      ![
-        "identity_and_profile",
-        "health_and_care",
-        "finance_and_benefits",
-        "constraints_and_accessibility"
-      ].includes(domain)
-  );
-
-  function domainsForPolicy(policy?: AccessPolicy): LifeContextDomain[] {
-    return policy && policy.domainAllowlist.length > 0 ? policy.domainAllowlist : cautiousDomains;
-  }
-
-  function togglePolicyDomain(clientId: string, policy: AccessPolicy | undefined, domain: LifeContextDomain) {
-    const current = domainsForPolicy(policy);
-    const next = current.includes(domain)
-      ? current.filter((item) => item !== domain)
-      : [...current, domain];
-    if (next.length === 0) return;
-    updatePolicy(clientId, { domainAllowlist: next });
-  }
-
-  function setPolicyDomains(clientId: string, domains: LifeContextDomain[]) {
-    if (domains.length === 0) return;
-    updatePolicy(clientId, { domainAllowlist: domains });
-  }
-
-  return (
-    <section className="view-grid connections-grid">
-      <div className={`panel wide ai-access-quickstart ${accessReadiness.tone}`}>
-        <div className="readiness-main">
-          <div className="readiness-icon">
-            {accessReadiness.tone === "ready" ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}
-          </div>
-          <div>
-            <p className="eyebrow">AI Access</p>
-            <h3>{accessReadiness.title}</h3>
-            <p>{accessReadiness.body}</p>
-          </div>
-        </div>
-        <div className="service-actions ai-access-primary-actions">
-          <button
-            className="primary-button"
-            disabled={!nativePath || aiServiceBusy}
-            onClick={startAiAccess}
-            type="button"
-          >
-            <PlayCircle size={16} />
-            AI連携を開始
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!nativePath || aiServiceBusy}
-            onClick={refreshAiAccess}
-            type="button"
-          >
-            <RefreshCw size={16} />
-            状態を更新
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!canCopyMcpEndpoint}
-            onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
-            type="button"
-          >
-            <Clipboard size={16} />
-            MCP URLをコピー
-          </button>
-          <button
-            className="danger-button"
-            disabled={!nativePath || aiServiceBusy || (!aiServiceStatus?.relayManagedRunning && !aiServiceStatus?.agentManagedRunning)}
-            onClick={stopAiAccess}
-            type="button"
-          >
-            <PauseCircle size={16} />
-            管理中の連携を停止
-          </button>
-        </div>
-      </div>
-
-      <details className={`panel wide connection-diagnostics setup-disclosure ${connectionDiagnostic.tone}`}>
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">Connection Diagnostics</p>
-            <h3>AIからVaultを呼べる状態を確認</h3>
-            <span>Relay、Agent、CIMD/DCR登録の詳しい状態を必要な時だけ確認します。</span>
-          </div>
-          <div className="panel-summary-status">
-            <Badge>{connectionDiagnosticSummary.label}</Badge>
-            <span>{connectionDiagnosticSummary.detail}</span>
-            <Activity size={18} />
-          </div>
-        </summary>
-        <div className="connection-diagnostic-main">
-          <div className="connection-diagnostic-copy">
-            <div className="connection-diagnostic-icon">
-              {connectionDiagnostic.tone === "ready" ? (
-                <ShieldCheck size={20} />
-              ) : connectionDiagnostic.tone === "blocked" ? (
-                <ShieldAlert size={20} />
-              ) : (
-                <Clock size={20} />
-              )}
-            </div>
-            <div>
-              <strong>{connectionDiagnostic.title}</strong>
-              <p>{connectionDiagnostic.summary}</p>
-              {connectionDiagnostic.issue ? <p className="warning-text">{connectionDiagnostic.issue}</p> : null}
-            </div>
-          </div>
-          <div className="connection-diagnostic-next">
-            <span>次にやること</span>
-            <strong>{connectionDiagnostic.nextStep}</strong>
-            <div className="service-actions">
-              {connectionDiagnostic.primaryAction === "open_desktop" ? (
-                <button className="secondary-button" disabled type="button">
-                  <Plug size={16} />
-                  Desktop appで開く
-                </button>
-              ) : null}
-              {connectionDiagnostic.primaryAction === "start_ai_access" ? (
-                <button
-                  className="primary-button"
-                  disabled={!nativePath || aiServiceBusy}
-                  onClick={startAiAccess}
-                  type="button"
-                >
-                  <PlayCircle size={16} />
-                  AI連携を開始
-                </button>
-              ) : null}
-              {connectionDiagnostic.primaryAction === "start_hosted_agent" ? (
-                <button
-                  className="primary-button"
-                  disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}
-                  onClick={startHostedRelayAgent}
-                  type="button"
-                >
-                  <Plug size={16} />
-                  Hosted RelayへAgent接続
-                </button>
-              ) : null}
-              {connectionDiagnostic.primaryAction === "copy_web_connector" ? (
-                <button
-                  className="primary-button"
-                  disabled={!webConnectorInfo}
-                  onClick={() => {
-                    if (!webConnectorInfo) return;
-                    copyText(JSON.stringify(webConnectorInfo, null, 2), "Web AI用のRemote MCP connector情報をコピーしました。");
-                  }}
-                  type="button"
-                >
-                  <Clipboard size={16} />
-                  Web AI接続情報をコピー
-                </button>
-              ) : null}
-              {connectionDiagnostic.primaryAction === "open_requests" ? (
-                <button className="primary-button" onClick={goRequests} type="button">
-                  <MessageSquare size={16} />
-                  Requestsで試す
-                </button>
-              ) : null}
-              {connectionDiagnostic.primaryAction === "refresh" ? (
-                <button
-                  className="primary-button"
-                  disabled={!nativePath || aiServiceBusy}
-                  onClick={refreshAiAccess}
-                  type="button"
-                >
-                  <RefreshCw size={16} />
-                  状態を更新
-                </button>
-              ) : null}
-              {nativePath && connectionDiagnostic.primaryAction !== "refresh" ? (
-                <button
-                  className="secondary-button"
-                  disabled={aiServiceBusy}
-                  onClick={refreshAiAccess}
-                  type="button"
-                >
-                  <RefreshCw size={16} />
-                  状態を更新
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-        <div className="connection-diagnostic-status-grid" aria-label="AI connection diagnostic status">
-          {connectionDiagnostic.items.map((item) => (
-            <div className={`connection-diagnostic-status ${item.state}`} key={item.label}>
-              {item.state === "ready" ? <CheckCircle2 size={16} /> : item.state === "blocked" ? <ShieldAlert size={16} /> : <Clock size={16} />}
-              <div>
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-              </div>
-            </div>
-          ))}
-        </div>
-      </details>
-
-      <div className="panel wide ai-connection-guide">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Connect Your AI</p>
-            <h3>普段使うAIからContext Packを呼ぶ</h3>
-          </div>
-          <Plug size={18} />
-        </div>
-        <div className="connection-wizard-grid">
-          <article className={webConnectorInfo ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
-            <div className="wizard-card-heading">
-              <Radio size={18} />
-              <div>
-                <strong>ChatGPT / Claude Web</strong>
-                <span>
-                  {webConnectorInfo
-                    ? hostedRelayConfirmed
-                      ? "Hosted Relayを登録できます"
-                      : "Remote MCPで接続できます"
-                    : hostedRelayMcpPreview
-                    ? "pairing確認後に登録できます"
-                    : "Hosted HTTPS Relayを先に用意します"}
-                </span>
-              </div>
-            </div>
-            <p>
-              Web上のAIはこのMacのlocalhostへ直接アクセスできません。下のHosted Relay Agentでこの端末をpairingし、AIには公開HTTPSのMCP URLだけを登録します。
-            </p>
-            <div className="service-actions">
-              <button
-                className="secondary-button"
-                disabled={!webConnectorInfo}
-                onClick={() => {
-                  if (!webConnectorInfo) return;
-                  copyText(JSON.stringify(webConnectorInfo, null, 2), "Web AI用のRemote MCP connector情報をコピーしました。");
-                }}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Web AI用接続情報をコピー
-              </button>
-            </div>
-            {!webConnectorInfo ? (
-              <p className="muted">Hosted RelayのAgent WebSocket URLを貼ると、ChatGPT/Claudeへ登録するMCP URLを確認できます。</p>
-            ) : null}
-          </article>
-          <article className={nativePath ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
-            <div className="wizard-card-heading">
-              <Plug size={18} />
-              <div>
-                <strong>Claude Desktop / local AI</strong>
-                <span>{nativePath ? "この端末のVaultへ接続できます" : "Desktop appで有効になります"}</span>
-              </div>
-            </div>
-            <p>同じ端末のAIにはLocal MCPを使います。Raw Sourceや未承認候補は公開せず、回答前にContext Packを確認できます。</p>
-            <div className="service-actions">
-              <button
-                className="primary-button"
-                disabled={!nativePath || claudeInstallBusy}
-                onClick={installClaudeConfig}
-                type="button"
-              >
-                <Plug size={16} />
-                Claude Desktopへ追加
-              </button>
-            </div>
-          </article>
-          <article className={captureSettings.enabled ? "connection-wizard-card ready" : "connection-wizard-card attention"}>
-            <div className="wizard-card-heading">
-              {captureSettings.enabled ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
-              <div>
-                <strong>AI会話のCapture</strong>
-                <span>{captureSettings.enabled ? "許可サイトだけ候補化します" : "停止中です"}</span>
-              </div>
-            </div>
-            <p>ブラウザ拡張や手動入力から会話断片を取り込みます。保存されるのは未承認候補で、Fact化とAI送信は別の確認です。</p>
-            <div className="service-actions">
-              <button
-                className={captureSettings.enabled ? "danger-button" : "primary-button"}
-                onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
-                type="button"
-              >
-                {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-                {captureSettings.enabled ? "Captureを一時停止" : "Captureを開始"}
-              </button>
-            </div>
-          </article>
-          <article className="connection-wizard-card ready">
-            <div className="wizard-card-heading">
-              <Clipboard size={18} />
-              <div>
-                <strong>MCPなしでコピー</strong>
-                <span>どのAIでも使えます</span>
-              </div>
-            </div>
-            <p>RequestsでContext Packを確認してから本文をコピーします。MCP接続前でも、AIへ渡した内容をAuditで追える導線です。</p>
-            <div className="service-actions">
-              <button
-                className="primary-button"
-                onClick={goRequests}
-                type="button"
-              >
-                <MessageSquare size={16} />
-                Requestsで確認・コピー
-              </button>
-            </div>
-          </article>
-        </div>
-      </div>
-
-      <div className="panel wide hosted-relay-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Hosted Relay Agent</p>
-            <h3>ChatGPT / Claude Web用の公開Relayへ接続</h3>
-          </div>
-          <Radio size={18} />
-        </div>
-        <div className="hosted-relay-grid">
-          <div className="hosted-relay-copy">
-            <div className="trust-note">
-              <ShieldCheck size={16} />
-              <span>
-                Hosted Relayが発行した短命Agent WebSocket URLだけを使います。URLは保存せず、Vault本体・Raw Source・未承認候補はRelayへ置きません。
-              </span>
-            </div>
-            <div className="hosted-relay-steps" aria-label="Hosted Relay setup steps">
-              <div>
-                <Badge>1</Badge>
-                <span>Relayで短命URLを発行</span>
-              </div>
-              <div>
-                <Badge>2</Badge>
-                <span>この端末のAgentを起動</span>
-              </div>
-              <div>
-                <Badge>3</Badge>
-                <span>AIへMCP URLを登録</span>
-              </div>
-            </div>
-            <Input
-              label="Agent WebSocket URL"
-              value={hostedAgentWebsocketUrl}
-              onChange={setHostedAgentWebsocketUrl}
-              placeholder="wss://relay.example.com/agent/ws?pairing_code=..."
-              type="password"
-              autoComplete="off"
-            />
-            {hostedRelayMcpPreview ? (
-              <div className="relay-preview">
-                <Metric label={hostedRelayConfirmed ? "AIへ登録するMCP URL" : "pairing後に登録するMCP URL"} value={hostedRelayMcpPreview} />
-                <button
-                  className="secondary-button"
-                  disabled={!hostedRelayConfirmed}
-                  onClick={() => copyText(hostedRelayMcpPreview, "Hosted Relay MCP URLをコピーしました。")}
-                  type="button"
-                >
-                  <Clipboard size={16} />
-                  MCP URLをコピー
-                </button>
-              </div>
-            ) : (
-              <p className="muted">Hosted Relayで発行したAgent WebSocket URLを貼り付けます。</p>
-            )}
-            <div className="hosted-relay-boundary">
-              <div>
-                <span>この端末に保存</span>
-                <strong>元文書・未承認の記憶候補・承認済みの事実</strong>
-              </div>
-              <div>
-                <span>AIへ送信</span>
-                <strong>確認画面で許可した短命Context Packのみ</strong>
-              </div>
-              <div>
-                <span>Relayに残る</span>
-                <strong>依頼ID・AI名・時刻・許可範囲だけ。本文は残さない</strong>
-              </div>
-            </div>
-            <div className="service-actions">
-              <button
-                className="primary-button"
-                disabled={!nativePath || aiServiceBusy}
-                onClick={connectManagedRelay}
-                type="button"
-              >
-                <Plug size={16} />
-                管理リレーにワンクリック接続
-              </button>
-              <button
-                className="primary-button"
-                disabled={!nativePath || aiServiceBusy || !hostedAgentWebsocketUrl.trim()}
-                onClick={startHostedRelayAgent}
-                type="button"
-              >
-                <Plug size={16} />
-                Hosted RelayへAgent接続
-              </button>
-            </div>
-            <details className="advanced-panel hosted-relay-advanced">
-              <summary>self-host用pairingコマンド</summary>
-              <pre className="code-box">{makeHostedPairingCurlTemplate()}</pre>
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  copyText(makeHostedPairingCurlTemplate(), "Hosted Relay pairingコマンドをコピーしました。")
-                }
-                type="button"
-              >
-                <Clipboard size={16} />
-                pairingコマンドをコピー
-              </button>
-            </details>
-          </div>
-          <div className="hosted-relay-status">
-            <Metric label="現在のRelay" value={aiServiceStatus?.relayUrl ?? "未接続"} />
-            <Metric label="接続方式" value={serviceManagedCopy(aiServiceStatus)} />
-            <Metric
-              label="この端末のアプリ"
-              value={hostedAgentProcessCopy(aiServiceStatus)}
-            />
-            <Metric
-              label="Relayとの確認"
-              value={hostedPairingCopy(aiServiceStatus)}
-            />
-            <Metric
-              label="最後の確認"
-              value={formatUnixSeconds(aiServiceStatus?.agentRuntimeStatus?.updatedAt)}
-            />
-            <Metric
-              label="問題"
-              value={hostedLastErrorCopy(aiServiceStatus)}
-            />
-            <div className={`hosted-relay-readiness ${hostedRelayReadiness.tone}`}>
-              <div className="hosted-relay-readiness-heading">
-                <div>
-                  <span>Web AI registration</span>
-                  <strong>{hostedRelayReadiness.title}</strong>
-                </div>
-                {hostedRelayReadiness.tone === "ready" ? <ShieldCheck size={18} /> : <ShieldAlert size={18} />}
-              </div>
-              <p>{hostedRelayReadiness.summary}</p>
-              <div className="hosted-relay-readiness-list" aria-label="Hosted Relay registration readiness">
-                {hostedRelayReadiness.items.map((item) => (
-                  <div className={`hosted-relay-readiness-item ${item.state}`} key={item.label}>
-                    {item.state === "ready" ? (
-                      <CheckCircle2 size={15} />
-                    ) : item.state === "blocked" ? (
-                      <ShieldAlert size={15} />
-                    ) : (
-                      <Clock size={15} />
-                    )}
-                    <div>
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="hosted-relay-next-step">
-                <span>次にやること</span>
-                <strong>{hostedRelayReadiness.nextStep}</strong>
-              </div>
-            </div>
-            <div className="web-ai-registration-guide" aria-label="Web AI registration guide">
-              {webAiGuides.map((guide) => (
-                <article className={`web-ai-guide-card ${guide.status}`} key={guide.provider}>
-                  <div className="web-ai-guide-heading">
-                    <div>
-                      <span>{guide.provider}</span>
-                      <strong>{guide.statusLabel}</strong>
-                    </div>
-                    {guide.status === "ready" ? (
-                      <CheckCircle2 size={17} />
-                    ) : guide.status === "blocked" ? (
-                      <ShieldAlert size={17} />
-                    ) : (
-                      <Clock size={17} />
-                    )}
-                  </div>
-                  <ol>
-                    {guide.steps.map((step) => (
-                      <li key={step}>{step}</li>
-                    ))}
-                  </ol>
-                  <p>{guide.boundary}</p>
-                  <button
-                    className={guide.status === "ready" ? "primary-button" : "secondary-button"}
-                    disabled={guide.provider !== "MCPなしのAI" && !webConnectorInfo}
-                    onClick={() => {
-                      if (guide.provider === "MCPなしのAI") {
-                        goRequests();
-                        return;
-                      }
-                      if (!webConnectorInfo) return;
-                      copyText(JSON.stringify(webConnectorInfo, null, 2), `${guide.provider}用のRemote MCP connector情報をコピーしました。`);
-                    }}
-                    type="button"
-                  >
-                    {guide.provider === "MCPなしのAI" ? <MessageSquare size={16} /> : <Clipboard size={16} />}
-                    {guide.actionLabel}
-                  </button>
-                </article>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="panel wide ai-access-map">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Universal AI Access</p>
-            <h3>普段使うAIへ渡す入口と境界</h3>
-          </div>
-        </div>
-        <div className="ai-access-map-grid">
-          <div className="ai-access-endpoint">
-            <span>MCP endpoint</span>
-            <strong>{mcpEndpointDisplay}</strong>
-            <p>ChatGPT/ClaudeのRemote MCP、Claude Desktop/CodexのLocal MCP、コピーfallbackのどれでも、AIへ渡す外部境界はContext Packだけです。ChatGPTには接続情報を貼り付け、必要なら登録方式を切り替えられます。</p>
-            <div className="service-actions">
-              <button
-                className="primary-button"
-                disabled={!canCopyMcpEndpoint}
-                onClick={() => copyText(mcpEndpoint, "MCP URLをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                MCP URLをコピー
-              </button>
-              <button
-                className="secondary-button"
-                disabled={!currentConnectorInfo}
-                onClick={() => {
-                  if (!currentConnectorInfo) return;
-                  copyText(JSON.stringify(currentConnectorInfo, null, 2), "Remote MCP connector情報をコピーしました。");
-                }}
-                type="button"
-              >
-                <Clipboard size={16} />
-                接続情報をコピー
-              </button>
-              <button
-                className="secondary-button"
-                disabled={!canCopyMcpEndpoint}
-                onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE ready診断コマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                SSE診断をコピー
-              </button>
-            </div>
-          </div>
-          <div className="ai-access-boundary">
-            <div>
-              <span>AIへ渡るもの</span>
-              <strong>確認済みContext Packだけ</strong>
-              <p>Fact本文、最小Source snippet、除外理由、警告だけを目的別に絞ります。</p>
-            </div>
-            <div>
-              <span>AIへ渡らないもの</span>
-              <strong>Raw Source / 未承認候補 / Vault全体</strong>
-              <p>保存と送信は別です。Inbox候補は承認されるまで高信頼文脈になりません。</p>
-            </div>
-          </div>
-        </div>
-        <div className="ai-access-checklist" aria-label="AI Access readiness checklist">
-          {aiAccessChecklist.map((item) => (
-            <div className={`ai-access-check ${item.state}`} key={item.label}>
-              {item.state === "ready" ? <CheckCircle2 size={18} /> : item.state === "blocked" ? <ShieldAlert size={18} /> : <Clock size={18} />}
-              <div>
-                <strong>{item.label}</strong>
-                <span>{item.detail}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <details className="panel wide setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">AI Connections</p>
-            <h3>どのAIが、どの境界でVaultを使えるか</h3>
-            <span>接続ごとの感度上限、確認条件、渡してよい生活領域を編集します。</span>
-          </div>
-          <Badge>詳細設定</Badge>
-        </summary>
-        <div className="connection-list">
-          {connectors.map((connector) => {
-            const policy = policies.find((item) => item.clientId === connector.id);
-            const allowedDomains = domainsForPolicy(policy);
-            const supportsContextPacks = connector.scopes.includes("context_pack.request");
-            return (
-              <article className="connection-card" key={connector.id}>
-                <div className="connection-main">
-                  <div className="connector-icon">
-                    {connector.transport === "browser_extension" ? <Radio size={20} /> : <Plug size={20} />}
-                  </div>
-                  <div>
-                    <h4>{connector.clientName}</h4>
-                    <p>{connectionCopy(connector)}</p>
-                  </div>
-                </div>
-                <div className="policy-grid">
-                  <Metric label="Transport" value={connector.transport === "remote_mcp_relay" ? "Relay" : connector.transport === "local_mcp" ? "Local" : connector.transport === "browser_extension" ? "Capture" : "コピー"} />
-                  <Metric label="Status" value={connector.status} />
-                  <Metric label="Ceiling" value={policy?.sensitivityCeiling ?? "n/a"} />
-                </div>
-                <div className="scope-row">
-                  {connector.scopes.map((scope) => (
-                    <Badge key={scope}>{scope}</Badge>
-                  ))}
-                </div>
-                <div className="policy-controls">
-                  <label className="field">
-                    <span>AIへ渡せる最大感度</span>
-                    <select
-                      value={policy?.sensitivityCeiling ?? "private_consequential"}
-                      onChange={(event) =>
-                        updatePolicy(connector.id, {
-                          sensitivityCeiling: event.target.value as SensitivityTier
-                        })
-                      }
-                    >
-                      {policySensitivityOptions.map((sensitivity) => (
-                        <option key={sensitivity} value={sensitivity}>
-                          {sensitivityLabel(sensitivity)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>確認が必要になる感度</span>
-                    <select
-                      value={policy?.requiresApprovalAbove ?? "personal"}
-                      onChange={(event) =>
-                        updatePolicy(connector.id, {
-                          requiresApprovalAbove: event.target.value as SensitivityTier
-                        })
-                      }
-                    >
-                      {policySensitivityOptions.map((sensitivity) => (
-                        <option key={sensitivity} value={sensitivity}>
-                          {sensitivityLabel(sensitivity)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {supportsContextPacks ? (
-                <div className="policy-domain-panel">
-                  <div className="policy-domain-heading">
-                    <div>
-                      <strong>このAIに渡してよい生活領域</strong>
-                      <span>
-                        {allowedDomains.length}/{policyDomainOptions.length} 領域を許可中。未許可の領域はContext Packから除外されます。
-                      </span>
-                    </div>
-                    <div className="policy-domain-actions">
-                      <button
-                        aria-label={`${connector.clientName}の生活領域をすべて許可する`}
-                        className="secondary-button"
-                        onClick={() => setPolicyDomains(connector.id, policyDomainOptions)}
-                        type="button"
-                      >
-                        すべて許可
-                      </button>
-                      <button
-                        aria-label={`${connector.clientName}の生活領域から本人情報、医療・ケア、お金・給付、制約・配慮を外す`}
-                        className="secondary-button"
-                        onClick={() => setPolicyDomains(connector.id, cautiousDomains)}
-                        type="button"
-                      >
-                        個人情報等を外す
-                      </button>
-                    </div>
-                  </div>
-                  <div className="policy-domain-list">
-                    {policyDomainOptions.map((domain) => {
-                      const selected = allowedDomains.includes(domain);
-                      return (
-                        <label className="domain-checkbox" key={domain}>
-                          <input
-                            aria-label={`${connector.clientName}に${domainLabel(domain)}を渡す`}
-                            checked={selected}
-                            disabled={selected && allowedDomains.length === 1}
-                            onChange={() => togglePolicyDomain(connector.id, policy, domain)}
-                            type="checkbox"
-                          />
-                          <span>{domainLabel(domain)}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      </details>
-
-      <details className="panel wide setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">AI Access</p>
-            <h3>普段使うAIへVaultを開く</h3>
-            <span>Relay/Agentの状態、ログイン起動、常駐動作を管理します。</span>
-          </div>
-          <Badge>運用設定</Badge>
-        </summary>
-        <div className="service-console">
-          <div className={`service-brief ${accessReadiness.tone}`}>
-            <strong>{accessReadiness.title}</strong>
-            <span>{accessReadiness.body}</span>
-          </div>
-          <div className="service-status-grid">
-            <Metric label="Relay" value={aiServiceStatus?.relayReachable ? "reachable" : "offline"} />
-            <Metric label="Agent" value={aiServiceStatus?.agentConnected ? "connected" : "offline"} />
-            <Metric label="Managed" value={serviceManagedCopy(aiServiceStatus)} />
-            <Metric label="MCP URL" value={mcpEndpointDisplay} />
-          </div>
-          <div className="service-actions">
-            <button
-              className="primary-button"
-              disabled={!nativePath || aiServiceBusy}
-              onClick={startAiAccess}
-              type="button"
-            >
-              <PlayCircle size={16} />
-              AI連携を開始
-            </button>
-            <button
-              className="secondary-button"
-              disabled={!nativePath || aiServiceBusy}
-              onClick={refreshAiAccess}
-              type="button"
-            >
-              <RefreshCw size={16} />
-              状態を更新
-            </button>
-            <button
-              className="danger-button"
-              disabled={!nativePath || aiServiceBusy || (!aiServiceStatus?.relayManagedRunning && !aiServiceStatus?.agentManagedRunning)}
-              onClick={stopAiAccess}
-              type="button"
-            >
-              <PauseCircle size={16} />
-              管理中の連携を停止
-            </button>
-          </div>
-          <div className="automation-grid">
-            <div className="automation-card">
-              <div className="automation-card-heading">
-                <div>
-                  <strong>ログイン時にアプリを起動</strong>
-                  <p>再起動後もControl Centerが立ち上がり、AI Accessを戻せる状態にします。</p>
-                </div>
-                <Badge>
-                  {loginItemStatus?.supported === false
-                    ? "unsupported"
-                    : loginItemStatus?.enabled
-                      ? "enabled"
-                      : "off"}
-                </Badge>
-              </div>
-              <div className="service-actions">
-                <button
-                  className="primary-button"
-                  disabled={!nativePath || loginItemBusy || loginItemStatus?.supported === false}
-                  onClick={enableLoginItem}
-                  type="button"
-                >
-                  <PlayCircle size={16} />
-                  ログイン時に起動
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={!nativePath || loginItemBusy || !loginItemStatus?.enabled}
-                  onClick={disableLoginItem}
-                  type="button"
-                >
-                  <PauseCircle size={16} />
-                  無効化
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={!nativePath || loginItemBusy}
-                  onClick={refreshLoginItem}
-                  type="button"
-                >
-                  <RefreshCw size={16} />
-                  状態を確認
-                </button>
-              </div>
-              {loginItemStatus?.plistPath && <span>起動項目: {loginItemStatus.plistPath}</span>}
-              {loginItemStatus?.backupPath && <span>Backup: {loginItemStatus.backupPath}</span>}
-              {loginItemStatus?.lastError && <span>{loginItemStatus.lastError}</span>}
-            </div>
-            <div className="automation-card">
-              <div className="automation-card-heading">
-                <div>
-                  <strong>起動時にAI Accessを自動開始</strong>
-                  <p>アプリが開いたらRelayとAgentを起動します。Context Packの承認は引き続き手元で行います。</p>
-                </div>
-                <Badge>{runtimePreferences.autoStartAiAccess ? "on" : "off"}</Badge>
-              </div>
-              <button
-                className={runtimePreferences.autoStartAiAccess ? "danger-button" : "primary-button"}
-                onClick={() =>
-                  updateRuntimePreference({
-                    autoStartAiAccess: !runtimePreferences.autoStartAiAccess
-                  })
-                }
-                type="button"
-              >
-                {runtimePreferences.autoStartAiAccess ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-                {runtimePreferences.autoStartAiAccess ? "自動開始を停止" : "自動開始を有効化"}
-              </button>
-              <span>
-                {runtimePreferences.autoStartAiAccess
-                  ? "次回起動時にAI Accessを自動で戻します。"
-                  : "必要なときだけ手動でAI連携を開始します。"}
-              </span>
-            </div>
-            <div className="automation-card">
-              <div className="automation-card-heading">
-                <div>
-                  <strong>Control Centerの常駐</strong>
-                  <p>
-                    {nativePath
-                      ? "ウィンドウを閉じてもVault管理面はmenu bar/trayに残り、AI Accessを止めません。"
-                      : "Desktop appで開くと、Control Centerを閉じてもmenu bar/trayから戻せます。"}
-                  </p>
-                </div>
-                <Badge>{nativePath ? "on" : "desktop"}</Badge>
-              </div>
-              <span>
-                {nativePath
-                  ? "完全に終了するときはmenu bar/trayのQuit Life Context Vaultを使います。"
-                  : "ブラウザ表示では常駐動作とAI Access起動は使えません。"}
-              </span>
-            </div>
-          </div>
-          {aiServiceStatus?.lastError && <p className="warning-text">{aiServiceStatus.lastError}</p>}
-          {!nativePath && <p className="muted">Desktop appで起動すると、ここからRelayとAgentを管理できます。</p>}
-        </div>
-      </details>
-
-      <details className="panel wide setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">Local MCP setup</p>
-            <h3>Claude Desktop / Codex系からVaultを呼び出す</h3>
-            <span>Claude Desktop設定、手動config、公開tool一覧を確認します。</span>
-          </div>
-          <Badge>ローカルAI</Badge>
-        </summary>
-        <div className="service-brief">
-          <strong>Claude Desktopへ追加</strong>
-          <span>
-            既存のClaude設定を保持し、life-context-vaultのMCP serverだけを追加します。既存ファイルがある場合はバックアップを作成します。
-          </span>
-          <div className="service-actions">
-            <button
-              className="primary-button"
-              disabled={!nativePath || claudeInstallBusy}
-              onClick={installClaudeConfig}
-              type="button"
-            >
-              <Plug size={16} />
-              Claude設定へ追加
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => copyText(claudeConfig, "Claude Desktop用MCP設定をコピーしました。")}
-              type="button"
-            >
-              <Clipboard size={16} />
-              設定をコピー
-            </button>
-          </div>
-          {claudeInstallResult && (
-            <span>
-              {claudeInstallResult.alreadyConfigured ? "設定済み" : "追加済み"}: {claudeInstallResult.configPath}
-              {claudeInstallResult.backupPath ? ` / Backup: ${claudeInstallResult.backupPath}` : ""}
-            </span>
-          )}
-          {!nativePath && <span>Desktop appで開くと、ここからClaude Desktop設定へ追加できます。</span>}
-        </div>
-        <div className="setup-grid">
-          <div className="setup-step">
-            <Badge>1</Badge>
-            <strong>Local stdio MCP</strong>
-            <div className="scope-row">
-              <Badge>same device</Badge>
-              <Badge>encrypted Vault</Badge>
-              <Badge>Context Pack only</Badge>
-            </div>
-          </div>
-          <div className="setup-step">
-            <Badge>2</Badge>
-            <strong>手動設定が必要な場合</strong>
-            <pre className="code-box">{claudeConfig}</pre>
-            <button
-              className="secondary-button"
-              onClick={() => copyText(claudeConfig, "Claude Desktop用MCP設定をコピーしました。")}
-              type="button"
-            >
-              <Clipboard size={16} />
-              設定をコピー
-            </button>
-          </div>
-          <div className="setup-step">
-            <Badge>3</Badge>
-            <strong>公開されるtool</strong>
-            <div className="scope-row">
-              <Badge>request_context_pack</Badge>
-              <Badge>propose_memory</Badge>
-              <Badge>get_policy_summary</Badge>
-              <Badge>get_request_status</Badge>
-            </div>
-          </div>
-        </div>
-        <p className="muted">Local MCPはVault全体を読ませません。重要な私的Context Packはアプリ側の確認待ちになり、未承認候補はFactとして使われません。</p>
-      </details>
-
-      <details className="panel wide setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">Advanced Remote Relay</p>
-            <h3>Remote MCPの診断とself-host設定</h3>
-            <span>Relay/Agentのコマンド、OAuth診断、保持しないデータ境界を確認します。</span>
-          </div>
-          <Badge>HTTP/MCP診断</Badge>
-        </summary>
-        <div className="trust-note">
-          <ShieldCheck size={16} />
-          <span>通常は上の接続ガイドだけで十分です。ここはHosted Relayの運用確認、ローカル検証、HTTP/MCP診断が必要なときに開きます。</span>
-        </div>
-        <details className="advanced-panel">
-          <summary>コマンドとHTTP診断を表示</summary>
-          <div className="setup-grid remote-relay-setup">
-            <div className="setup-step">
-              <Badge>1</Badge>
-              <strong>RelayとAgentをビルド</strong>
-              <pre className="code-box">npm run relay:build{"\n"}npm run agent:build</pre>
-            </div>
-            <div className="setup-step">
-              <Badge>2</Badge>
-              <strong>OAuth Relayを起動</strong>
-              <pre className="code-box">{makeRelayCommand(nativePath)}</pre>
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makeRelayCommand(nativePath), "Relay起動コマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Relay起動をコピー
-              </button>
-            </div>
-            <div className="setup-step">
-              <Badge>3</Badge>
-              <strong>Pairing codeを発行</strong>
-              <pre className="code-box">{makePairingCommand()}</pre>
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makePairingCommand(), "Agent pairingコマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Pairing発行をコピー
-              </button>
-            </div>
-            <div className="setup-step">
-              <Badge>4</Badge>
-              <strong>Local Agentを接続</strong>
-              <pre className="code-box">{makeAgentCommand(nativePath)}</pre>
-              <button
-                className="secondary-button"
-                onClick={() => copyText(makeAgentCommand(nativePath), "Local Agent起動コマンドをコピーしました。")}
-                type="button"
-              >
-                <Clipboard size={16} />
-                Agent起動をコピー
-              </button>
-            </div>
-            <div className="setup-step">
-              <Badge>OAuth</Badge>
-              <strong>ChatGPT / Claude connectorへ渡すURL</strong>
-              <pre className="code-box">{JSON.stringify(makeRemoteConnectorInfo(localRelayUrl), null, 2)}</pre>
-            </div>
-            <div className="setup-step">
-              <Badge>Check</Badge>
-              <strong>接続前のHTTP診断</strong>
-              <div className="scope-row">
-                <Badge>health: 200</Badge>
-                <Badge>mcp: 401 OAuth</Badge>
-                <Badge>sse: ready only</Badge>
-                <Badge>headers: 406/415</Badge>
-              </div>
-              <pre className="code-box">{makeRelayHealthCheckCommand()}</pre>
-              <div className="service-actions">
-                <button
-                  className="secondary-button"
-                  onClick={() => copyText(makeRelayHealthCheckCommand(), "Relay health checkをコピーしました。")}
-                  type="button"
-                >
-                  <Clipboard size={16} />
-                  Health確認をコピー
-                </button>
-                <button
-                  className="secondary-button"
-                  onClick={() => copyText(makeRemoteMcpHeaderCheckCommand(), "Remote MCP診断コマンドをコピーしました。")}
-                  type="button"
-                >
-                  <Clipboard size={16} />
-                  MCP診断をコピー
-                </button>
-                <button
-                  className="secondary-button"
-                  onClick={() => copyText(makeRemoteMcpSseCheckCommand(), "Remote MCP SSE ready診断コマンドをコピーしました。")}
-                  type="button"
-                >
-                  <Clipboard size={16} />
-                  SSE診断をコピー
-                </button>
-              </div>
-              <pre className="code-box">{makeRemoteMcpHeaderCheckCommand()}</pre>
-              <pre className="code-box">{makeRemoteMcpSseCheckCommand()}</pre>
-            </div>
-            <div className="setup-step">
-              <Badge>Boundary</Badge>
-              <strong>Relayが保持しないもの</strong>
-              <div className="scope-row">
-                <Badge>Raw Vault</Badge>
-                <Badge>Raw Source</Badge>
-                <Badge>MCP body</Badge>
-                <Badge>Pack body</Badge>
-                <Badge>long-lived Pack</Badge>
-              </div>
-            </div>
-            <div className="setup-step">
-              <Badge>State</Badge>
-              <strong>Relayが監査用に保持するもの</strong>
-              <div className="scope-row">
-                <Badge>OAuth clients</Badge>
-                <Badge>request metadata</Badge>
-                <Badge>scope decision</Badge>
-              </div>
-              <pre className="code-box">{`${localRelayBaseUrl}/relay/state`}</pre>
-            </div>
-          </div>
-        </details>
-        <p className="muted">Remote MCP RelayはOAuth/PKCEでAIクライアントを認可し、pairing済みLocal AgentへWebSocketで要求を渡します。RelayはOAuth client登録とリクエストの監査メタデータだけを永続化し、Vault本文・MCP本文・Context Pack本文は置きません。</p>
-      </details>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Passive Capture</p>
-            <h3>AI会話から候補を作る</h3>
-          </div>
-          {captureSettings.enabled ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
-        </div>
-        <div className="toggle-row">
-          <span>{captureSettings.enabled ? "Capture中" : "停止中"}</span>
-          <button
-            className={captureSettings.enabled ? "danger-button" : "primary-button"}
-            onClick={() => updateCapture({ enabled: !captureSettings.enabled })}
-            type="button"
-          >
-            {captureSettings.enabled ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
-            {captureSettings.enabled ? "一時停止" : "開始"}
-          </button>
-        </div>
-        <div className="form-stack">
-          <Input
-            label="保持日数"
-            value={String(captureSettings.retentionDays)}
-            onChange={(value) => updateCapture({ retentionDays: Number(value) || 14 })}
-            type="number"
-          />
-          <label className="field">
-            <span>Captureを許可するAIサイト</span>
-            <input
-              value={allowedSitesDraft}
-              onChange={(event) => setAllowedSitesDraft(event.target.value)}
-              placeholder="chatgpt.com, claude.ai, gemini.google.com"
-            />
-          </label>
-          <div className="service-actions">
-            <button
-              className="secondary-button"
-              onClick={() =>
-                updateCapture({
-                  allowedSites: parseAllowedSitesInput(allowedSitesDraft)
-                })
-              }
-              type="button"
-            >
-              <ShieldCheck size={16} />
-              許可サイトを保存
-            </button>
-          </div>
-          <p className="muted">Raw transcriptは初期設定で{captureSettings.retentionDays}日後に消えます。候補が承認されるまでFactにはなりません。</p>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Recent Captures</p>
-            <h3>直近で取り込んだ会話断片</h3>
-          </div>
-          <Badge>{purgeableCaptureCount} active</Badge>
-        </div>
-        <div className="capture-status-strip">
-          <div>
-            <strong>{captureSettings.enabled ? "Captureは有効" : "Captureは停止中"}</strong>
-            <span>
-              {captureSettings.enabled
-                ? `${captureSettings.allowedSites.join(", ")} の会話断片だけをローカルで候補化します。`
-                : "停止中はブラウザ拡張や手動Captureから書き込みません。"}
-            </span>
-          </div>
-          <button
-            className="danger-button"
-            disabled={purgeableCaptureCount === 0}
-            onClick={purgeAllPassiveCaptures}
-            type="button"
-          >
-            <Trash2 size={16} />
-            {confirmAllCapturePurge ? "確認して全本文を消去" : "全本文を消去"}
-          </button>
-        </div>
-        {confirmAllCapturePurge && (
-          <div className="danger-confirm-card" role="status">
-            <strong>{purgeableCaptureCount}件のCapture本文を消去します</strong>
-            <span>Raw transcript本文だけを消去します。承認済みFact、未承認候補の履歴、Auditの件数記録は残ります。</span>
-            <button className="secondary-button" onClick={cancelAllCapturePurge} type="button">
-              <X size={16} />
-              取消
-            </button>
-          </div>
-        )}
-        <div className="capture-history-list">
-          {recentCaptures.map((event) => {
-            const sourceId = passiveCaptureSourceId(event);
-            const source = sourceId ? sources.find((item) => item.id === sourceId) : undefined;
-            const sourcePurged = source?.deletionState === "purged" || event.processingStatus === "purged";
-            const isConfirmingPurge = confirmCapturePurgeId === event.id;
-            return (
-              <div className="capture-history-row" key={event.id}>
-                <div>
-                  <div className="capture-history-heading">
-                    <strong>{connectorKindLabel(event.sourceClient)}</strong>
-                    <span>{formatDateTime(event.capturedAt)}</span>
-                  </div>
-                  <p>{capturePreviewText(source)}</p>
-                  <div className="scope-row">
-                    <Badge>{captureEventStatusLabel(event, source)}</Badge>
-                    <SensitivityBadge sensitivity={event.sensitivityGuess} />
-                    <Badge>{event.candidateIds.length}候補</Badge>
-                    <Badge>{event.urlHash}</Badge>
-                  </div>
-                  <span>保持期限: {formatDateTime(event.retentionUntil)}</span>
-                  {isConfirmingPurge && (
-                    <div className="danger-confirm-card inline-confirm" role="status">
-                      <strong>このCapture本文を消去します</strong>
-                      <span>Raw transcript本文だけを消去します。候補とAudit履歴は、本文なしの記録として残ります。</span>
-                      <button className="secondary-button" onClick={() => setConfirmCapturePurgeId(null)} type="button">
-                        <X size={16} />
-                        取消
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <button
-                  className="danger-button"
-                  disabled={!sourceId || sourcePurged}
-                  onClick={() => {
-                    if (!isConfirmingPurge) {
-                      setConfirmCapturePurgeId(event.id);
-                      return;
-                    }
-                    setConfirmCapturePurgeId(null);
-                    purgePassiveCaptureEvent(event.id);
-                  }}
-                  type="button"
-                >
-                  <Trash2 size={16} />
-                  {isConfirmingPurge ? "確認して本文消去" : "本文消去"}
-                </button>
-              </div>
-            );
-          })}
-          {recentCaptures.length === 0 && <p className="muted">まだCapture履歴はありません。</p>}
-        </div>
-      </div>
-
-      <details className="panel setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">Browser extension</p>
-            <h3>AIチャット画面から直接Inboxへ送る</h3>
-            <span>Chrome Native Messaging hostと拡張IDを設定します。</span>
-          </div>
-          <Badge>拡張設定</Badge>
-        </summary>
-        <div className="form-stack">
-          <div className="service-brief">
-            <strong>Chrome Native Hostを追加</strong>
-            <span>
-              Chromeで`browser-extension/`をLoad unpackedし、表示された拡張IDを貼ると、この端末のNative Messaging hostを設定します。
-            </span>
-            <Input
-              label="Chrome拡張ID"
-              value={captureExtensionId}
-              onChange={setCaptureExtensionId}
-              placeholder="例: abcdefghijklmnopabcdefghijklmnop"
-            />
-            <div className="service-actions">
-              <button
-                className="primary-button"
-                disabled={!nativePath || !captureExtensionIdReady || captureHostInstallBusy}
-                onClick={installCaptureHostManifest}
-                type="button"
-              >
-                <Plug size={16} />
-                Native Hostを追加
-              </button>
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  copyText(
-                    makeCaptureSetupCommand(captureExtensionId),
-                    "ブラウザ拡張セットアップコマンドをコピーしました。"
-                  )
-                }
-                type="button"
-              >
-                <Clipboard size={16} />
-                手動コマンドをコピー
-              </button>
-            </div>
-            {captureHostInstallResult && (
-              <span>
-                {captureHostInstallResult.alreadyConfigured ? "設定済み" : "追加済み"}: {captureHostInstallResult.manifestPath}
-                {captureHostInstallResult.backupPath ? ` / Backup: ${captureHostInstallResult.backupPath}` : ""}
-              </span>
-            )}
-            {!nativePath && <span>Desktop appで開くと、ここからChrome Native Hostを追加できます。</span>}
-            {captureExtensionId && !captureExtensionIdReady && (
-              <span>拡張IDはChrome拡張機能画面に表示される32文字のIDです。</span>
-            )}
-          </div>
-          <pre className="code-box">{makeCaptureSetupCommand(captureExtensionId)}</pre>
-          <p className="muted">Captureはpopup操作で明示的に実行され、Passive Captureが開始済みで、対象サイトが許可済みのときだけInbox候補を作ります。</p>
-          <button
-            className="secondary-button"
-            onClick={() =>
-              copyText(
-                makeCaptureSetupCommand(captureExtensionId),
-                "ブラウザ拡張セットアップコマンドをコピーしました。"
-              )
-            }
-            type="button"
-          >
-            <Clipboard size={16} />
-            セットアップをコピー
-          </button>
-        </div>
-      </details>
-
-      <details className="panel setup-disclosure">
-        <summary className="panel-summary">
-          <div>
-            <p className="eyebrow">Manual capture</p>
-            <h3>拡張が使えない時の入力</h3>
-            <span>会話断片を手動でInbox候補にします。自動Fact化はしません。</span>
-          </div>
-          <Badge>手動入力</Badge>
-        </summary>
-        <div className="form-stack">
-          <label className="field">
-            <span>AIクライアント</span>
-            <select value={captureClient} onChange={(event) => setCaptureClient(event.target.value as ConnectorKind)}>
-              <option value="chatgpt">ChatGPT</option>
-              <option value="claude_remote">Claude</option>
-              <option value="gemini">Gemini</option>
-              <option value="codex">Codex</option>
-            </select>
-          </label>
-          <Input label="会話ID" value={captureConversationId} onChange={setCaptureConversationId} />
-          <Textarea label="会話断片" value={captureText} onChange={setCaptureText} placeholder="例: 来月引っ越す予定。住所変更が必要な契約を後で確認したい。" />
-          <button className="primary-button" onClick={simulatePassiveCapture} type="button">
-            <Radio size={16} />
-            Capture候補を作成
-          </button>
-        </div>
-      </details>
-    </section>
   );
 }
 
@@ -5930,88 +3985,6 @@ function SettingsView({
   );
 }
 
-function AuditView({ events }: { events: VaultState["auditEvents"] }) {
-  const aiBoundaryEvents = events
-    .filter(isAiBoundaryAuditEvent)
-    .slice(0, 12);
-  const deliveredCount = events.filter((event) => event.eventType === "context_pack_delivered").length;
-  const confirmedCount = events.filter((event) => event.eventType === "context_pack_confirmed").length;
-  const blockedCount = events.filter(
-    (event) =>
-      event.eventType === "context_pack_denied" ||
-      (event.eventType === "context_pack_updated" && metadataString(event, "action") === "policy_invalidated")
-  ).length;
-
-  return (
-    <section className="view-grid audit-grid">
-      <div className="panel wide">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI delivery receipts</p>
-            <h3>どのAIに何が渡ったか</h3>
-          </div>
-          <ShieldCheck size={18} />
-        </div>
-        <div className="audit-summary-grid">
-          <Metric label="AIに渡した回数" value={String(deliveredCount)} />
-          <Metric label="取得可能にしたPack" value={String(confirmedCount)} />
-          <Metric label="拒否・失効" value={String(blockedCount)} />
-        </div>
-        <div className="delivery-receipt-list">
-          {aiBoundaryEvents.map((event) => (
-            <article className={`delivery-receipt ${auditReceiptTone(event)}`} key={event.id}>
-              <div>
-                <strong>{auditReceiptTitle(event)}</strong>
-                <span>{auditReceiptBody(event)}</span>
-                <small>{formatDateTime(event.occurredAt)} / {event.subjectId}</small>
-              </div>
-              <div className="delivery-receipt-meta">
-                <SensitivityBadge sensitivity={event.sensitivity} />
-                {metadataString(event, "trustBoundary") && <Badge>{metadataString(event, "trustBoundary")}</Badge>}
-                {typeof metadataNumber(event, "itemCount") === "number" && (
-                  <Badge>{metadataNumber(event, "itemCount")} Facts</Badge>
-                )}
-                {metadataString(event, "deliveryChannel") && <Badge>{deliveryChannelLabel(metadataString(event, "deliveryChannel"))}</Badge>}
-              </div>
-            </article>
-          ))}
-          {aiBoundaryEvents.length === 0 && (
-            <p className="muted">まだAIへの配達レシートはありません。Context Packを承認またはコピーするとここに残ります。</p>
-          )}
-        </div>
-      </div>
-
-      <div className="panel wide">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Audit trail</p>
-            <h3>保存されたこと、AIに渡ったこと、拒否したこと</h3>
-          </div>
-          <Clock size={18} />
-        </div>
-        <div className="table-list">
-          {events.slice(0, 80).map((event) => (
-            <div className="audit-row" key={event.id}>
-              <div>
-                <strong>{auditEventLabel(event)}</strong>
-                <span>
-                  {event.subjectType} / {formatDateTime(event.occurredAt)}
-                </span>
-                <span>{auditCompactMetadata(event)}</span>
-              </div>
-              <div className="audit-meta">
-                <SensitivityBadge sensitivity={event.sensitivity} />
-                <Badge>{event.actor}</Badge>
-              </div>
-            </div>
-          ))}
-          {events.length === 0 && <p className="muted">まだ監査イベントはありません。</p>}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function isAiBoundaryAuditEvent(event: AuditEvent): boolean {
   if (event.eventType === "context_pack_delivered") return true;
   if (event.eventType === "context_pack_confirmed") return true;
@@ -6538,14 +4511,6 @@ function Textarea({
       />
     </div>
   );
-}
-
-function Badge({ children }: { children: React.ReactNode }) {
-  return <span className="badge">{children}</span>;
-}
-
-function SensitivityBadge({ sensitivity }: { sensitivity: SensitivityTier }) {
-  return <span className={`badge sensitivity ${sensitivity}`}>{sensitivityLabel(sensitivity)}</span>;
 }
 
 export function isIsoExpired(value: string | null | undefined, nowMs = Date.now()): boolean {
@@ -7498,61 +5463,6 @@ function makeCaptureSetupCommand(extensionId: string): string {
   return `npm run capture:build\nLCV_EXTENSION_ID=${id} npm run extension:host-manifest`;
 }
 
-function captureUrlForClient(client: ConnectorKind, conversationId: string): string {
-  const id = encodeURIComponent(conversationId || "demo-thread");
-  switch (client) {
-    case "claude_desktop":
-    case "claude_remote":
-      return `https://claude.ai/chat/${id}`;
-    case "gemini":
-      return `https://gemini.google.com/app/${id}`;
-    case "codex":
-    case "generic_mcp":
-      return `lcv-local://${client}/${id}`;
-    case "copy_fallback":
-      return `lcv-local://copy_fallback/${id}`;
-    case "chatgpt":
-    default:
-      return `https://chatgpt.com/c/${id}`;
-  }
-}
-
-function parseAllowedSitesInput(value: string): string[] {
-  const sites: string[] = [];
-  for (const item of value.split(/[,\n]/)) {
-    const raw = item.trim().toLowerCase();
-    if (!raw) continue;
-    const withoutScheme = raw.includes("://") ? raw.split("://")[1] : raw;
-    const host = withoutScheme
-      .split("/")[0]
-      .split(":")[0]
-      .replace(/^\*\./, "")
-      .replace(/\.+$/, "");
-    if (!host || host.includes("@") || /\s/.test(host)) continue;
-    if (!sites.includes(host)) sites.push(host);
-  }
-  return sites;
-}
-
-function EmptyState({
-  title,
-  body,
-  action
-}: {
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="empty-state">
-      <Sparkles size={26} />
-      <h3>{title}</h3>
-      <p>{body}</p>
-      {action}
-    </div>
-  );
-}
-
 function titleForView(view: View): string {
   return {
     home: "Life Context Home",
@@ -7564,546 +5474,6 @@ function titleForView(view: View): string {
     audit: "Audit",
     settings: "Settings"
   }[view];
-}
-
-function connectionCopy(connector: ConnectorSession): string {
-  if (connector.transport === "local_mcp") {
-    return "同じ端末のAIクライアントから、Vault本体ではなくContext Packだけを要求します。";
-  }
-  if (connector.transport === "remote_mcp_relay") {
-    return "Relayは短命Context Packの受け渡しだけを扱い、Vault本体は保持しません。";
-  }
-  if (connector.transport === "browser_extension") {
-    return "AIチャット画面の会話断片をローカルに取り込み、未承認候補だけをInboxへ出します。";
-  }
-  return "MCPが使えないAI向けに、確認済みContext Packを手動で渡します。";
-}
-
-function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
-  if (!status) return "Desktopのみ";
-  if (status.relayMode === "hosted_agent") return status.agentConnected ? "Hosted接続済み" : status.agentManagedRunning ? "Hosted確認中" : "Hosted停止中";
-  if (status.relayManagedRunning && status.agentManagedRunning) return "ローカルRelay + Agent";
-  if (status.relayManagedRunning) return "ローカルRelay";
-  if (status.agentManagedRunning) return "ローカルAgent";
-  if (status.relayReachable || status.agentConnected) return "外部Relay";
-  return "停止中";
-}
-
-function hostedAgentProcessCopy(status: AiAccessServiceStatus | null): string {
-  if (status?.relayMode !== "hosted_agent") return "未使用";
-  return status.agentManagedRunning ? "起動中" : "停止中";
-}
-
-function hostedPairingCopy(status: AiAccessServiceStatus | null): string {
-  if (status?.relayMode !== "hosted_agent") return "未接続";
-  if (status.agentConnected) return "確認済み";
-  const state = status.agentRuntimeStatus?.state;
-  if (state === "connecting") return "確認中";
-  if (state === "disconnected") return "再pairingが必要";
-  return status.agentManagedRunning ? "待機中" : "停止中";
-}
-
-function hostedLastErrorCopy(status: AiAccessServiceStatus | null): string {
-  if (status?.relayMode !== "hosted_agent") return "なし";
-  return redactConnectionDiagnosticText(status.agentRuntimeStatus?.lastError) ?? "なし";
-}
-
-function aiAccessReadinessCopy(
-  status: AiAccessServiceStatus | null,
-  nativePath: string | null
-): {
-  badge: string;
-  title: string;
-  body: string;
-  detail: string;
-  tone: "ready" | "attention" | "neutral";
-} {
-  if (!nativePath) {
-    return {
-      badge: "Desktop required",
-      title: "Desktop版でAI連携を管理できます",
-      body: "ブラウザ表示だけでは、AIからVaultを呼ぶ常駐処理を起動できません。",
-      detail:
-        "Vault本体とAgentはローカルで動く前提です。Desktop版を開くと、RelayとAgentをここから起動できます。",
-      tone: "neutral"
-    };
-  }
-  if (status?.relayMode === "hosted_agent" && status.agentConnected) {
-    return {
-      badge: "Hosted ready",
-      title: "Hosted Relayとのpairingを確認しました",
-      body: "Web上のAIは公開HTTPS Relayへ要求し、Vault処理はこの端末のAgentが実行します。",
-      detail:
-        "外部AIへ渡る境界は確認済みContext Packだけです。Vault本文、Raw Source、未承認候補はHosted Relayへ保存しません。",
-      tone: "ready"
-    };
-  }
-  if (status?.relayMode === "hosted_agent" && status.agentManagedRunning) {
-    const hostedError = redactConnectionDiagnosticText(status.agentRuntimeStatus?.lastError);
-    return {
-      badge: "Pairing check",
-      title: "Hosted Relayへのpairingを待っています",
-      body: "この端末のアプリは起動中です。Relay側の確認が取れるまでReady扱いにしません。",
-      detail:
-        hostedError
-          ? `直近の接続エラー: ${hostedError}`
-          : "Relayは短命Context Packの受け渡しだけを扱います。Vault本文、Raw Source、未承認候補はHosted Relayへ保存しません。",
-      tone: "attention"
-    };
-  }
-  if (status?.relayMode === "hosted_agent") {
-    return {
-      badge: "Hosted stopped",
-      title: "Hosted Relayへ接続する端末アプリが停止しています",
-      body: "短命Agent WebSocket URLを再発行して、この端末のAgentをもう一度起動してください。",
-      detail:
-        "pairing URLは保存しません。Hosted Relayで新しいURLを発行してから接続します。",
-      tone: "attention"
-    };
-  }
-  if (status?.agentConnected) {
-    return {
-      badge: "Ready",
-      title: "AIがContext Packを要求できる状態です",
-      body: "RelayとLocal Agentが接続済みです。Control Centerは閉じても常駐します。",
-      detail:
-        "外部AIへ渡る境界はContext Packだけです。未承認候補、Raw Source、Vault全体はこの接続から直接渡しません。",
-      tone: "ready"
-    };
-  }
-  if (status?.relayReachable && !status.relayManagedRunning) {
-    return {
-      badge: "External relay",
-      title: "外部Relayを検知しています",
-      body: "アプリは自分が起動していないRelayへAgentを自動接続しません。",
-      detail:
-        "手動で起動したRelayを使う場合は手動pairingを続けてください。アプリ管理にしたい場合は外部Relayを停止してからAI連携を開始します。",
-      tone: "attention"
-    };
-  }
-  if (status?.relayReachable) {
-    return {
-      badge: "Relay online",
-      title: "Relayは起動していますがAgent待ちです",
-      body: "Local Agentの接続が完了するとAIからVaultに要求を送れます。",
-      detail:
-        "AgentはVaultをローカルで検索し、ポリシーと確認画面を通したContext PackだけをRelayへ返します。",
-      tone: "attention"
-    };
-  }
-  return {
-    badge: "Not started",
-    title: "AI連携はまだ停止しています",
-    body: "AI連携を開始するとRelayとLocal Agentをまとめて起動します。閉じた後はmenu bar/trayから戻せます。",
-    detail:
-      "最初は背景情報を承認してから起動すると、AIに渡すContext Packの確認まで一気に試せます。",
-    tone: "neutral"
-  };
-}
-
-export function redactConnectionDiagnosticText(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const redacted = value
-    .replace(/([?&](?:pairing_code|token|access_token|refresh_token|code)=)[^&\s]+/gi, "$1...")
-    .replace(/\b(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1...")
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1...")
-    .replace(/\b(Authorization:\s*)(?!Bearer\s)[^\s]+/gi, "$1...")
-    .trim();
-  return redacted.length > 180 ? `${redacted.slice(0, 177)}...` : redacted;
-}
-
-export function aiConnectionDiagnostic(
-  status: AiAccessServiceStatus | null,
-  nativePath: string | null,
-  hostedAgentWebsocketUrl: string,
-  webMcpEndpoint: string | null
-): ConnectionDiagnostic {
-  const hostedMode = status?.relayMode === "hosted_agent";
-  const hostedUrlEntered = hostedAgentWebsocketUrl.trim().length > 0;
-  const webReady = Boolean(webMcpEndpoint);
-  const localReady = Boolean(status?.agentConnected && !hostedMode);
-  const issue = redactConnectionDiagnosticText(status?.agentRuntimeStatus?.lastError ?? status?.lastError);
-  const items: ConnectionDiagnosticItem[] = [
-    {
-      label: "Desktop Vault",
-      value: nativePath ? "この端末で利用中" : "Desktop appが必要",
-      state: nativePath ? "ready" : "blocked"
-    },
-    {
-      label: "Relay",
-      value: hostedMode
-        ? status?.agentConnected
-          ? "Hosted pairing済み"
-          : status?.agentManagedRunning
-          ? "Hosted確認待ち"
-          : "Hosted停止中"
-        : status?.relayReachable
-        ? "endpoint応答あり"
-        : "offline",
-      state: hostedMode
-        ? status?.agentConnected
-          ? "ready"
-          : "pending"
-        : status?.relayReachable
-        ? "ready"
-        : nativePath
-        ? "pending"
-        : "blocked"
-    },
-    {
-      label: "Local Agent",
-      value: status?.agentConnected
-        ? "Vaultへ接続済み"
-        : status?.agentManagedRunning
-        ? "起動中"
-        : "offline",
-      state: status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
-    },
-    {
-      label: "Web AI",
-      value: webReady
-        ? "Remote MCP登録可"
-        : hostedMode
-        ? "pairing確認待ち"
-        : "Hosted Relay未設定",
-      state: webReady ? "ready" : nativePath ? "pending" : "blocked"
-    }
-  ];
-
-  if (!nativePath) {
-    return {
-      tone: "blocked",
-      title: "Desktop appでVaultを開く必要があります",
-      summary:
-        "ブラウザ表示ではRelayとAgentを起動できません。Vault本体はローカルに置き、AIへは確認済みContext Packだけを返します。",
-      nextStep: "Desktop版を開いて暗号化Vaultを読み込みます。",
-      issue: null,
-      primaryAction: "open_desktop",
-      items
-    };
-  }
-
-  if (hostedMode && status?.agentConnected) {
-    return {
-      tone: "ready",
-      title: "Web AIからContext Packを要求できます",
-      summary:
-        "Hosted Relayとのpairingを確認済みです。Relayは本文を保持せず、この端末のAgentが検索と承認待ちを処理します。",
-      nextStep: "ChatGPTやClaude WebへRemote MCP connector情報を登録します。",
-      issue: null,
-      primaryAction: "copy_web_connector",
-      items
-    };
-  }
-
-  if (hostedMode) {
-    return {
-      tone: "attention",
-      title: status?.agentManagedRunning
-        ? "Hosted Relayのpairing確認待ちです"
-        : "Hosted Relayへ接続するAgentが停止しています",
-      summary:
-        "Web上のAIが使う公開HTTPS入口は、pairing確認後だけ表示・コピーできます。短命URLはVaultに保存しません。",
-      nextStep: hostedUrlEntered
-        ? "Agent接続を再実行し、pairingが確認されたらWeb AIへ登録します。"
-        : "Hosted Relayで短命Agent WebSocket URLを発行して貼り付けます。",
-      issue,
-      primaryAction: hostedUrlEntered ? "start_hosted_agent" : "refresh",
-      items
-    };
-  }
-
-  if (localReady) {
-    return {
-      tone: "ready",
-      title: "同じ端末のAIからVaultを呼べます",
-      summary:
-        "Local MCP/Agentは接続済みです。Web AIで使う場合はHosted Relayをpairingし、普段使うAIにはContext Pack境界だけを登録します。",
-      nextStep: "まずRequestsでContext Pack確認とコピーfallbackを試します。",
-      issue: null,
-      primaryAction: "open_requests",
-      items
-    };
-  }
-
-  if (status?.relayReachable && !status.relayManagedRunning) {
-    return {
-      tone: "attention",
-      title: "外部Relayを検知しています",
-      summary:
-        "アプリが起動していないRelayには自動でAgentを接続しません。手動pairingか、外部Relay停止後のアプリ管理起動を選びます。",
-      nextStep: "self-host運用なら手動pairingを続け、通常利用なら外部Relayを止めてAI連携を開始します。",
-      issue,
-      primaryAction: "refresh",
-      items
-    };
-  }
-
-  if (status?.relayReachable) {
-    return {
-      tone: "attention",
-      title: "Relayは起動していますがAgent待ちです",
-      summary:
-        "AIからの要求入口は応答しています。Local Agentが接続すると、Vault検索とContext Pack生成をこの端末で実行できます。",
-      nextStep: "AI連携をもう一度開始してAgent接続を戻します。",
-      issue,
-      primaryAction: "start_ai_access",
-      items
-    };
-  }
-
-  if (issue) {
-    return {
-      tone: "attention",
-      title: "AI Accessの直近エラーがあります",
-      summary:
-        "RelayまたはAgentの起動確認で問題が出ています。Context Pack本文やVault本文は診断表示には含めません。",
-      nextStep: "状態を更新し、必要ならAI連携をもう一度開始します。",
-      issue,
-      primaryAction: "refresh",
-      items
-    };
-  }
-
-  return {
-    tone: "neutral",
-    title: "AI連携は停止中です",
-    summary:
-      "普段使うAIから呼び出すにはRelayとAgentを起動します。保存済みFactは、確認済みContext PackになるまでAIへ渡りません。",
-    nextStep: "AI連携を開始してLocal MCP用のRelayとAgentを起動します。",
-    issue: null,
-    primaryAction: "start_ai_access",
-    items
-  };
-}
-
-export function connectionDiagnosticSummaryBadge(
-  diagnostic: Pick<ConnectionDiagnostic, "tone" | "items">
-): { label: string; detail: string } {
-  const readyCount = diagnostic.items.filter((item) => item.state === "ready").length;
-  const blockedCount = diagnostic.items.filter((item) => item.state === "blocked").length;
-  const totalCount = diagnostic.items.length;
-  const detail = `${readyCount}/${totalCount} ready`;
-
-  if (diagnostic.tone === "ready") {
-    return { label: "Ready", detail };
-  }
-  if (diagnostic.tone === "blocked" || blockedCount > 0) {
-    return { label: "利用不可", detail };
-  }
-  if (diagnostic.tone === "attention") {
-    return { label: "要確認", detail };
-  }
-  return { label: "確認中", detail };
-}
-
-export function hostedRelayRegistrationReadiness(
-  status: AiAccessServiceStatus | null,
-  nativePath: string | null,
-  hostedAgentWebsocketUrl: string,
-  webMcpEndpoint: string | null
-): HostedRelayRegistrationReadiness {
-  const hostedPreview = hostedRelayMcpUrlFromAgentWs(hostedAgentWebsocketUrl);
-  const urlEntered = hostedAgentWebsocketUrl.trim().length > 0;
-  const validAgentUrl = Boolean(hostedPreview);
-  const hostedMode = status?.relayMode === "hosted_agent";
-  const confirmed = isHostedRelayConfirmed(status);
-  const publicMcpReady = Boolean(webMcpEndpoint && isPublicHttpsUrl(webMcpEndpoint));
-  const oauthMetadataReady = publicMcpReady;
-  const items: ConnectionDiagnosticItem[] = [
-    {
-      label: "Desktop Vault",
-      value: nativePath ? "この端末で開いている" : "Desktop appが必要",
-      state: nativePath ? "ready" : "blocked"
-    },
-    {
-      label: "短命Agent URL",
-      value: validAgentUrl
-        ? "WSS pairing URLを検証済み"
-        : urlEntered
-          ? "形式を確認してください"
-          : "Hosted Relayで発行待ち",
-      state: validAgentUrl ? "ready" : urlEntered ? "blocked" : "pending"
-    },
-    {
-      label: "Relay pairing",
-      value: confirmed
-        ? "この端末のAgentを確認済み"
-        : hostedMode && status?.agentManagedRunning
-          ? "Agent接続を確認中"
-          : "未確認",
-      state: confirmed ? "ready" : nativePath ? "pending" : "blocked"
-    },
-    {
-      label: "Public MCP URL",
-      value: publicMcpReady
-        ? "公開HTTPS URLを登録可能"
-        : validAgentUrl
-          ? "pairing後に表示"
-          : "未生成",
-      state: publicMcpReady ? "ready" : validAgentUrl ? "pending" : "blocked"
-    },
-    {
-      label: "OAuth metadata",
-      value: oauthMetadataReady
-        ? "metadata URLを接続情報へ含めます"
-        : "公開MCP URL確定後に生成",
-      state: oauthMetadataReady ? "ready" : validAgentUrl ? "pending" : "blocked"
-    },
-    {
-      label: "Data boundary",
-      value: "Context PackだけをAIへ返す",
-      state: "ready"
-    }
-  ];
-
-  if (!nativePath) {
-    return {
-      tone: "blocked",
-      title: "Desktop appでVaultを開いてください",
-      summary:
-        "Web AI登録には、この端末のVault Agentが必要です。ブラウザ表示だけではVaultをHosted Relayへpairingできません。",
-      nextStep: "Desktop appを開いてからHosted Relayの短命URLを貼り付けます。",
-      items
-    };
-  }
-
-  if (urlEntered && !validAgentUrl) {
-    return {
-      tone: "blocked",
-      title: "Agent URLの形式を確認してください",
-      summary:
-        "Hosted Relayが発行した `wss://.../agent/ws?pairing_code=...` だけを受け付けます。URL本文は保存しません。",
-      nextStep: "Hosted Relayで新しい短命Agent WebSocket URLを発行し直します。",
-      items
-    };
-  }
-
-  if (confirmed && publicMcpReady) {
-    return {
-      tone: "ready",
-      title: "Web AIへ登録できます",
-      summary:
-        "公開HTTPS Relayとのpairing確認済みです。ChatGPT/Claude WebにはRemote MCP接続情報を登録し、Vault処理はこの端末で行います。",
-      nextStep: "Web AI用接続情報をコピーして、普段使うAIのConnector設定へ貼り付けます。",
-      items
-    };
-  }
-
-  if (validAgentUrl) {
-    return {
-      tone: "attention",
-      title: hostedMode ? "pairing確認待ちです" : "Agent接続を開始できます",
-      summary:
-        "公開MCP URLは推定できますが、AIへ登録できるのはRelayがこの端末のAgentを確認した後です。",
-      nextStep: "Hosted RelayへAgent接続を実行し、確認後にWeb AI接続情報をコピーします。",
-      items
-    };
-  }
-
-  return {
-    tone: "neutral",
-    title: "Hosted Relay URLを待っています",
-    summary:
-      "ChatGPT/Claude Webはlocalhostへ直接来られません。公開HTTPS Relayで短命Agent WebSocket URLを発行して貼り付けます。",
-    nextStep: "self-hostのpairingコマンド、または運用中のHosted Relayから短命URLを発行します。",
-    items
-  };
-}
-
-export function webAiRegistrationGuides(
-  readiness: HostedRelayRegistrationReadiness,
-  webConnectorInfo: Record<string, unknown> | null
-): WebAiRegistrationGuide[] {
-  const ready = readiness.tone === "ready" && Boolean(webConnectorInfo);
-  const status: ConnectionDiagnosticState = readiness.tone === "blocked" ? "blocked" : ready ? "ready" : "pending";
-  const statusLabel = ready
-    ? "登録情報をコピーできます"
-    : readiness.tone === "blocked"
-      ? "先にVault/Agentを確認"
-      : "pairing完了待ち";
-  const blockedAction = readiness.tone === "blocked" ? "Vault/Agentを確認" : "pairing後にコピー";
-  const firstStep = ready
-    ? "接続情報をコピー"
-    : readiness.tone === "blocked"
-      ? "Desktop appでVaultを開く"
-      : "Hosted Relayのpairingを完了";
-
-  return [
-    {
-      provider: "ChatGPT",
-      status,
-      statusLabel,
-      steps: [firstStep, "ChatGPTに接続情報を貼り付け", "初回要求時にContext Packを確認"],
-      actionLabel: ready ? "ChatGPT用JSONをコピー" : blockedAction,
-      boundary: "ChatGPTへ渡るのは、確認済みContext Packの本文と出典snippetだけです。接続に失敗した場合は登録方式を切り替えられます。"
-    },
-    {
-      provider: "Claude Web",
-      status,
-      statusLabel,
-      steps: [firstStep, "Remote MCP connectorへ登録", "回答前のPack内容を確認"],
-      actionLabel: ready ? "Claude用JSONをコピー" : blockedAction,
-      boundary: "RelayはVault本文を保持せず、この端末のAgentが検索と承認待ちを処理します。"
-    },
-    {
-      provider: "MCPなしのAI",
-      status: "ready",
-      statusLabel: "いつでも利用可",
-      steps: ["RequestsでPackを作成", "内容を確認してコピー", "普段使うAIへ貼り付け"],
-      actionLabel: "Requestsで確認・コピー",
-      boundary: "MCP未接続でも、AIへ渡した内容をAuditで追える導線です。"
-    }
-  ];
-}
-
-export function aiAccessChecklistItems(
-  status: AiAccessServiceStatus | null,
-  nativePath: string | null
-): Array<{ label: string; detail: string; state: "ready" | "pending" | "blocked" }> {
-  return [
-    {
-      label: "Desktop Vault",
-      detail: nativePath
-        ? "暗号化Vaultをこの端末で開いています。"
-        : "Desktop appで開くとRelayとAgentを管理できます。",
-      state: nativePath ? "ready" : "blocked"
-    },
-    {
-      label: "Relay endpoint",
-      detail: status?.relayMode === "hosted_agent"
-        ? status.agentConnected
-          ? "Hosted HTTPS Relayとのpairingを確認済みです。"
-          : "pairing確認後にAIへ登録できます。今は確認待ちです。"
-        : status?.relayReachable
-        ? "Remote MCPのHTTPS/HTTP入口が応答しています。OAuth metadataはCIMDとDCRを案内します。"
-        : "AI連携を開始してMCP endpointを起動します。",
-      state: status?.relayMode === "hosted_agent" ? status.agentConnected ? "ready" : "pending" : status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
-    },
-    {
-      label: "Local Agent",
-      detail: status?.relayMode === "hosted_agent"
-        ? status.agentConnected
-          ? "この端末のAgentがHosted RelayのWebSocketへ接続済みです。"
-          : "この端末のアプリを起動しています。Relayとの確認待ちです。"
-        : status?.agentConnected
-        ? "Vault検索とContext Pack生成をローカルで実行できます。"
-        : "Agent接続後にAIからの要求をVault Coreへ渡せます。",
-      state: status?.relayMode === "hosted_agent" ? status.agentConnected ? "ready" : "pending" : status?.agentConnected ? "ready" : nativePath ? "pending" : "blocked"
-    },
-    {
-      label: "Streamable HTTP",
-      detail: status?.relayReachable
-        ? "POST JSON-RPC、GET SSE ready、MCP session、DELETE終了に対応しています。SSE再開はメタデータ限定で、AI本文やContext Pack本文は保存しません。"
-        : "Relay起動後にSSE ready診断で確認できます。再開対応は/relay/stateで確認します。",
-      state: status?.relayReachable ? "ready" : nativePath ? "pending" : "blocked"
-    },
-    {
-      label: "Context Pack boundary",
-      detail: "AIへ返すのは承認済みFactから作る短命Context Packだけです。",
-      state: "ready"
-    }
-  ];
 }
 
 function makeClaudeDesktopConfig(nativePath: string | null): string {
@@ -8123,157 +5493,6 @@ function makeClaudeDesktopConfig(nativePath: string | null): string {
     null,
     2
   );
-}
-
-function makeRelayCommand(nativePath: string | null): string {
-  const vaultPath =
-    nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3";
-  return [
-    `LCV_RELAY_TOKEN=${localRelayToken}`,
-    `LCV_RELAY_BIND=127.0.0.1:8765`,
-    `LCV_RELAY_BASE_URL=${localRelayBaseUrl}`,
-    `LCV_RELAY_TENANT_ID=local`,
-    `LCV_RELAY_STATE_PATH="${makeRelayStatePath(nativePath)}"`,
-    `LCV_RELAY_ALLOW_DIRECT_SIDECAR=0`,
-    `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
-    `LCV_VAULT_DB_PATH="${vaultPath}"`,
-    `src-tauri/target/release/lcv-relay`
-  ].join(" ");
-}
-
-function makePairingCommand(): string {
-  return `curl -s -X POST ${localRelayBaseUrl}/pairing/start`;
-}
-
-function makeHostedPairingCurlTemplate(): string {
-  return [
-    "curl -fsS",
-    "  -H 'Authorization: Bearer <LCV_RELAY_ADMIN_TOKEN>'",
-    "  -X POST",
-    "  https://relay.example.com/pairing/start"
-  ].join(" \\\n");
-}
-
-function makeRelayHealthCheckCommand(): string {
-  return `curl -fsS ${localRelayBaseUrl}/health`;
-}
-
-function makeRemoteMcpHeaderCheckCommand(): string {
-  return [
-    "curl -i -X POST",
-    "  -H 'Content-Type: application/json'",
-    "  -H 'Accept: application/json, text/event-stream'",
-    "  -H 'MCP-Protocol-Version: 2025-11-25'",
-    "  --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'",
-    `  ${localRelayUrl}`
-  ].join(" \\\n");
-}
-
-function makeRemoteMcpSseCheckCommand(): string {
-  return [
-    "curl -i -N",
-    "  -H 'Accept: text/event-stream'",
-    "  -H 'MCP-Protocol-Version: 2025-11-25'",
-    `  ${localRelayUrl}`
-  ].join(" \\\n");
-}
-
-function makeRelayStatePath(nativePath: string | null): string {
-  if (nativePath) {
-    return nativePath.replace(/vault\.sqlite3$/, "relay-state.json");
-  }
-  return "$HOME/Library/Application Support/dev.life-context-vault.poc/relay-state.json";
-}
-
-function hostedRelayMcpUrlFromAgentWs(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "wss:") return null;
-    if (url.username || url.password || url.hash) return null;
-    if (url.pathname !== "/agent/ws") return null;
-    if (!url.searchParams.get("pairing_code")) return null;
-    if ([...url.searchParams.keys()].some((key) => key !== "pairing_code")) return null;
-    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-    url.pathname = "/mcp";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-export function isHostedRelayConfirmed(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null
-): boolean {
-  return status?.relayMode === "hosted_agent" && Boolean(status.agentConnected);
-}
-
-export function canCopyAiMcpEndpoint(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null
-): boolean {
-  return status?.relayMode !== "hosted_agent" || Boolean(status.agentConnected);
-}
-
-export function aiMcpEndpointDisplay(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null,
-  endpoint: string
-): string {
-  return canCopyAiMcpEndpoint(status) ? endpoint : "pairing確認後に表示";
-}
-
-export function webAiMcpEndpoint(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null,
-  endpoint: string
-): string | null {
-  if (status?.relayMode === "hosted_agent") {
-    return status.agentConnected ? endpoint : null;
-  }
-  return isLocalhostUrl(endpoint) ? null : endpoint;
-}
-
-function makeAgentCommand(nativePath: string | null): string {
-  const vaultPath =
-    nativePath ?? "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3";
-  return [
-    `LCV_AGENT_RELAY_WS="ws://127.0.0.1:8765/agent/ws?pairing_code=<pairingCode>"`,
-    `LCV_MCP_COMMAND="${localMcpBinaryPath}"`,
-    `LCV_VAULT_DB_PATH="${vaultPath}"`,
-    `${localAgentBinaryPath}`
-  ].join(" ");
-}
-
-function makeRemoteConnectorInfo(mcpServerUrl: string) {
-  const baseUrl = relayBaseUrlFromMcpUrl(mcpServerUrl);
-  return {
-    mcpServerUrl,
-    authorizationServerMetadata: `${baseUrl}/.well-known/oauth-authorization-server`,
-    protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
-    clientIdMetadataDocuments: "supported for allowed public PKCE clients; DCR remains available as fallback",
-    dynamicClientRegistration: `${baseUrl}/oauth/register`,
-    expectedOAuth: "CIMD or DCR + Authorization Code + PKCE S256 with resource-bound access tokens",
-    relayStateStatus: `${baseUrl}/relay/state`,
-    scopes: [
-      "context_pack.request",
-      "memory.propose",
-      "policy.read",
-      "request.status"
-    ]
-  };
-}
-
-function relayBaseUrlFromMcpUrl(mcpServerUrl: string): string {
-  try {
-    const url = new URL(mcpServerUrl);
-    url.pathname = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return localRelayBaseUrl;
-  }
 }
 
 function mergeVaultStates(externalState: VaultState, localState: VaultState): VaultState {

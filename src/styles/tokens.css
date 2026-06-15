@@ -1,0 +1,52 @@
+:root {
+  /* Color: calm, low-saturation paper */
+  --bg-app: #f7f7f5;
+  --bg-surface: #ffffff;
+  --bg-sunken: #efefec;
+  --border-subtle: #e2e2de;
+  --border-strong: #c9c9c4;
+  --ink-primary: #1a1a1a;
+  --ink-secondary: #555558;
+  --ink-muted: #8a8a8e;
+  --accent: #2f5fa8;
+  --accent-soft: #e8eff8;
+  --tone-ready: #2e7d5b;
+  --tone-ready-soft: #e6f4ee;
+  --tone-attention: #b26a00;
+  --tone-attention-soft: #fbf0e0;
+  --tone-blocked: #b0322b;
+  --tone-blocked-soft: #fbe9e7;
+
+  /* Spacing: 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Type: system stack + 7-level scale */
+  --font-sans: -apple-system, "Hiragino Kaku Gothic ProN", "Segoe UI", system-ui, sans-serif;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --fs-2xl: 28px;
+  --lh-body: 1.5;
+  --lh-heading: 1.25;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Shadow */
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /* Motion */
+  --motion-fast: 120ms ease;
+}

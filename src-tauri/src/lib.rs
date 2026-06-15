@@ -3,21 +3,19 @@ use base64::{
   Engine as _,
 };
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::Sha256;
 use std::{
   collections::HashSet,
   env,
   ffi::OsString,
   fs,
   io::{Cursor, Read, Write},
-  net::TcpStream,
+
   path::{Path, PathBuf},
-  process::{Child, Command, Output, Stdio},
-  sync::Mutex,
+  process::{Command, Output, Stdio},
+
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -35,59 +33,22 @@ mod embeddings;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
-const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
-const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
-const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const LOGIN_ITEM_LABEL: &str = "dev.life-context-vault.ai-access";
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "life-context-vault-tray";
 const TRAY_MENU_OPEN_ID: &str = "open-control-center";
-const TRAY_MENU_START_AI_ACCESS_ID: &str = "start-ai-access";
-const TRAY_MENU_STOP_AI_ACCESS_ID: &str = "stop-ai-access";
 const TRAY_MENU_QUIT_ID: &str = "quit-life-context-vault";
 const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
-const AGENT_STATUS_FRESH_SECONDS: u64 = 30;
 const SOURCE_CHUNK_TARGET_CHARS: usize = 4_000;
 const SOURCE_CHUNK_OVERLAP_CHARS: usize = 300;
-
-struct AiAccessSupervisor {
-  relay: Option<Child>,
-  agent: Option<Child>,
-  pairing_code: Option<String>,
-  external_relay_base_url: Option<String>,
-  agent_status_path: Option<PathBuf>,
-  agent_status_token: Option<String>,
-  agent_process_id: Option<u32>,
-  relay_token: String,
-  handoff_secret: String,
-  last_error: Option<String>,
-}
-
-impl Default for AiAccessSupervisor {
-  fn default() -> Self {
-    Self {
-      relay: None,
-      agent: None,
-      pairing_code: None,
-      external_relay_base_url: None,
-      agent_status_path: None,
-      agent_status_token: None,
-      agent_process_id: None,
-      relay_token: random_local_token(),
-      handoff_secret: random_local_token(),
-      last_error: None,
-    }
-  }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 enum WindowLifecycleDecision {
   HideToBackground,
-  StopManagedAiAccess,
   Ignore,
 }
 
@@ -101,38 +62,9 @@ enum WindowLifecycleEventKind {
 fn window_lifecycle_decision(event_kind: WindowLifecycleEventKind) -> WindowLifecycleDecision {
   match event_kind {
     WindowLifecycleEventKind::CloseRequested => WindowLifecycleDecision::HideToBackground,
-    WindowLifecycleEventKind::Destroyed => WindowLifecycleDecision::StopManagedAiAccess,
+    WindowLifecycleEventKind::Destroyed => WindowLifecycleDecision::Ignore,
     WindowLifecycleEventKind::Other => WindowLifecycleDecision::Ignore,
   }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AiAccessServiceStatus {
-  managed_by_app: bool,
-  relay_managed_running: bool,
-  agent_managed_running: bool,
-  relay_reachable: bool,
-  agent_connected: bool,
-  relay_url: String,
-  mcp_server_url: String,
-  relay_state_status_url: String,
-  relay_mode: String,
-  agent_runtime_status: Option<AgentRuntimeStatus>,
-  pairing_code: Option<String>,
-  last_error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentRuntimeStatus {
-  state: String,
-  relay_base_url: Option<String>,
-  updated_at: Option<u64>,
-  last_connected_at: Option<u64>,
-  last_error: Option<String>,
-  status_token: Option<String>,
-  process_id: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -157,17 +89,6 @@ struct ClaudeDesktopConfigInstallResult {
   config_path: String,
   backup_path: Option<String>,
   server_name: String,
-  already_configured: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserCaptureHostInstallResult {
-  manifest_path: String,
-  backup_path: Option<String>,
-  host_name: String,
-  host_path: String,
-  extension_id: String,
   already_configured: bool,
 }
 
@@ -225,18 +146,6 @@ struct NativeContextPackMutationResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RelayContextPackHandoffResult {
-  stored: bool,
-  request_id: String,
-  expires_at: Option<u64>,
-  ttl_seconds: Option<u64>,
-  payload: Option<String>,
-  updated_at: Option<String>,
-  generated_by: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct NativeSourceIngestResult {
   payload: String,
   updated_at: Option<String>,
@@ -285,22 +194,6 @@ struct NativeCandidateReviewResult {
   fact_id: Option<String>,
   superseded_fact_ids: Vec<String>,
   invalidated_pack_count: usize,
-  generated_by: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativePassiveCaptureResult {
-  payload: String,
-  updated_at: Option<String>,
-  accepted: bool,
-  status: String,
-  message: String,
-  event_id: Option<String>,
-  source_id: Option<String>,
-  candidate_ids: Vec<String>,
-  detected_sensitivity: String,
-  retention_until: Option<String>,
   generated_by: String,
 }
 
@@ -494,14 +387,6 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   fs::create_dir_all(&dir)
     .map_err(|error| format!("failed to create app data dir: {error}"))?;
   Ok(dir.join("vault.sqlite3"))
-}
-
-fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
-  vault_db_path(app).map(|path| path.with_file_name("relay-state.json"))
-}
-
-fn agent_status_path(app: &AppHandle) -> Result<PathBuf, String> {
-  vault_db_path(app).map(|path| path.with_file_name("agent-status.json"))
 }
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
@@ -6704,51 +6589,6 @@ fn context_pack_receipt_metadata(
   })
 }
 
-fn record_context_pack_delivery_at_path(
-  path: &Path,
-  request_id: &str,
-  channel: &str,
-  status: &str,
-  ttl_seconds: Option<u64>,
-  relay_expires_at: Option<u64>,
-  message: Option<&str>,
-) -> Result<VaultCoreSettingsUpdateResult, String> {
-  let mut connection = open_vault_db_at_path(path)?;
-  let mut vault = load_vault_json_from_connection(&connection)?;
-  let pack = vault
-    .get("contextPacks")
-    .and_then(Value::as_array)
-    .and_then(|packs| {
-      packs
-        .iter()
-        .find(|pack| optional_str_field(pack, "requestId").as_deref() == Some(request_id))
-    })
-    .cloned()
-    .ok_or_else(|| format!("ContextPack was not found for request: {request_id}"))?;
-  let metadata = context_pack_receipt_metadata(
-    &vault,
-    &pack,
-    Some(channel),
-    Some(status),
-    ttl_seconds,
-    relay_expires_at,
-    message,
-  );
-  push_json_array(
-    &mut vault,
-    "auditEvents",
-    audit_event(
-      "context_pack_delivered",
-      "context_pack",
-      &str_field(&pack, "id"),
-      &str_field(&pack, "maxSensitivityIncluded"),
-      metadata,
-    ),
-  );
-  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
-  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
-}
-
 fn empty_vault_json() -> Value {
   json!({
     "version": 2,
@@ -6799,378 +6639,11 @@ fn stable_hash(text: &str) -> String {
   format!("hash_{hash:x}")
 }
 
-fn random_local_token() -> String {
-  let mut bytes = [0u8; 32];
-  getrandom::getrandom(&mut bytes)
-    .expect("OS randomness is required to generate local Relay tokens");
-  format!("lcv_{}", URL_SAFE_NO_PAD.encode(bytes))
-}
-
 fn system_time_seconds(time: SystemTime) -> u64 {
   time
     .duration_since(UNIX_EPOCH)
     .map(|duration| duration.as_secs())
     .unwrap_or_default()
-}
-
-fn refresh_child(child: &mut Option<Child>) -> bool {
-  let Some(process) = child.as_mut() else {
-    return false;
-  };
-  match process.try_wait() {
-    Ok(None) => true,
-    Ok(Some(_)) | Err(_) => {
-      *child = None;
-      false
-    }
-  }
-}
-
-fn stop_child(child: &mut Option<Child>) {
-  if let Some(mut process) = child.take() {
-    let _ = process.kill();
-    let _ = process.wait();
-  }
-}
-
-fn clear_supervisor_agent_status(supervisor: &mut AiAccessSupervisor) {
-  if let Some(path) = supervisor.agent_status_path.take() {
-    let _ = fs::remove_file(path);
-  }
-  supervisor.agent_status_token = None;
-  supervisor.agent_process_id = None;
-}
-
-fn read_agent_runtime_status(path: &Path) -> Option<AgentRuntimeStatus> {
-  fs::read_to_string(path)
-    .ok()
-    .and_then(|content| serde_json::from_str::<AgentRuntimeStatus>(&content).ok())
-}
-
-fn agent_runtime_status_matches_relay(
-  status: &AgentRuntimeStatus,
-  relay_url: &str,
-  expected_token: Option<&str>,
-  expected_process_id: Option<u32>,
-  now_seconds: u64,
-) -> bool {
-  status.state == "connected"
-    && status
-      .relay_base_url
-      .as_deref()
-      .is_some_and(|base_url| base_url == relay_url)
-    && expected_token.is_some()
-    && status.status_token.as_deref() == expected_token
-    && expected_process_id.is_some()
-    && status.process_id == expected_process_id
-    && status
-      .updated_at
-      .is_some_and(|updated_at| now_seconds.saturating_sub(updated_at) <= AGENT_STATUS_FRESH_SECONDS)
-}
-
-fn local_relay_json(method: &str, path: &str, body: Option<&str>) -> Result<Value, String> {
-  let body = body.unwrap_or("");
-  let mut stream = TcpStream::connect(LOCAL_RELAY_BIND)
-    .map_err(|error| format!("failed to connect local relay: {error}"))?;
-  stream
-    .set_read_timeout(Some(Duration::from_secs(2)))
-    .map_err(|error| format!("failed to set relay read timeout: {error}"))?;
-  stream
-    .set_write_timeout(Some(Duration::from_secs(2)))
-    .map_err(|error| format!("failed to set relay write timeout: {error}"))?;
-
-  let request = format!(
-    "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n{body}",
-    host = LOCAL_RELAY_BIND,
-    length = body.as_bytes().len()
-  );
-  stream
-    .write_all(request.as_bytes())
-    .map_err(|error| format!("failed to write relay request: {error}"))?;
-
-  let mut response = String::new();
-  stream
-    .read_to_string(&mut response)
-    .map_err(|error| format!("failed to read relay response: {error}"))?;
-  parse_http_json_response(&response)
-}
-
-fn parse_http_json_response(response: &str) -> Result<Value, String> {
-  let (head, body) = response
-    .split_once("\r\n\r\n")
-    .ok_or_else(|| "relay returned malformed HTTP response".to_string())?;
-  let status = head
-    .lines()
-    .next()
-    .and_then(|line| line.split_whitespace().nth(1))
-    .and_then(|code| code.parse::<u16>().ok())
-    .ok_or_else(|| "relay response did not include a valid status".to_string())?;
-  if !(200..300).contains(&status) {
-    return Err(format!("relay returned HTTP {status}: {body}"));
-  }
-  if body.trim().is_empty() {
-    return Ok(Value::Null);
-  }
-  serde_json::from_str(body).map_err(|error| format!("relay returned invalid JSON: {error}"))
-}
-
-fn mcp_status_response_for_handoff(path: &Path, request_id: &str, client_id: &str) -> Result<Value, String> {
-  let status = get_context_request_status_for_client_at_path(path, request_id, client_id)?;
-  let context_pack = status
-    .context_pack
-    .ok_or_else(|| "ContextPackRequest is not fulfilled yet.".to_string())?;
-  Ok(json!({
-    "jsonrpc": "2.0",
-    "id": request_id,
-    "result": {
-      "content": [
-        {
-          "type": "text",
-          "text": "The Context Pack has been confirmed and can be used for this answer."
-        }
-      ],
-      "structuredContent": {
-        "mutated": false,
-        "status": "fulfilled",
-        "requestId": status.request_id,
-        "contextPack": context_pack,
-        "message": "The Context Pack has been confirmed and can be used for this answer."
-      },
-      "isError": false
-    }
-  }))
-}
-
-type HmacSha256 = Hmac<Sha256>;
-
-fn relay_handoff_signature(
-  secret: &str,
-  client_id: &str,
-  request_id: &str,
-  expires_at: &str,
-  mcp_response: &Value,
-) -> Result<String, String> {
-  let response_text = serde_json::to_string(mcp_response)
-    .map_err(|error| format!("failed to serialize signed handoff payload: {error}"))?;
-  let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-    .map_err(|error| format!("failed to create handoff signature: {error}"))?;
-  mac.update(client_id.as_bytes());
-  mac.update(b"\n");
-  mac.update(request_id.as_bytes());
-  mac.update(b"\n");
-  mac.update(expires_at.as_bytes());
-  mac.update(b"\n");
-  mac.update(response_text.as_bytes());
-  Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
-}
-
-fn handoff_context_pack_to_local_relay(
-  path: &Path,
-  client_id: &str,
-  request_id: &str,
-  handoff_secret: &str,
-) -> Result<RelayContextPackHandoffResult, String> {
-  let client_id = client_id.trim();
-  if client_id.is_empty() {
-    return Err("clientId is required for Relay handoff.".to_string());
-  }
-  let request_id = request_id.trim();
-  if request_id.is_empty() {
-    return Err("requestId is required for Relay handoff.".to_string());
-  }
-  let mcp_response = mcp_status_response_for_handoff(path, request_id, client_id)?;
-  let expires_at = mcp_response
-    .get("result")
-    .and_then(|result| result.get("structuredContent"))
-    .and_then(|structured| structured.get("contextPack"))
-    .and_then(|pack| pack.get("expiresAt"))
-    .and_then(Value::as_str)
-    .ok_or_else(|| "ContextPack handoff requires expiresAt.".to_string())?;
-  let handoff_signature =
-    relay_handoff_signature(handoff_secret, client_id, request_id, expires_at, &mcp_response)?;
-  let body = serde_json::to_string(&json!({
-    "clientId": client_id,
-    "requestId": request_id,
-    "expiresAt": expires_at,
-    "mcpResponse": mcp_response,
-    "handoffSignature": handoff_signature
-  }))
-  .map_err(|error| format!("failed to serialize relay handoff: {error}"))?;
-  let response = local_relay_json("POST", "/relay/handoff", Some(&body))?;
-  let stored = response.get("status").and_then(Value::as_str) == Some("stored");
-  let delivery = if stored {
-    Some(record_context_pack_delivery_at_path(
-      path,
-      request_id,
-      "relay_handoff",
-      "registered",
-      response.get("ttlSeconds").and_then(Value::as_u64),
-      response.get("expiresAt").and_then(Value::as_u64),
-      Some("Relay registered a short-lived Context Pack handoff."),
-    )?)
-  } else {
-    None
-  };
-  Ok(RelayContextPackHandoffResult {
-    stored,
-    request_id: response
-      .get("requestId")
-      .and_then(Value::as_str)
-      .unwrap_or(request_id)
-      .to_string(),
-    expires_at: response.get("expiresAt").and_then(Value::as_u64),
-    ttl_seconds: response.get("ttlSeconds").and_then(Value::as_u64),
-    payload: delivery.as_ref().map(|result| result.payload.clone()),
-    updated_at: delivery.and_then(|result| result.updated_at),
-    generated_by: "native_relay_handoff".to_string(),
-  })
-}
-
-fn relay_reachable() -> bool {
-  local_relay_json("GET", "/health", None).is_ok()
-}
-
-fn agent_connected() -> bool {
-  local_relay_json("GET", "/agent/status", None)
-    .ok()
-    .and_then(|value| value.get("connected").and_then(Value::as_bool))
-    .unwrap_or(false)
-}
-
-fn wait_for_condition(mut predicate: impl FnMut() -> bool) -> bool {
-  for _ in 0..30 {
-    if predicate() {
-      return true;
-    }
-    thread::sleep(Duration::from_millis(100));
-  }
-  false
-}
-
-fn should_block_external_relay_start(
-  relay_reachable: bool,
-  relay_managed_running: bool,
-  agent_connected: bool,
-) -> bool {
-  relay_reachable && !relay_managed_running && !agent_connected
-}
-
-fn validate_agent_websocket_url(url: &str) -> Result<String, String> {
-  let trimmed = url.trim();
-  if trimmed.len() > 2048 {
-    return Err("Agent WebSocket URL is too long.".to_string());
-  }
-  if trimmed.chars().any(char::is_whitespace) {
-    return Err("Agent WebSocket URL must not include whitespace.".to_string());
-  }
-  let rest = trimmed
-    .strip_prefix("wss://")
-    .ok_or_else(|| "Hosted Agent WebSocket URL must start with wss://.".to_string())?;
-  if trimmed.contains('#') {
-    return Err("Agent WebSocket URL must not include a fragment.".to_string());
-  }
-  let (authority, path_and_query) = rest
-    .split_once('/')
-    .ok_or_else(|| "Agent WebSocket URL must include /agent/ws.".to_string())?;
-  if authority.is_empty() || authority.contains('@') {
-    return Err("Agent WebSocket URL must include a relay host and no userinfo.".to_string());
-  }
-  let (path, query) = path_and_query
-    .split_once('?')
-    .ok_or_else(|| "Agent WebSocket URL must include a pairing_code query parameter.".to_string())?;
-  if path != "agent/ws" {
-    return Err("Agent WebSocket URL must point exactly to /agent/ws.".to_string());
-  }
-  let mut query_parts = query.split('&');
-  let Some(first_query_part) = query_parts.next() else {
-    return Err("Agent WebSocket URL must include a non-empty pairing_code query parameter.".to_string());
-  };
-  if query_parts.next().is_some()
-    || !first_query_part
-      .strip_prefix("pairing_code=")
-      .is_some_and(|value| !value.is_empty())
-  {
-    return Err("Agent WebSocket URL must include only a non-empty pairing_code query parameter.".to_string());
-  }
-  Ok(trimmed.to_string())
-}
-
-fn relay_base_url_from_agent_websocket_url(url: &str) -> Option<String> {
-  let rest = if let Some(rest) = url.strip_prefix("wss://") {
-    rest
-  } else {
-    return None;
-  };
-  let authority = rest.split('/').next()?.trim();
-  if authority.is_empty() || authority.contains('@') {
-    None
-  } else {
-    Some(format!("https://{authority}"))
-  }
-}
-
-fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStatus {
-  let relay_managed_running = refresh_child(&mut supervisor.relay);
-  let agent_managed_running = refresh_child(&mut supervisor.agent);
-  let local_relay_reachable = relay_reachable();
-  let local_agent_connected = agent_connected();
-  let external_base_url = supervisor.external_relay_base_url.clone();
-  let using_external_relay = external_base_url.is_some() && !relay_managed_running;
-  let relay_url = external_base_url
-    .clone()
-    .unwrap_or_else(|| LOCAL_RELAY_BASE_URL.to_string());
-  let agent_runtime_status = supervisor
-    .agent_status_path
-    .as_deref()
-    .and_then(read_agent_runtime_status);
-  let hosted_agent_connected = using_external_relay
-    && agent_managed_running
-    && agent_runtime_status
-      .as_ref()
-      .is_some_and(|status| {
-        agent_runtime_status_matches_relay(
-          status,
-          &relay_url,
-          supervisor.agent_status_token.as_deref(),
-          supervisor.agent_process_id,
-          system_time_seconds(SystemTime::now()),
-        )
-      });
-  let relay_mode = if relay_managed_running {
-    "local_managed"
-  } else if using_external_relay {
-    "hosted_agent"
-  } else if local_relay_reachable {
-    "local_external"
-  } else {
-    "offline"
-  };
-  AiAccessServiceStatus {
-    managed_by_app: true,
-    relay_managed_running,
-    agent_managed_running,
-    relay_reachable: if using_external_relay { hosted_agent_connected } else { local_relay_reachable },
-    agent_connected: if using_external_relay { hosted_agent_connected } else { local_agent_connected },
-    relay_url: relay_url.clone(),
-    mcp_server_url: format!("{relay_url}/mcp"),
-    relay_state_status_url: format!("{relay_url}/relay/state"),
-    relay_mode: relay_mode.to_string(),
-    agent_runtime_status,
-    pairing_code: supervisor.pairing_code.clone(),
-    last_error: supervisor.last_error.clone(),
-  }
-}
-
-fn stop_managed_ai_access(app: &AppHandle) {
-  let supervisor_state = app.state::<Mutex<AiAccessSupervisor>>();
-  let Ok(mut supervisor) = supervisor_state.lock() else {
-    return;
-  };
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
 }
 
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
@@ -7190,26 +6663,13 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
   Ok(())
 }
 
-fn start_managed_ai_access_from_tray(app: &AppHandle) {
-  let supervisor = app.state::<Mutex<AiAccessSupervisor>>();
-  let _ = start_ai_access_services(app.clone(), supervisor);
-}
 
 fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
   match menu_id {
     TRAY_MENU_OPEN_ID => {
       let _ = show_control_center(app);
     }
-    TRAY_MENU_START_AI_ACCESS_ID => {
-      start_managed_ai_access_from_tray(app);
-      let _ = show_control_center(app);
-    }
-    TRAY_MENU_STOP_AI_ACCESS_ID => {
-      stop_managed_ai_access(app);
-      let _ = show_control_center(app);
-    }
     TRAY_MENU_QUIT_ID => {
-      stop_managed_ai_access(app);
       app.exit(0);
     }
     _ => {}
@@ -7218,14 +6678,9 @@ fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
 
 fn configure_background_tray(app: &mut App) -> tauri::Result<()> {
   let open = MenuItemBuilder::with_id(TRAY_MENU_OPEN_ID, "Open Control Center").build(app)?;
-  let start =
-    MenuItemBuilder::with_id(TRAY_MENU_START_AI_ACCESS_ID, "Start AI Access").build(app)?;
-  let stop = MenuItemBuilder::with_id(TRAY_MENU_STOP_AI_ACCESS_ID, "Stop AI Access").build(app)?;
   let quit = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "Quit Life Context Vault").build(app)?;
   let menu = MenuBuilder::new(app)
     .item(&open)
-    .item(&start)
-    .item(&stop)
     .separator()
     .item(&quit)
     .build()?;
@@ -7254,49 +6709,6 @@ fn configure_background_tray(app: &mut App) -> tauri::Result<()> {
 
   tray.build(app)?;
   Ok(())
-}
-
-fn spawn_relay(app: &AppHandle, relay_token: &str, handoff_secret: &str) -> Result<Child, String> {
-  let vault_path = vault_db_path(app)?;
-  let relay_state_path = relay_state_path(app)?;
-  let relay_command = mcp_stdio::resolve_sibling_binary("lcv-relay");
-  let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
-  Command::new(&relay_command)
-    .env("LCV_RELAY_TOKEN", relay_token)
-    .env("LCV_RELAY_HANDOFF_SECRET", handoff_secret)
-    .env("LCV_RELAY_BIND", LOCAL_RELAY_BIND)
-    .env("LCV_RELAY_BASE_URL", LOCAL_RELAY_BASE_URL)
-    .env("LCV_RELAY_STATE_PATH", relay_state_path)
-    .env("LCV_RELAY_ALLOW_DIRECT_SIDECAR", "0")
-    .env("LCV_MCP_COMMAND", mcp_command)
-    .env("LCV_VAULT_DB_PATH", vault_path)
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()
-    .map_err(|error| format!("failed to start local relay at {}: {error}", relay_command.display()))
-}
-
-fn spawn_agent(app: &AppHandle, agent_websocket_url: &str) -> Result<(Child, PathBuf, String), String> {
-  let vault_path = vault_db_path(app)?;
-  let status_path = agent_status_path(app)?;
-  let status_token = random_local_token();
-  let _ = fs::remove_file(&status_path);
-  let agent_command = mcp_stdio::resolve_sibling_binary("lcv-agent");
-  let mcp_command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
-  Command::new(&agent_command)
-    .env("LCV_AGENT_RELAY_WS", agent_websocket_url)
-    .env("LCV_AGENT_RECONNECT", "0")
-    .env("LCV_AGENT_STATUS_PATH", &status_path)
-    .env("LCV_AGENT_STATUS_TOKEN", &status_token)
-    .env("LCV_MCP_COMMAND", mcp_command)
-    .env("LCV_VAULT_DB_PATH", vault_path)
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()
-    .map(|child| (child, status_path, status_token))
-    .map_err(|error| format!("failed to start local agent at {}: {error}", agent_command.display()))
 }
 
 fn claude_desktop_config_path() -> Result<PathBuf, String> {
@@ -7443,79 +6855,6 @@ fn claude_desktop_config_template(app: AppHandle) -> Result<String, String> {
   });
   serde_json::to_string_pretty(&config)
     .map_err(|error| format!("failed to serialize Claude Desktop config: {error}"))
-}
-
-fn validate_chrome_extension_id(extension_id: &str) -> Result<String, String> {
-  let normalized = extension_id.trim().to_ascii_lowercase();
-  let valid = normalized.len() == 32
-    && normalized
-      .chars()
-      .all(|character| ('a'..='p').contains(&character));
-  if valid {
-    Ok(normalized)
-  } else {
-    Err(
-      "Chrome extension id must be the 32-character id shown after loading browser-extension/ unpacked."
-        .to_string(),
-    )
-  }
-}
-
-fn chrome_capture_host_manifest_path() -> Result<PathBuf, String> {
-  #[cfg(target_os = "macos")]
-  {
-    let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    return Ok(PathBuf::from(home)
-      .join("Library")
-      .join("Application Support")
-      .join("Google")
-      .join("Chrome")
-      .join("NativeMessagingHosts")
-      .join(format!("{CAPTURE_HOST_NAME}.json")));
-  }
-
-  #[cfg(target_os = "linux")]
-  {
-    let base = env::var("XDG_CONFIG_HOME")
-      .map(PathBuf::from)
-      .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
-      .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
-    return Ok(base
-      .join("google-chrome")
-      .join("NativeMessagingHosts")
-      .join(format!("{CAPTURE_HOST_NAME}.json")));
-  }
-
-  #[cfg(target_os = "windows")]
-  {
-    Err(
-      "Chrome Native Messaging host installation is not implemented on Windows yet; \
-       use Chrome registry setup manually."
-        .to_string(),
-    )
-  }
-}
-
-fn capture_host_binary_path() -> Result<PathBuf, String> {
-  let command = mcp_stdio::resolve_sibling_binary("lcv-capture-host");
-  if !command.exists() {
-    return Err(format!(
-      "lcv-capture-host was not found at {}. Build or bundle the sidecars before installing \
-       the browser capture host.",
-      command.display()
-    ));
-  }
-  Ok(command)
-}
-
-fn capture_host_manifest_for_paths(extension_id: &str, host_path: PathBuf) -> Value {
-  json!({
-    "name": CAPTURE_HOST_NAME,
-    "description": "Life Context Vault browser capture native host",
-    "path": host_path.display().to_string(),
-    "type": "stdio",
-    "allowed_origins": [format!("chrome-extension://{extension_id}/")]
-  })
 }
 
 fn xml_escape(value: &str) -> String {
@@ -7759,76 +7098,6 @@ fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatu
       last_error,
     }
   }
-}
-
-#[tauri::command]
-fn install_chrome_capture_host_manifest(
-  extension_id: String,
-) -> Result<BrowserCaptureHostInstallResult, String> {
-  let extension_id = validate_chrome_extension_id(&extension_id)?;
-  let manifest_path = chrome_capture_host_manifest_path()?;
-  let host_path = capture_host_binary_path()?;
-  let manifest = capture_host_manifest_for_paths(&extension_id, host_path.clone());
-
-  let existing = if manifest_path.exists() {
-    let raw = fs::read_to_string(&manifest_path)
-      .map_err(|error| format!("failed to read Chrome Native Messaging host manifest: {error}"))?;
-    serde_json::from_str::<Value>(&raw).ok()
-  } else {
-    None
-  };
-
-  if existing.as_ref() == Some(&manifest) {
-    return Ok(BrowserCaptureHostInstallResult {
-      manifest_path: manifest_path.display().to_string(),
-      backup_path: None,
-      host_name: CAPTURE_HOST_NAME.to_string(),
-      host_path: host_path.display().to_string(),
-      extension_id,
-      already_configured: true,
-    });
-  }
-
-  if let Some(parent) = manifest_path.parent() {
-    fs::create_dir_all(parent)
-      .map_err(|error| format!("failed to create Chrome Native Messaging host directory: {error}"))?;
-  }
-
-  let backup_path = if manifest_path.exists() {
-    let backup = manifest_path.with_file_name(format!(
-      "{CAPTURE_HOST_NAME}.lcv-backup-{}.json",
-      system_time_seconds(SystemTime::now())
-    ));
-    fs::copy(&manifest_path, &backup)
-      .map_err(|error| format!("failed to back up Chrome Native Messaging host manifest: {error}"))?;
-    Some(backup)
-  } else {
-    None
-  };
-
-  let payload = serde_json::to_string_pretty(&manifest)
-    .map_err(|error| format!("failed to serialize Chrome Native Messaging host manifest: {error}"))?;
-  let temp_path = manifest_path.with_file_name(format!("{CAPTURE_HOST_NAME}.json.lcv.tmp"));
-  fs::write(&temp_path, payload)
-    .map_err(|error| format!("failed to write Chrome Native Messaging host temp file: {error}"))?;
-  #[cfg(target_os = "windows")]
-  {
-    if manifest_path.exists() {
-      fs::remove_file(&manifest_path)
-        .map_err(|error| format!("failed to replace Chrome Native Messaging host manifest: {error}"))?;
-    }
-  }
-  fs::rename(&temp_path, &manifest_path)
-    .map_err(|error| format!("failed to install Chrome Native Messaging host manifest: {error}"))?;
-
-  Ok(BrowserCaptureHostInstallResult {
-    manifest_path: manifest_path.display().to_string(),
-    backup_path: backup_path.map(|path| path.display().to_string()),
-    host_name: CAPTURE_HOST_NAME.to_string(),
-    host_path: host_path.display().to_string(),
-    extension_id,
-    already_configured: false,
-  })
 }
 
 #[tauri::command]
@@ -8084,22 +7353,6 @@ fn confirm_native_context_pack(
 }
 
 #[tauri::command]
-fn handoff_confirmed_context_pack_to_relay(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-  client_id: String,
-  request_id: String,
-) -> Result<RelayContextPackHandoffResult, String> {
-  let path = vault_db_path(&app)?;
-  let handoff_secret = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?
-    .handoff_secret
-    .clone();
-  handoff_context_pack_to_local_relay(&path, &client_id, &request_id, &handoff_secret)
-}
-
-#[tauri::command]
 fn deny_native_context_pack_request(
   app: AppHandle,
   request_id: String,
@@ -8231,62 +7484,6 @@ fn update_native_candidate_status(
     fact_id: result.fact_id,
     superseded_fact_ids: result.superseded_fact_ids,
     invalidated_pack_count: result.invalidated_pack_count,
-    generated_by: "native_vault_core".to_string(),
-  })
-}
-
-#[tauri::command]
-fn add_native_passive_capture_event(
-  app: AppHandle,
-  source_client: String,
-  conversation_id: String,
-  url: String,
-  text: String,
-  page_title: Option<String>,
-  selected: Option<bool>,
-) -> Result<NativePassiveCaptureResult, String> {
-  let path = vault_db_path(&app)?;
-  let result = add_passive_capture_event_at_path(
-    &path,
-    &source_client,
-    &conversation_id,
-    &url,
-    &text,
-    page_title.as_deref(),
-    selected.unwrap_or(false),
-  )?;
-  Ok(NativePassiveCaptureResult {
-    payload: result.payload,
-    updated_at: result.updated_at,
-    accepted: result.accepted,
-    status: result.status,
-    message: result.message,
-    event_id: result.event_id,
-    source_id: result.source_id,
-    candidate_ids: result.candidate_ids,
-    detected_sensitivity: result.detected_sensitivity,
-    retention_until: result.retention_until,
-    generated_by: "native_vault_core".to_string(),
-  })
-}
-
-#[tauri::command]
-fn update_native_passive_capture_settings(
-  app: AppHandle,
-  enabled: Option<bool>,
-  retention_days: Option<i64>,
-  allowed_sites: Option<Vec<String>>,
-) -> Result<NativeVaultSettingsUpdateResult, String> {
-  let path = vault_db_path(&app)?;
-  let result = update_passive_capture_settings_at_path(
-    &path,
-    enabled,
-    retention_days,
-    allowed_sites,
-  )?;
-  Ok(NativeVaultSettingsUpdateResult {
-    payload: result.payload,
-    updated_at: result.updated_at,
     generated_by: "native_vault_core".to_string(),
   })
 }
@@ -8432,187 +7629,8 @@ fn update_native_fact_metadata(
   })
 }
 
-#[tauri::command]
-fn ai_access_service_status(
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[tauri::command]
-fn start_ai_access_services(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  supervisor.external_relay_base_url = None;
-
-  let relay_managed_running = refresh_child(&mut supervisor.relay);
-  let relay_is_reachable = relay_reachable();
-  if !relay_is_reachable {
-    if !relay_managed_running {
-      supervisor.relay = Some(spawn_relay(&app, &supervisor.relay_token, &supervisor.handoff_secret).map_err(|error| {
-        supervisor.last_error = Some(error.clone());
-        error
-      })?);
-    }
-    if !wait_for_condition(relay_reachable) {
-      let error = "local relay did not become reachable".to_string();
-      supervisor.last_error = Some(error.clone());
-      return Err(error);
-    }
-  } else if should_block_external_relay_start(
-    relay_is_reachable,
-    relay_managed_running,
-    agent_connected(),
-  ) {
-    let error = format!(
-      "another relay is already running at {LOCAL_RELAY_BASE_URL}; use manual pairing for that relay or stop it before starting the app-managed AI Access Service"
-    );
-    supervisor.last_error = Some(error.clone());
-    return Err(error);
-  }
-
-  if !agent_connected() {
-    if refresh_child(&mut supervisor.agent) {
-      stop_child(&mut supervisor.agent);
-    }
-    clear_supervisor_agent_status(&mut supervisor);
-    let pairing = local_relay_json("POST", "/pairing/start", None).map_err(|error| {
-      supervisor.last_error = Some(error.clone());
-      error
-    })?;
-    let pairing_code = pairing
-      .get("pairingCode")
-      .and_then(Value::as_str)
-      .ok_or_else(|| "relay pairing response did not include pairingCode".to_string())?
-      .to_string();
-    let agent_websocket_url = pairing
-      .get("agentWebSocketUrl")
-      .and_then(Value::as_str)
-      .ok_or_else(|| "relay pairing response did not include agentWebSocketUrl".to_string())?
-      .to_string();
-    supervisor.pairing_code = Some(pairing_code);
-    let (agent, status_path, status_token) = spawn_agent(&app, &agent_websocket_url).map_err(|error| {
-      supervisor.last_error = Some(error.clone());
-      error
-    })?;
-    let agent_process_id = agent.id();
-    supervisor.agent = Some(agent);
-    supervisor.agent_status_path = Some(status_path);
-    supervisor.agent_status_token = Some(status_token);
-    supervisor.agent_process_id = Some(agent_process_id);
-    if !wait_for_condition(agent_connected) {
-      let error = "local agent did not connect to relay".to_string();
-      supervisor.last_error = Some(error.clone());
-      return Err(error);
-    }
-  }
-
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-const DEFAULT_MANAGED_RELAY_URL: &str = "https://relay.lifecontextvault.example";
-
-/// Request a managed-relay pairing URL from the operator's hosted relay's
-/// public `/pair` endpoint (no admin token needed). The returned
-/// `agentWebSocketUrl` is then passed to `start_ai_access_agent_for_relay`.
-/// Doing the fetch here (not in the webview) avoids CSP connect-src exposure
-/// and keeps the relay host configurable via LCV_MANAGED_RELAY_URL.
-#[tauri::command]
-fn request_managed_pairing_url() -> Result<String, String> {
-  let base = env::var("LCV_MANAGED_RELAY_URL")
-    .unwrap_or_else(|_| DEFAULT_MANAGED_RELAY_URL.to_string());
-  if base.contains(".example") {
-    return Err(
-      "Managed relay is not configured. Set LCV_MANAGED_RELAY_URL to your hosted relay.".to_string(),
-    );
-  }
-  let endpoint = format!("{}/pair", base.trim_end_matches('/'));
-  let response = ureq::post(&endpoint)
-    .timeout(Duration::from_secs(10))
-    .call()
-    .map_err(|error| format!("managed relay pairing request failed: {error}"))?;
-  let body = response
-    .into_string()
-    .map_err(|error| format!("failed to read managed relay response: {error}"))?;
-  let value: Value = serde_json::from_str(&body)
-    .map_err(|error| format!("managed relay response is not valid JSON: {error}"))?;
-  value
-    .get("agentWebSocketUrl")
-    .and_then(Value::as_str)
-    .map(|url| url.to_string())
-    .ok_or_else(|| "managed relay did not return agentWebSocketUrl".to_string())
-}
-
-#[tauri::command]
-fn start_ai_access_agent_for_relay(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-  agent_websocket_url: String,
-) -> Result<AiAccessServiceStatus, String> {
-  let validated_url = validate_agent_websocket_url(&agent_websocket_url)?;
-  let relay_base_url = relay_base_url_from_agent_websocket_url(&validated_url)
-    .ok_or_else(|| "Agent WebSocket URL did not include a relay host.".to_string())?;
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
-  let (agent, status_path, status_token) = spawn_agent(&app, &validated_url).map_err(|error| {
-    supervisor.last_error = Some(error.clone());
-    error
-  })?;
-  let agent_process_id = agent.id();
-  supervisor.agent = Some(agent);
-  supervisor.agent_status_path = Some(status_path);
-  supervisor.agent_status_token = Some(status_token);
-  supervisor.agent_process_id = Some(agent_process_id);
-
-  thread::sleep(Duration::from_millis(150));
-  if !refresh_child(&mut supervisor.agent) {
-    let error = "hosted relay agent exited immediately; check the pairing URL and relay TLS configuration".to_string();
-    supervisor.external_relay_base_url = None;
-    clear_supervisor_agent_status(&mut supervisor);
-    supervisor.last_error = Some(error.clone());
-    return Err(error);
-  }
-
-  supervisor.external_relay_base_url = Some(relay_base_url);
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[tauri::command]
-fn stop_ai_access_services(
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .manage(Mutex::new(AiAccessSupervisor::default()))
     .on_window_event(|window, event| {
       let decision = match event {
         WindowEvent::CloseRequested { .. } => {
@@ -8631,9 +7649,6 @@ pub fn run() {
             .app_handle()
             .set_activation_policy(ActivationPolicy::Accessory);
         }
-        WindowLifecycleDecision::StopManagedAiAccess => {
-          stop_managed_ai_access(window.app_handle());
-        }
         WindowLifecycleDecision::Ignore => {}
       }
     })
@@ -8646,7 +7661,6 @@ pub fn run() {
       create_native_context_pack_request,
       update_native_context_pack_item_visibility,
       confirm_native_context_pack,
-      handoff_confirmed_context_pack_to_relay,
       deny_native_context_pack_request,
       extract_native_document_text,
       native_document_extraction_capabilities,
@@ -8655,28 +7669,20 @@ pub fn run() {
       add_native_source_with_candidates,
       approve_native_candidate,
       update_native_candidate_status,
-      add_native_passive_capture_event,
-      update_native_passive_capture_settings,
       update_native_access_policy,
       update_native_source_lifecycle,
       update_native_source_metadata,
       update_native_source_body,
       update_native_fact_lifecycle,
       update_native_fact_metadata,
-      ai_access_service_status,
-      start_ai_access_services,
-      start_ai_access_agent_for_relay,
-      stop_ai_access_services,
       install_claude_desktop_config,
       claude_desktop_config_template,
-      install_chrome_capture_host_manifest,
       login_item_status,
       install_login_item,
       uninstall_login_item,
       export_native_encrypted_backup,
       import_native_encrypted_backup,
       add_native_source_pending_runtime,
-      request_managed_pairing_url,
       run_local_backup_now,
       recover_vault_with_recovery_key,
       write_recovery_envelope,
@@ -11588,62 +10594,6 @@ mod tests {
   }
 
   #[test]
-  fn relay_handoff_payload_uses_confirmed_context_pack_boundary() {
-    use_test_vault_key();
-    let path = temp_vault_path("relay-handoff-payload");
-    let source = add_source_with_candidates_at_path(
-      &path,
-      "manual_note",
-      "manual_entry",
-      "Passport reminder",
-      "Passport expires on 2028-05-01.",
-    )
-    .expect("source");
-    approve_candidate_at_path(
-      &path,
-      source.candidate_ids.first().expect("candidate"),
-      None,
-    )
-    .expect("approve candidate");
-    let built = create_context_pack_request_at_path(
-      &path,
-      "conn_chatgpt",
-      "ChatGPT",
-      "When does my passport expire?",
-      Some("普段使うAIへの回答文脈"),
-      Some("personal"),
-      Some("explicit_sensitive"),
-    )
-    .expect("context pack");
-    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
-
-    let response =
-      mcp_status_response_for_handoff(&path, &built.request_id, "conn_chatgpt").expect("handoff response");
-    let structured = response
-      .get("result")
-      .and_then(|result| result.get("structuredContent"))
-      .expect("structured content");
-    assert_eq!(
-      structured.get("status").and_then(Value::as_str),
-      Some("fulfilled")
-    );
-    assert_eq!(
-      structured.get("requestId").and_then(Value::as_str),
-      Some(built.request_id.as_str())
-    );
-    assert_eq!(
-      structured
-        .get("contextPack")
-        .and_then(|pack| pack.get("trustBoundary"))
-        .and_then(Value::as_str),
-      Some("ContextPack only")
-    );
-    assert!(structured.to_string().contains("Passport expires on 2028-05-01."));
-    assert!(!structured.to_string().contains("manual_entry"));
-    remove_temp_vault(&path);
-  }
-
-  #[test]
   fn confirmed_context_pack_expires_before_external_status_return() {
     use_test_vault_key();
     let path = temp_vault_path("confirmed-pack-expiry");
@@ -12343,114 +11293,6 @@ mod tests {
   }
 
   #[test]
-  fn relay_http_parser_accepts_json_success() {
-    let parsed = parse_http_json_response(
-      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}",
-    )
-    .expect("relay response");
-
-    assert_eq!(parsed.get("status").and_then(Value::as_str), Some("ok"));
-  }
-
-  #[test]
-  fn relay_http_parser_rejects_error_status() {
-    let error = parse_http_json_response(
-      "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n{\"error\":\"boom\"}",
-    )
-    .expect_err("error status");
-
-    assert!(error.contains("HTTP 500"));
-  }
-
-  #[test]
-  fn external_relay_without_agent_is_not_auto_attached() {
-    assert!(should_block_external_relay_start(true, false, false));
-    assert!(!should_block_external_relay_start(true, true, false));
-    assert!(!should_block_external_relay_start(true, false, true));
-    assert!(!should_block_external_relay_start(false, false, false));
-  }
-
-  #[test]
-  fn hosted_agent_websocket_url_validation_accepts_wss_pairing_urls() {
-    let url = "wss://relay.example.com/agent/ws?pairing_code=secret";
-    assert_eq!(validate_agent_websocket_url(url).expect("valid wss url"), url);
-    assert_eq!(
-      relay_base_url_from_agent_websocket_url(url).as_deref(),
-      Some("https://relay.example.com")
-    );
-    assert!(validate_agent_websocket_url("ws://relay.example.com/agent/ws?pairing_code=secret").is_err());
-    assert!(validate_agent_websocket_url("https://relay.example.com/agent/ws?pairing_code=secret").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=secret&token=extra").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws").is_err());
-    assert!(validate_agent_websocket_url("wss://user@relay.example.com/agent/ws?pairing_code=secret").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/prefix/agent/ws?pairing_code=secret").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws-extra?pairing_code=secret").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/agent/ws?pairing_code=secret#fragment").is_err());
-    assert!(validate_agent_websocket_url("wss://relay.example.com/other?pairing_code=secret").is_err());
-  }
-
-  #[test]
-  fn hosted_agent_runtime_status_must_match_relay_and_connected_state() {
-    let status = AgentRuntimeStatus {
-      state: "connected".to_string(),
-      relay_base_url: Some("https://relay.example.com".to_string()),
-      updated_at: Some(1),
-      last_connected_at: Some(1),
-      last_error: None,
-      status_token: Some("status-token".to_string()),
-      process_id: Some(42),
-    };
-    assert!(agent_runtime_status_matches_relay(
-      &status,
-      "https://relay.example.com",
-      Some("status-token"),
-      Some(42),
-      10
-    ));
-
-    let mut disconnected = status.clone();
-    disconnected.state = "disconnected".to_string();
-    assert!(!agent_runtime_status_matches_relay(
-      &disconnected,
-      "https://relay.example.com",
-      Some("status-token"),
-      Some(42),
-      10
-    ));
-
-    let mut wrong_relay = status.clone();
-    wrong_relay.relay_base_url = Some("https://other.example.com".to_string());
-    assert!(!agent_runtime_status_matches_relay(
-      &wrong_relay,
-      "https://relay.example.com",
-      Some("status-token"),
-      Some(42),
-      10
-    ));
-
-    let mut wrong_token = status.clone();
-    wrong_token.status_token = Some("other-token".to_string());
-    assert!(!agent_runtime_status_matches_relay(
-      &wrong_token,
-      "https://relay.example.com",
-      Some("status-token"),
-      Some(42),
-      10
-    ));
-
-    let mut stale = status;
-    stale.updated_at = Some(1);
-    assert!(!agent_runtime_status_matches_relay(
-      &stale,
-      "https://relay.example.com",
-      Some("status-token"),
-      Some(42),
-      AGENT_STATUS_FRESH_SECONDS + 2
-    ));
-  }
-
-  #[test]
   fn vault_state_updated_at_column_is_backfilled_for_legacy_tables() {
     let connection = Connection::open_in_memory().expect("connection");
     connection
@@ -12643,7 +11485,7 @@ mod tests {
     );
     assert_eq!(
       window_lifecycle_decision(WindowLifecycleEventKind::Destroyed),
-      WindowLifecycleDecision::StopManagedAiAccess
+      WindowLifecycleDecision::Ignore
     );
     assert_eq!(
       window_lifecycle_decision(WindowLifecycleEventKind::Other),
