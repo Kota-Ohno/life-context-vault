@@ -7160,18 +7160,6 @@ fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStat
   }
 }
 
-fn stop_managed_ai_access(app: &AppHandle) {
-  let supervisor_state = app.state::<Mutex<AiAccessSupervisor>>();
-  let Ok(mut supervisor) = supervisor_state.lock() else {
-    return;
-  };
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
-}
-
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
   app
     .set_activation_policy(ActivationPolicy::Regular)
@@ -7189,10 +7177,6 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
   Ok(())
 }
 
-fn start_managed_ai_access_from_tray(app: &AppHandle) {
-  let supervisor = app.state::<Mutex<AiAccessSupervisor>>();
-  let _ = start_ai_access_services(app.clone(), supervisor);
-}
 
 fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
   match menu_id {
