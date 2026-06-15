@@ -3,21 +3,19 @@ use base64::{
   Engine as _,
 };
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::Sha256;
 use std::{
   collections::HashSet,
   env,
   ffi::OsString,
   fs,
   io::{Cursor, Read, Write},
-  net::TcpStream,
+
   path::{Path, PathBuf},
   process::{Child, Command, Output, Stdio},
-  sync::Mutex,
+
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -35,22 +33,17 @@ mod embeddings;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
-const LOCAL_RELAY_BIND: &str = "127.0.0.1:8765";
-const LOCAL_RELAY_BASE_URL: &str = "http://127.0.0.1:8765";
-const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const LOGIN_ITEM_LABEL: &str = "dev.life-context-vault.ai-access";
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "life-context-vault-tray";
 const TRAY_MENU_OPEN_ID: &str = "open-control-center";
-const TRAY_MENU_START_AI_ACCESS_ID: &str = "start-ai-access";
-const TRAY_MENU_STOP_AI_ACCESS_ID: &str = "stop-ai-access";
 const TRAY_MENU_QUIT_ID: &str = "quit-life-context-vault";
+const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
-const AGENT_STATUS_FRESH_SECONDS: u64 = 30;
 const SOURCE_CHUNK_TARGET_CHARS: usize = 4_000;
 const SOURCE_CHUNK_OVERLAP_CHARS: usize = 300;
 
