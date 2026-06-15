@@ -245,9 +245,9 @@ button {
 .panel {
   min-width: 0;
   padding: 18px;
-  border: 1px solid #d9dfd6;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
 }
 
 .panel.wide {
@@ -631,21 +631,21 @@ button:focus-visible {
 }
 
 .primary-button {
-  border: 1px solid #26352b;
-  background: #26352b;
-  color: #ffffff;
+  border: 1px solid var(--ink-primary);
+  background: var(--ink-primary);
+  color: var(--bg-surface);
 }
 
 .secondary-button {
-  border: 1px solid #bec9bf;
-  background: #ffffff;
-  color: #26352b;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
 }
 
 .danger-button {
-  border: 1px solid #d7b8ad;
-  background: #fff5f1;
-  color: #8b2f1d;
+  border: 1px solid var(--tone-blocked);
+  background: var(--tone-blocked-soft);
+  color: var(--tone-blocked);
 }
 
 .primary-button:hover {
