@@ -1095,9 +1095,6 @@ describe("AI access UI safety", () => {
     expect(html).toContain("生活背景を入れる");
     expect(html).toContain("入力欄へ");
     expect(html).toContain("生活背景を追加");
-    expect(html).toContain("AI Boundary Today");
-    expect(html).toContain("保存されたこととAIへ渡ること");
-    expect(html).toContain("Sourceや候補だけではAIに渡る文脈になりません");
   });
 
   it("describes AI delivery receipts by life domain without storing body text", () => {

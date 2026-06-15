@@ -2197,35 +2197,6 @@ export function HomeView({
         </div>
       </div>
 
-      <div className="panel wide home-ai-boundary-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">AI Boundary Today</p>
-            <h3>保存されたこととAIへ渡ること</h3>
-          </div>
-          <ShieldCheck size={18} />
-        </div>
-        <div className="home-ai-boundary-grid" aria-label="Home AI boundary summary">
-          {aiBoundarySections.map((section) => (
-            <div className={`home-ai-boundary-card ${section.tone}`} key={section.label}>
-              <span>{section.label}</span>
-              <strong>{section.value}</strong>
-              <small>{section.detail}</small>
-            </div>
-          ))}
-        </div>
-        <div className="service-actions">
-          <button className="secondary-button" onClick={goInbox} type="button">
-            <Inbox size={16} />
-            保存候補を確認
-          </button>
-          <button className="primary-button" onClick={goRequests} type="button">
-            <MessageSquare size={16} />
-            AIへ渡すPackを見る
-          </button>
-        </div>
-      </div>
-
       <div className="panel quick-setup-panel" id="home-guided-setup">
         <div className="panel-heading">
           <div>
