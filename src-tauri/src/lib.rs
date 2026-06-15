@@ -38,7 +38,6 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "life-context-vault-tray";
 const TRAY_MENU_OPEN_ID: &str = "open-control-center";
 const TRAY_MENU_QUIT_ID: &str = "quit-life-context-vault";
-const CAPTURE_HOST_NAME: &str = "dev.life_context_vault.capture";
 const MAX_NATIVE_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
@@ -456,14 +455,6 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
   fs::create_dir_all(&dir)
     .map_err(|error| format!("failed to create app data dir: {error}"))?;
   Ok(dir.join("vault.sqlite3"))
-}
-
-fn relay_state_path(app: &AppHandle) -> Result<PathBuf, String> {
-  vault_db_path(app).map(|path| path.with_file_name("relay-state.json"))
-}
-
-fn agent_status_path(app: &AppHandle) -> Result<PathBuf, String> {
-  vault_db_path(app).map(|path| path.with_file_name("agent-status.json"))
 }
 
 fn open_vault_db(app: &AppHandle) -> Result<Connection, String> {
@@ -6666,51 +6657,6 @@ fn context_pack_receipt_metadata(
   })
 }
 
-fn record_context_pack_delivery_at_path(
-  path: &Path,
-  request_id: &str,
-  channel: &str,
-  status: &str,
-  ttl_seconds: Option<u64>,
-  relay_expires_at: Option<u64>,
-  message: Option<&str>,
-) -> Result<VaultCoreSettingsUpdateResult, String> {
-  let mut connection = open_vault_db_at_path(path)?;
-  let mut vault = load_vault_json_from_connection(&connection)?;
-  let pack = vault
-    .get("contextPacks")
-    .and_then(Value::as_array)
-    .and_then(|packs| {
-      packs
-        .iter()
-        .find(|pack| optional_str_field(pack, "requestId").as_deref() == Some(request_id))
-    })
-    .cloned()
-    .ok_or_else(|| format!("ContextPack was not found for request: {request_id}"))?;
-  let metadata = context_pack_receipt_metadata(
-    &vault,
-    &pack,
-    Some(channel),
-    Some(status),
-    ttl_seconds,
-    relay_expires_at,
-    message,
-  );
-  push_json_array(
-    &mut vault,
-    "auditEvents",
-    audit_event(
-      "context_pack_delivered",
-      "context_pack",
-      &str_field(&pack, "id"),
-      &str_field(&pack, "maxSensitivityIncluded"),
-      metadata,
-    ),
-  );
-  let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
-  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
-}
-
 fn empty_vault_json() -> Value {
   json!({
     "version": 2,
@@ -6979,79 +6925,6 @@ fn claude_desktop_config_template(app: AppHandle) -> Result<String, String> {
     .map_err(|error| format!("failed to serialize Claude Desktop config: {error}"))
 }
 
-fn validate_chrome_extension_id(extension_id: &str) -> Result<String, String> {
-  let normalized = extension_id.trim().to_ascii_lowercase();
-  let valid = normalized.len() == 32
-    && normalized
-      .chars()
-      .all(|character| ('a'..='p').contains(&character));
-  if valid {
-    Ok(normalized)
-  } else {
-    Err(
-      "Chrome extension id must be the 32-character id shown after loading browser-extension/ unpacked."
-        .to_string(),
-    )
-  }
-}
-
-fn chrome_capture_host_manifest_path() -> Result<PathBuf, String> {
-  #[cfg(target_os = "macos")]
-  {
-    let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    return Ok(PathBuf::from(home)
-      .join("Library")
-      .join("Application Support")
-      .join("Google")
-      .join("Chrome")
-      .join("NativeMessagingHosts")
-      .join(format!("{CAPTURE_HOST_NAME}.json")));
-  }
-
-  #[cfg(target_os = "linux")]
-  {
-    let base = env::var("XDG_CONFIG_HOME")
-      .map(PathBuf::from)
-      .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
-      .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
-    return Ok(base
-      .join("google-chrome")
-      .join("NativeMessagingHosts")
-      .join(format!("{CAPTURE_HOST_NAME}.json")));
-  }
-
-  #[cfg(target_os = "windows")]
-  {
-    Err(
-      "Chrome Native Messaging host installation is not implemented on Windows yet; \
-       use Chrome registry setup manually."
-        .to_string(),
-    )
-  }
-}
-
-fn capture_host_binary_path() -> Result<PathBuf, String> {
-  let command = mcp_stdio::resolve_sibling_binary("lcv-capture-host");
-  if !command.exists() {
-    return Err(format!(
-      "lcv-capture-host was not found at {}. Build or bundle the sidecars before installing \
-       the browser capture host.",
-      command.display()
-    ));
-  }
-  Ok(command)
-}
-
-fn capture_host_manifest_for_paths(extension_id: &str, host_path: PathBuf) -> Value {
-  json!({
-    "name": CAPTURE_HOST_NAME,
-    "description": "Life Context Vault browser capture native host",
-    "path": host_path.display().to_string(),
-    "type": "stdio",
-    "allowed_origins": [format!("chrome-extension://{extension_id}/")]
-  })
-}
-
 fn xml_escape(value: &str) -> String {
   value
     .replace('&', "&amp;")
@@ -7293,76 +7166,6 @@ fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatu
       last_error,
     }
   }
-}
-
-#[tauri::command]
-fn install_chrome_capture_host_manifest(
-  extension_id: String,
-) -> Result<BrowserCaptureHostInstallResult, String> {
-  let extension_id = validate_chrome_extension_id(&extension_id)?;
-  let manifest_path = chrome_capture_host_manifest_path()?;
-  let host_path = capture_host_binary_path()?;
-  let manifest = capture_host_manifest_for_paths(&extension_id, host_path.clone());
-
-  let existing = if manifest_path.exists() {
-    let raw = fs::read_to_string(&manifest_path)
-      .map_err(|error| format!("failed to read Chrome Native Messaging host manifest: {error}"))?;
-    serde_json::from_str::<Value>(&raw).ok()
-  } else {
-    None
-  };
-
-  if existing.as_ref() == Some(&manifest) {
-    return Ok(BrowserCaptureHostInstallResult {
-      manifest_path: manifest_path.display().to_string(),
-      backup_path: None,
-      host_name: CAPTURE_HOST_NAME.to_string(),
-      host_path: host_path.display().to_string(),
-      extension_id,
-      already_configured: true,
-    });
-  }
-
-  if let Some(parent) = manifest_path.parent() {
-    fs::create_dir_all(parent)
-      .map_err(|error| format!("failed to create Chrome Native Messaging host directory: {error}"))?;
-  }
-
-  let backup_path = if manifest_path.exists() {
-    let backup = manifest_path.with_file_name(format!(
-      "{CAPTURE_HOST_NAME}.lcv-backup-{}.json",
-      system_time_seconds(SystemTime::now())
-    ));
-    fs::copy(&manifest_path, &backup)
-      .map_err(|error| format!("failed to back up Chrome Native Messaging host manifest: {error}"))?;
-    Some(backup)
-  } else {
-    None
-  };
-
-  let payload = serde_json::to_string_pretty(&manifest)
-    .map_err(|error| format!("failed to serialize Chrome Native Messaging host manifest: {error}"))?;
-  let temp_path = manifest_path.with_file_name(format!("{CAPTURE_HOST_NAME}.json.lcv.tmp"));
-  fs::write(&temp_path, payload)
-    .map_err(|error| format!("failed to write Chrome Native Messaging host temp file: {error}"))?;
-  #[cfg(target_os = "windows")]
-  {
-    if manifest_path.exists() {
-      fs::remove_file(&manifest_path)
-        .map_err(|error| format!("failed to replace Chrome Native Messaging host manifest: {error}"))?;
-    }
-  }
-  fs::rename(&temp_path, &manifest_path)
-    .map_err(|error| format!("failed to install Chrome Native Messaging host manifest: {error}"))?;
-
-  Ok(BrowserCaptureHostInstallResult {
-    manifest_path: manifest_path.display().to_string(),
-    backup_path: backup_path.map(|path| path.display().to_string()),
-    host_name: CAPTURE_HOST_NAME.to_string(),
-    host_path: host_path.display().to_string(),
-    extension_id,
-    already_configured: false,
-  })
 }
 
 #[tauri::command]
@@ -7749,62 +7552,6 @@ fn update_native_candidate_status(
     fact_id: result.fact_id,
     superseded_fact_ids: result.superseded_fact_ids,
     invalidated_pack_count: result.invalidated_pack_count,
-    generated_by: "native_vault_core".to_string(),
-  })
-}
-
-#[tauri::command]
-fn add_native_passive_capture_event(
-  app: AppHandle,
-  source_client: String,
-  conversation_id: String,
-  url: String,
-  text: String,
-  page_title: Option<String>,
-  selected: Option<bool>,
-) -> Result<NativePassiveCaptureResult, String> {
-  let path = vault_db_path(&app)?;
-  let result = add_passive_capture_event_at_path(
-    &path,
-    &source_client,
-    &conversation_id,
-    &url,
-    &text,
-    page_title.as_deref(),
-    selected.unwrap_or(false),
-  )?;
-  Ok(NativePassiveCaptureResult {
-    payload: result.payload,
-    updated_at: result.updated_at,
-    accepted: result.accepted,
-    status: result.status,
-    message: result.message,
-    event_id: result.event_id,
-    source_id: result.source_id,
-    candidate_ids: result.candidate_ids,
-    detected_sensitivity: result.detected_sensitivity,
-    retention_until: result.retention_until,
-    generated_by: "native_vault_core".to_string(),
-  })
-}
-
-#[tauri::command]
-fn update_native_passive_capture_settings(
-  app: AppHandle,
-  enabled: Option<bool>,
-  retention_days: Option<i64>,
-  allowed_sites: Option<Vec<String>>,
-) -> Result<NativeVaultSettingsUpdateResult, String> {
-  let path = vault_db_path(&app)?;
-  let result = update_passive_capture_settings_at_path(
-    &path,
-    enabled,
-    retention_days,
-    allowed_sites,
-  )?;
-  Ok(NativeVaultSettingsUpdateResult {
-    payload: result.payload,
-    updated_at: result.updated_at,
     generated_by: "native_vault_core".to_string(),
   })
 }
