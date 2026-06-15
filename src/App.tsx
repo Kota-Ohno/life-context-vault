@@ -70,6 +70,10 @@ import {
   saveNativeRuntimePreferences
 } from "./nativeStorage";
 import { detectLang, Lang, t } from "./i18n";
+import { Metric } from "./components/Metric";
+import { Badge } from "./components/Badge";
+import { SensitivityBadge } from "./components/SensitivityBadge";
+import { EmptyState } from "./components/EmptyState";
 import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
@@ -1953,15 +1957,6 @@ function NavButton({
       <span>{label}</span>
       {badge ? <strong>{badge}</strong> : null}
     </button>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong><span className="sr-only">: </span>{value}</strong>
-    </div>
   );
 }
 
@@ -4518,14 +4513,6 @@ function Textarea({
   );
 }
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return <span className="badge">{children}</span>;
-}
-
-function SensitivityBadge({ sensitivity }: { sensitivity: SensitivityTier }) {
-  return <span className={`badge sensitivity ${sensitivity}`}>{sensitivityLabel(sensitivity)}</span>;
-}
-
 export function isIsoExpired(value: string | null | undefined, nowMs = Date.now()): boolean {
   if (!value) return false;
   const timestamp = Date.parse(value);
@@ -5474,25 +5461,6 @@ function makeCaptureSetupCommand(extensionId: string): string {
     ? normalized
     : "<Chrome extension id>";
   return `npm run capture:build\nLCV_EXTENSION_ID=${id} npm run extension:host-manifest`;
-}
-
-function EmptyState({
-  title,
-  body,
-  action
-}: {
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="empty-state">
-      <Sparkles size={26} />
-      <h3>{title}</h3>
-      <p>{body}</p>
-      {action}
-    </div>
-  );
 }
 
 function titleForView(view: View): string {
