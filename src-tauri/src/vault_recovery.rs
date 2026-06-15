@@ -40,22 +40,6 @@ struct RecoveryEnvelope {
   wrapped_key: String,
 }
 
-/// Generate a new recovery key, formatted as five groups of eight hex chars
-/// separated by dashes (e.g. `a1b2c3d4-...`). Show once; the user writes it down.
-pub fn generate_recovery_key() -> String {
-  let mut bytes = [0u8; RECOVERY_KEY_BYTES];
-  getrandom::getrandom(&mut bytes).expect("OS randomness is required to generate a recovery key");
-  let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-  let mut out = String::new();
-  for (index, chunk) in hex.as_bytes().chunks(8).enumerate() {
-    if index > 0 {
-      out.push('-');
-    }
-    out.push_str(std::str::from_utf8(chunk).expect("hex chunk is valid UTF-8"));
-  }
-  out
-}
-
 /// Parse a user-entered recovery key (with or without dashes/spaces) back into
 /// its raw bytes. Fails on malformed input.
 pub fn parse_recovery_key(formatted: &str) -> Result<[u8; RECOVERY_KEY_BYTES], String> {

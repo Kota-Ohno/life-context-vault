@@ -4,7 +4,7 @@ use base64::{
 };
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
   collections::HashSet,
@@ -14,7 +14,7 @@ use std::{
   io::{Cursor, Read, Write},
 
   path::{Path, PathBuf},
-  process::{Child, Command, Output, Stdio},
+  process::{Command, Output, Stdio},
 
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
