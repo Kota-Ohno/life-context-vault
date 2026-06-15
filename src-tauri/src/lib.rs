@@ -69,35 +69,6 @@ fn window_lifecycle_decision(event_kind: WindowLifecycleEventKind) -> WindowLife
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AiAccessServiceStatus {
-  managed_by_app: bool,
-  relay_managed_running: bool,
-  agent_managed_running: bool,
-  relay_reachable: bool,
-  agent_connected: bool,
-  relay_url: String,
-  mcp_server_url: String,
-  relay_state_status_url: String,
-  relay_mode: String,
-  agent_runtime_status: Option<AgentRuntimeStatus>,
-  pairing_code: Option<String>,
-  last_error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentRuntimeStatus {
-  state: String,
-  relay_base_url: Option<String>,
-  updated_at: Option<u64>,
-  last_connected_at: Option<u64>,
-  last_error: Option<String>,
-  status_token: Option<String>,
-  process_id: Option<u32>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct VaultStateSnapshot {
   payload: Option<String>,
   updated_at: Option<String>,
@@ -118,17 +89,6 @@ struct ClaudeDesktopConfigInstallResult {
   config_path: String,
   backup_path: Option<String>,
   server_name: String,
-  already_configured: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserCaptureHostInstallResult {
-  manifest_path: String,
-  backup_path: Option<String>,
-  host_name: String,
-  host_path: String,
-  extension_id: String,
   already_configured: bool,
 }
 
@@ -186,18 +146,6 @@ struct NativeContextPackMutationResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RelayContextPackHandoffResult {
-  stored: bool,
-  request_id: String,
-  expires_at: Option<u64>,
-  ttl_seconds: Option<u64>,
-  payload: Option<String>,
-  updated_at: Option<String>,
-  generated_by: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct NativeSourceIngestResult {
   payload: String,
   updated_at: Option<String>,
@@ -246,22 +194,6 @@ struct NativeCandidateReviewResult {
   fact_id: Option<String>,
   superseded_fact_ids: Vec<String>,
   invalidated_pack_count: usize,
-  generated_by: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativePassiveCaptureResult {
-  payload: String,
-  updated_at: Option<String>,
-  accepted: bool,
-  status: String,
-  message: String,
-  event_id: Option<String>,
-  source_id: Option<String>,
-  candidate_ids: Vec<String>,
-  detected_sensitivity: String,
-  retention_until: Option<String>,
   generated_by: String,
 }
 
