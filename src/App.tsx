@@ -2169,6 +2169,8 @@ export function HomeView({
               {nextAction.label}
             </button>
           </div>
+          <details className="onboarding-details">
+            <summary>セットアップの手順を見る</summary>
           <div className="onboarding-checklist">
             {onboardingSteps.map((step, index) => (
               <button
@@ -2191,6 +2193,7 @@ export function HomeView({
               </button>
             ))}
           </div>
+          </details>
         </div>
       </div>
 
