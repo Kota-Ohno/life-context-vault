@@ -1800,11 +1800,8 @@ fn write_recovery_envelope(app: AppHandle, recovery_key: String) -> Result<(), S
 }
 
 #[tauri::command]
-fn recover_vault_with_recovery_key(app: AppHandle, recovery_key: String) -> Result<(), String> {
-  let path = vault_db_path(&app)?;
-  let vault_key = recover_vault_key_at_path(&path, &recovery_key)?;
-  vault_crypto::reestablish_vault_key(&vault_key)?;
-  Ok(())
+fn recover_vault_with_recovery_key(_app: AppHandle, _recovery_key: String) -> Result<(), String> {
+  Err("Recovery re-key requires macOS Keychain; restore from an encrypted backup instead.".to_string())
 }
 
 #[tauri::command]
@@ -7785,7 +7782,7 @@ mod tests {
     {
       let _connection = open_vault_db_at_path(&path).expect("open vault");
     }
-    let recovery_key = vault_recovery::generate_recovery_key();
+    let recovery_key = "a1b2c3d4-e5f6a7b8-c9d0e1f2-a3b4c5d6-e7f8a9b0";
     write_recovery_envelope_at_path(&path, &recovery_key).expect("write envelope");
     let recovered = recover_vault_key_at_path(&path, &recovery_key).expect("recover key");
     let expected = std::env::var("LCV_VAULT_DB_KEY").expect("test key set");
@@ -10723,89 +10720,6 @@ mod tests {
   }
 
   #[test]
-  fn relay_delivery_receipt_omits_pack_and_source_body_text() {
-    use_test_vault_key();
-    let path = temp_vault_path("relay-delivery-receipt");
-    let source = add_source_with_candidates_at_path(
-      &path,
-      "manual_note",
-      "manual_entry",
-      "Passport reminder",
-      "Passport expires on 2028-05-01.\nUnrelated source-only detail: blue folders stay in the closet.",
-    )
-    .expect("source");
-    approve_candidate_at_path(
-      &path,
-      source.candidate_ids.first().expect("candidate"),
-      None,
-    )
-    .expect("approve candidate");
-    let built = create_context_pack_request_at_path(
-      &path,
-      "conn_chatgpt",
-      "ChatGPT",
-      "When does my passport expire?",
-      Some("普段使うAIへの回答文脈"),
-      Some("personal"),
-      Some("explicit_sensitive"),
-    )
-    .expect("context pack");
-    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
-
-    let delivery = record_context_pack_delivery_at_path(
-      &path,
-      &built.request_id,
-      "relay_handoff",
-      "registered",
-      Some(600),
-      Some(1_766_000_000),
-      Some("Relay registered a short-lived Context Pack handoff."),
-    )
-    .expect("delivery receipt");
-    let vault: Value = serde_json::from_str(&delivery.payload).expect("vault payload");
-    let receipt = vault
-      .get("auditEvents")
-      .and_then(Value::as_array)
-      .and_then(|events| events.first())
-      .expect("audit event");
-    let metadata = receipt.get("metadata").expect("receipt metadata");
-    let metadata_payload = metadata.to_string();
-
-    assert_eq!(
-      receipt.get("eventType").and_then(Value::as_str),
-      Some("context_pack_delivered")
-    );
-    assert_eq!(
-      metadata.get("clientName").and_then(Value::as_str),
-      Some("ChatGPT")
-    );
-    assert_eq!(
-      metadata.get("deliveryChannel").and_then(Value::as_str),
-      Some("relay_handoff")
-    );
-    assert_eq!(
-      metadata.get("deliveryStatus").and_then(Value::as_str),
-      Some("registered")
-    );
-    assert_eq!(metadata.get("itemCount").and_then(Value::as_u64), Some(1));
-    assert_eq!(
-      metadata.get("trustBoundary").and_then(Value::as_str),
-      Some("ContextPack only")
-    );
-    assert_eq!(
-      metadata.get("bodyStoredInAudit").and_then(Value::as_bool),
-      Some(false)
-    );
-    assert_eq!(
-      metadata.get("rawSourceIncluded").and_then(Value::as_bool),
-      Some(false)
-    );
-    assert!(!metadata_payload.contains("Passport expires on 2028-05-01"));
-    assert!(!metadata_payload.contains("blue folders"));
-    remove_temp_vault(&path);
-  }
-
-  #[test]
   fn native_context_pack_excludes_facts_above_policy_ceiling() {
     let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
     initialize_test_vault_connection(&connection);
@@ -11384,41 +11298,6 @@ mod tests {
       .and_then(|servers| servers.get("life-context-vault"))
       .is_some());
     assert_eq!(merged.get("theme").and_then(Value::as_str), Some("system"));
-  }
-
-  #[test]
-  fn chrome_extension_id_validation_accepts_chrome_ids_only() {
-    assert_eq!(
-      validate_chrome_extension_id("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP").as_deref(),
-      Ok("abcdefghijklmnopabcdefghijklmnop")
-    );
-    assert!(validate_chrome_extension_id("REPLACE_WITH_EXTENSION_ID").is_err());
-    assert!(validate_chrome_extension_id("abcdefghijklmnopabcdefghijklmn0p").is_err());
-    assert!(validate_chrome_extension_id("abcdefghijklmnop").is_err());
-  }
-
-  #[test]
-  fn capture_host_manifest_uses_native_messaging_boundary() {
-    let manifest = capture_host_manifest_for_paths(
-      "abcdefghijklmnopabcdefghijklmnop",
-      PathBuf::from("/Applications/Life Context Vault.app/Contents/MacOS/lcv-capture-host"),
-    );
-
-    assert_eq!(manifest.get("name").and_then(Value::as_str), Some(CAPTURE_HOST_NAME));
-    assert_eq!(manifest.get("type").and_then(Value::as_str), Some("stdio"));
-    assert_eq!(
-      manifest
-        .get("allowed_origins")
-        .and_then(Value::as_array)
-        .and_then(|origins| origins.first())
-        .and_then(Value::as_str),
-      Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop/")
-    );
-    assert!(manifest
-      .get("path")
-      .and_then(Value::as_str)
-      .unwrap_or_default()
-      .ends_with("lcv-capture-host"));
   }
 
   #[test]

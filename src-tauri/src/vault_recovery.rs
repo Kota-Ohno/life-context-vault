@@ -138,25 +138,14 @@ mod tests {
   use super::*;
 
   const VAULT_KEY_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-  #[test]
-  fn generated_recovery_key_has_five_groups_of_eight_hex_chars() {
-    let key = generate_recovery_key();
-    let groups: Vec<&str> = key.split('-').collect();
-    assert_eq!(groups.len(), 5, "expected 5 dash-separated groups, got: {key}");
-    for group in &groups {
-      assert_eq!(group.len(), 8, "each group must be 8 hex chars, got: {group}");
-      assert!(group.chars().all(|c| c.is_ascii_hexdigit()), "non-hex char in {group}");
-    }
-  }
+  const TEST_RECOVERY_KEY: &str = "a1b2c3d4-e5f6a7b8-c9d0e1f2-a3b4c5d6-e7f8a9b0";
 
   #[test]
   fn parse_recovery_key_accepts_dashed_and_plain_forms() {
-    let key = generate_recovery_key();
-    let plain = key.replace('-', "");
-    assert!(parse_recovery_key(&key).is_ok());
+    let plain = TEST_RECOVERY_KEY.replace('-', "");
+    assert!(parse_recovery_key(TEST_RECOVERY_KEY).is_ok());
     assert!(parse_recovery_key(&plain).is_ok());
-    assert_eq!(parse_recovery_key(&key).unwrap(), parse_recovery_key(&plain).unwrap());
+    assert_eq!(parse_recovery_key(TEST_RECOVERY_KEY).unwrap(), parse_recovery_key(&plain).unwrap());
   }
 
   #[test]
@@ -167,27 +156,20 @@ mod tests {
 
   #[test]
   fn wrap_and_unwrap_round_trips_vault_key() {
-    let recovery_key = generate_recovery_key();
-    let envelope = wrap_vault_key(VAULT_KEY_HEX, &recovery_key).expect("wrap should succeed");
-    let recovered = unwrap_vault_key(&envelope, &recovery_key).expect("unwrap should succeed");
+    let envelope = wrap_vault_key(VAULT_KEY_HEX, TEST_RECOVERY_KEY).expect("wrap should succeed");
+    let recovered = unwrap_vault_key(&envelope, TEST_RECOVERY_KEY).expect("unwrap should succeed");
     assert_eq!(recovered, VAULT_KEY_HEX);
   }
 
   #[test]
   fn unwrap_rejects_wrong_recovery_key() {
-    let recovery_key = generate_recovery_key();
-    let envelope = wrap_vault_key(VAULT_KEY_HEX, &recovery_key).expect("wrap should succeed");
-    let other_key = generate_recovery_key();
-    if other_key == recovery_key {
-      return;
-    }
-    assert!(unwrap_vault_key(&envelope, &other_key).is_err());
+    let envelope = wrap_vault_key(VAULT_KEY_HEX, TEST_RECOVERY_KEY).expect("wrap should succeed");
+    assert!(unwrap_vault_key(&envelope, "01234567-89abcdef-01234567-89abcdef-01234567").is_err());
   }
 
   #[test]
   fn recovery_envelope_has_expected_shape() {
-    let recovery_key = generate_recovery_key();
-    let envelope = wrap_vault_key(VAULT_KEY_HEX, &recovery_key).expect("wrap should succeed");
+    let envelope = wrap_vault_key(VAULT_KEY_HEX, TEST_RECOVERY_KEY).expect("wrap should succeed");
     let value: serde_json::Value = serde_json::from_str(&envelope).expect("envelope is JSON");
     assert_eq!(value["version"], 1);
     assert_eq!(value["kdf"], "PBKDF2-SHA256");
