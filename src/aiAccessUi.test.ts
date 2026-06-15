@@ -17,13 +17,11 @@ import {
   homeNextActionKind,
   HomeView,
   InboxView,
-  aiAccessChecklistItems,
   isHostedRelayConfirmed,
   makeRestorePreview,
   manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
   sourceReviewCandidates,
-  webAiRegistrationGuides,
   webAiMcpEndpoint
 } from "./App";
 import { createEmptyVault } from "./vault";
