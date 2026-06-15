@@ -87,7 +87,6 @@ impl Default for AiAccessSupervisor {
 #[derive(Debug, PartialEq, Eq)]
 enum WindowLifecycleDecision {
   HideToBackground,
-  StopManagedAiAccess,
   Ignore,
 }
 
@@ -101,7 +100,7 @@ enum WindowLifecycleEventKind {
 fn window_lifecycle_decision(event_kind: WindowLifecycleEventKind) -> WindowLifecycleDecision {
   match event_kind {
     WindowLifecycleEventKind::CloseRequested => WindowLifecycleDecision::HideToBackground,
-    WindowLifecycleEventKind::Destroyed => WindowLifecycleDecision::StopManagedAiAccess,
+    WindowLifecycleEventKind::Destroyed => WindowLifecycleDecision::Ignore,
     WindowLifecycleEventKind::Other => WindowLifecycleDecision::Ignore,
   }
 }
@@ -7200,16 +7199,7 @@ fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
     TRAY_MENU_OPEN_ID => {
       let _ = show_control_center(app);
     }
-    TRAY_MENU_START_AI_ACCESS_ID => {
-      start_managed_ai_access_from_tray(app);
-      let _ = show_control_center(app);
-    }
-    TRAY_MENU_STOP_AI_ACCESS_ID => {
-      stop_managed_ai_access(app);
-      let _ = show_control_center(app);
-    }
     TRAY_MENU_QUIT_ID => {
-      stop_managed_ai_access(app);
       app.exit(0);
     }
     _ => {}
@@ -7218,14 +7208,9 @@ fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
 
 fn configure_background_tray(app: &mut App) -> tauri::Result<()> {
   let open = MenuItemBuilder::with_id(TRAY_MENU_OPEN_ID, "Open Control Center").build(app)?;
-  let start =
-    MenuItemBuilder::with_id(TRAY_MENU_START_AI_ACCESS_ID, "Start AI Access").build(app)?;
-  let stop = MenuItemBuilder::with_id(TRAY_MENU_STOP_AI_ACCESS_ID, "Stop AI Access").build(app)?;
   let quit = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "Quit Life Context Vault").build(app)?;
   let menu = MenuBuilder::new(app)
     .item(&open)
-    .item(&start)
-    .item(&stop)
     .separator()
     .item(&quit)
     .build()?;
@@ -8612,7 +8597,6 @@ fn stop_ai_access_services(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .manage(Mutex::new(AiAccessSupervisor::default()))
     .on_window_event(|window, event| {
       let decision = match event {
         WindowEvent::CloseRequested { .. } => {
@@ -8630,9 +8614,6 @@ pub fn run() {
           let _ = window
             .app_handle()
             .set_activation_policy(ActivationPolicy::Accessory);
-        }
-        WindowLifecycleDecision::StopManagedAiAccess => {
-          stop_managed_ai_access(window.app_handle());
         }
         WindowLifecycleDecision::Ignore => {}
       }
@@ -12634,7 +12615,7 @@ mod tests {
     );
     assert_eq!(
       window_lifecycle_decision(WindowLifecycleEventKind::Destroyed),
-      WindowLifecycleDecision::StopManagedAiAccess
+      WindowLifecycleDecision::Ignore
     );
     assert_eq!(
       window_lifecycle_decision(WindowLifecycleEventKind::Other),
