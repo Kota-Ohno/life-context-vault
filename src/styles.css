@@ -166,8 +166,8 @@ button {
 }
 
 .eyebrow {
-  color: #5e6d63;
-  font-size: 12px;
+  color: var(--ink-muted);
+  font-size: var(--fs-xs);
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -589,10 +589,10 @@ input,
 textarea,
 select {
   width: 100%;
-  border: 1px solid #c9d2c7;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #18201d;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
   outline: none;
 }
 
@@ -613,7 +613,7 @@ input:focus,
 textarea:focus,
 select:focus,
 button:focus-visible {
-  outline: 3px solid #b8d9ee;
+  outline: 3px solid var(--accent-soft);
   outline-offset: 2px;
 }
 
@@ -2502,10 +2502,10 @@ button:focus-visible {
   width: fit-content;
   min-height: 24px;
   padding: 3px 8px;
-  border: 1px solid #d7ddd4;
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: #f7f8f5;
-  color: #3d4a41;
+  background: var(--bg-sunken);
+  color: var(--ink-secondary);
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
