@@ -675,7 +675,7 @@ button:focus-visible {
 }
 
 .muted {
-  color: #647066;
+  color: var(--ink-secondary);
   line-height: 1.55;
 }
 
@@ -1967,7 +1967,7 @@ button:focus-visible {
 
 .warning-text {
   margin: 0;
-  color: #8b2f1d;
+  color: var(--tone-blocked);
   font-weight: 700;
   line-height: 1.45;
 }
@@ -2015,10 +2015,10 @@ button:focus-visible {
   max-height: 240px;
   margin: 0;
   padding: 12px;
-  border: 1px solid #d8dfd5;
-  border-radius: 8px;
-  background: #f2f5f0;
-  color: #16211b;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--ink-primary);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
