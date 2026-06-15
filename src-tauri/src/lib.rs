@@ -54,36 +54,6 @@ const AGENT_STATUS_FRESH_SECONDS: u64 = 30;
 const SOURCE_CHUNK_TARGET_CHARS: usize = 4_000;
 const SOURCE_CHUNK_OVERLAP_CHARS: usize = 300;
 
-struct AiAccessSupervisor {
-  relay: Option<Child>,
-  agent: Option<Child>,
-  pairing_code: Option<String>,
-  external_relay_base_url: Option<String>,
-  agent_status_path: Option<PathBuf>,
-  agent_status_token: Option<String>,
-  agent_process_id: Option<u32>,
-  relay_token: String,
-  handoff_secret: String,
-  last_error: Option<String>,
-}
-
-impl Default for AiAccessSupervisor {
-  fn default() -> Self {
-    Self {
-      relay: None,
-      agent: None,
-      pairing_code: None,
-      external_relay_base_url: None,
-      agent_status_path: None,
-      agent_status_token: None,
-      agent_process_id: None,
-      relay_token: random_local_token(),
-      handoff_secret: random_local_token(),
-      last_error: None,
-    }
-  }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum WindowLifecycleDecision {
   HideToBackground,
@@ -6832,14 +6802,6 @@ fn stop_child(child: &mut Option<Child>) {
   }
 }
 
-fn clear_supervisor_agent_status(supervisor: &mut AiAccessSupervisor) {
-  if let Some(path) = supervisor.agent_status_path.take() {
-    let _ = fs::remove_file(path);
-  }
-  supervisor.agent_status_token = None;
-  supervisor.agent_process_id = None;
-}
-
 fn read_agent_runtime_status(path: &Path) -> Option<AgentRuntimeStatus> {
   fs::read_to_string(path)
     .ok()
@@ -7105,58 +7067,6 @@ fn relay_base_url_from_agent_websocket_url(url: &str) -> Option<String> {
     None
   } else {
     Some(format!("https://{authority}"))
-  }
-}
-
-fn supervisor_status(supervisor: &mut AiAccessSupervisor) -> AiAccessServiceStatus {
-  let relay_managed_running = refresh_child(&mut supervisor.relay);
-  let agent_managed_running = refresh_child(&mut supervisor.agent);
-  let local_relay_reachable = relay_reachable();
-  let local_agent_connected = agent_connected();
-  let external_base_url = supervisor.external_relay_base_url.clone();
-  let using_external_relay = external_base_url.is_some() && !relay_managed_running;
-  let relay_url = external_base_url
-    .clone()
-    .unwrap_or_else(|| LOCAL_RELAY_BASE_URL.to_string());
-  let agent_runtime_status = supervisor
-    .agent_status_path
-    .as_deref()
-    .and_then(read_agent_runtime_status);
-  let hosted_agent_connected = using_external_relay
-    && agent_managed_running
-    && agent_runtime_status
-      .as_ref()
-      .is_some_and(|status| {
-        agent_runtime_status_matches_relay(
-          status,
-          &relay_url,
-          supervisor.agent_status_token.as_deref(),
-          supervisor.agent_process_id,
-          system_time_seconds(SystemTime::now()),
-        )
-      });
-  let relay_mode = if relay_managed_running {
-    "local_managed"
-  } else if using_external_relay {
-    "hosted_agent"
-  } else if local_relay_reachable {
-    "local_external"
-  } else {
-    "offline"
-  };
-  AiAccessServiceStatus {
-    managed_by_app: true,
-    relay_managed_running,
-    agent_managed_running,
-    relay_reachable: if using_external_relay { hosted_agent_connected } else { local_relay_reachable },
-    agent_connected: if using_external_relay { hosted_agent_connected } else { local_agent_connected },
-    relay_url: relay_url.clone(),
-    mcp_server_url: format!("{relay_url}/mcp"),
-    relay_state_status_url: format!("{relay_url}/relay/state"),
-    relay_mode: relay_mode.to_string(),
-    agent_runtime_status,
-    pairing_code: supervisor.pairing_code.clone(),
-    last_error: supervisor.last_error.clone(),
   }
 }
 
@@ -8053,22 +7963,6 @@ fn confirm_native_context_pack(
 }
 
 #[tauri::command]
-fn handoff_confirmed_context_pack_to_relay(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-  client_id: String,
-  request_id: String,
-) -> Result<RelayContextPackHandoffResult, String> {
-  let path = vault_db_path(&app)?;
-  let handoff_secret = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?
-    .handoff_secret
-    .clone();
-  handoff_context_pack_to_local_relay(&path, &client_id, &request_id, &handoff_secret)
-}
-
-#[tauri::command]
 fn deny_native_context_pack_request(
   app: AppHandle,
   request_id: String,
@@ -8401,184 +8295,6 @@ fn update_native_fact_metadata(
   })
 }
 
-#[tauri::command]
-fn ai_access_service_status(
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[tauri::command]
-fn start_ai_access_services(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  supervisor.external_relay_base_url = None;
-
-  let relay_managed_running = refresh_child(&mut supervisor.relay);
-  let relay_is_reachable = relay_reachable();
-  if !relay_is_reachable {
-    if !relay_managed_running {
-      supervisor.relay = Some(spawn_relay(&app, &supervisor.relay_token, &supervisor.handoff_secret).map_err(|error| {
-        supervisor.last_error = Some(error.clone());
-        error
-      })?);
-    }
-    if !wait_for_condition(relay_reachable) {
-      let error = "local relay did not become reachable".to_string();
-      supervisor.last_error = Some(error.clone());
-      return Err(error);
-    }
-  } else if should_block_external_relay_start(
-    relay_is_reachable,
-    relay_managed_running,
-    agent_connected(),
-  ) {
-    let error = format!(
-      "another relay is already running at {LOCAL_RELAY_BASE_URL}; use manual pairing for that relay or stop it before starting the app-managed AI Access Service"
-    );
-    supervisor.last_error = Some(error.clone());
-    return Err(error);
-  }
-
-  if !agent_connected() {
-    if refresh_child(&mut supervisor.agent) {
-      stop_child(&mut supervisor.agent);
-    }
-    clear_supervisor_agent_status(&mut supervisor);
-    let pairing = local_relay_json("POST", "/pairing/start", None).map_err(|error| {
-      supervisor.last_error = Some(error.clone());
-      error
-    })?;
-    let pairing_code = pairing
-      .get("pairingCode")
-      .and_then(Value::as_str)
-      .ok_or_else(|| "relay pairing response did not include pairingCode".to_string())?
-      .to_string();
-    let agent_websocket_url = pairing
-      .get("agentWebSocketUrl")
-      .and_then(Value::as_str)
-      .ok_or_else(|| "relay pairing response did not include agentWebSocketUrl".to_string())?
-      .to_string();
-    supervisor.pairing_code = Some(pairing_code);
-    let (agent, status_path, status_token) = spawn_agent(&app, &agent_websocket_url).map_err(|error| {
-      supervisor.last_error = Some(error.clone());
-      error
-    })?;
-    let agent_process_id = agent.id();
-    supervisor.agent = Some(agent);
-    supervisor.agent_status_path = Some(status_path);
-    supervisor.agent_status_token = Some(status_token);
-    supervisor.agent_process_id = Some(agent_process_id);
-    if !wait_for_condition(agent_connected) {
-      let error = "local agent did not connect to relay".to_string();
-      supervisor.last_error = Some(error.clone());
-      return Err(error);
-    }
-  }
-
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-const DEFAULT_MANAGED_RELAY_URL: &str = "https://relay.lifecontextvault.example";
-
-/// Request a managed-relay pairing URL from the operator's hosted relay's
-/// public `/pair` endpoint (no admin token needed). The returned
-/// `agentWebSocketUrl` is then passed to `start_ai_access_agent_for_relay`.
-/// Doing the fetch here (not in the webview) avoids CSP connect-src exposure
-/// and keeps the relay host configurable via LCV_MANAGED_RELAY_URL.
-#[tauri::command]
-fn request_managed_pairing_url() -> Result<String, String> {
-  let base = env::var("LCV_MANAGED_RELAY_URL")
-    .unwrap_or_else(|_| DEFAULT_MANAGED_RELAY_URL.to_string());
-  if base.contains(".example") {
-    return Err(
-      "Managed relay is not configured. Set LCV_MANAGED_RELAY_URL to your hosted relay.".to_string(),
-    );
-  }
-  let endpoint = format!("{}/pair", base.trim_end_matches('/'));
-  let response = ureq::post(&endpoint)
-    .timeout(Duration::from_secs(10))
-    .call()
-    .map_err(|error| format!("managed relay pairing request failed: {error}"))?;
-  let body = response
-    .into_string()
-    .map_err(|error| format!("failed to read managed relay response: {error}"))?;
-  let value: Value = serde_json::from_str(&body)
-    .map_err(|error| format!("managed relay response is not valid JSON: {error}"))?;
-  value
-    .get("agentWebSocketUrl")
-    .and_then(Value::as_str)
-    .map(|url| url.to_string())
-    .ok_or_else(|| "managed relay did not return agentWebSocketUrl".to_string())
-}
-
-#[tauri::command]
-fn start_ai_access_agent_for_relay(
-  app: AppHandle,
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-  agent_websocket_url: String,
-) -> Result<AiAccessServiceStatus, String> {
-  let validated_url = validate_agent_websocket_url(&agent_websocket_url)?;
-  let relay_base_url = relay_base_url_from_agent_websocket_url(&validated_url)
-    .ok_or_else(|| "Agent WebSocket URL did not include a relay host.".to_string())?;
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
-  let (agent, status_path, status_token) = spawn_agent(&app, &validated_url).map_err(|error| {
-    supervisor.last_error = Some(error.clone());
-    error
-  })?;
-  let agent_process_id = agent.id();
-  supervisor.agent = Some(agent);
-  supervisor.agent_status_path = Some(status_path);
-  supervisor.agent_status_token = Some(status_token);
-  supervisor.agent_process_id = Some(agent_process_id);
-
-  thread::sleep(Duration::from_millis(150));
-  if !refresh_child(&mut supervisor.agent) {
-    let error = "hosted relay agent exited immediately; check the pairing URL and relay TLS configuration".to_string();
-    supervisor.external_relay_base_url = None;
-    clear_supervisor_agent_status(&mut supervisor);
-    supervisor.last_error = Some(error.clone());
-    return Err(error);
-  }
-
-  supervisor.external_relay_base_url = Some(relay_base_url);
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[tauri::command]
-fn stop_ai_access_services(
-  supervisor: tauri::State<'_, Mutex<AiAccessSupervisor>>,
-) -> Result<AiAccessServiceStatus, String> {
-  let mut supervisor = supervisor
-    .lock()
-    .map_err(|_| "failed to lock AI access supervisor".to_string())?;
-  stop_child(&mut supervisor.agent);
-  stop_child(&mut supervisor.relay);
-  clear_supervisor_agent_status(&mut supervisor);
-  supervisor.pairing_code = None;
-  supervisor.external_relay_base_url = None;
-  supervisor.last_error = None;
-  Ok(supervisor_status(&mut supervisor))
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .on_window_event(|window, event| {
