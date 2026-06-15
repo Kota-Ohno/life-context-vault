@@ -31,14 +31,11 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  AiAccessServiceStatus,
-  BrowserCaptureHostInstallResult,
   ClaudeDesktopConfigInstallResult,
   LoginItemStatus,
   NativeDocumentExtractionCapabilities,
   NativeLegacyOfficeProviderCandidate,
   NativeOcrProviderCandidate,
-  addNativePassiveCaptureEvent,
   addNativeSourceWithCandidates,
   addNativeSourcePendingRuntime,
   approveNativeCandidate,
@@ -48,27 +45,20 @@ import {
   detectNativeLegacyOfficeProviderCandidates,
   detectNativeOcrProviderCandidates,
   extractNativeDocumentText,
-  getAiAccessServiceStatus,
   getClaudeDesktopConfigTemplate,
   getLoginItemStatus,
   getNativeDocumentExtractionCapabilities,
   getNativeVaultPath,
-  installChromeCaptureHostManifest,
   installClaudeDesktopConfig,
   installLoginItem,
   loadNativeVaultSnapshot,
   saveNativeVault,
   searchNativeFacts,
-  startAiAccessAgentForRelay,
-  requestManagedPairingUrl,
-  startAiAccessServices,
-  stopAiAccessServices,
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
   updateNativeContextPackItemVisibility,
   updateNativeFactLifecycle,
   updateNativeFactMetadata,
-  updateNativePassiveCaptureSettings,
   updateNativeSourceMetadata,
   updateNativeSourceBody,
   updateNativeSourceLifecycle,
@@ -432,7 +422,7 @@ export function App() {
   const [captureExtensionId, setCaptureExtensionId] = useState("");
   const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
   const [captureHostInstallResult, setCaptureHostInstallResult] =
-    useState<BrowserCaptureHostInstallResult | null>(null);
+    useState<any | null>(null);
   const [confirmAllCapturePurge, setConfirmAllCapturePurge] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
@@ -446,9 +436,6 @@ export function App() {
   const [restoreConfirmText, setRestoreConfirmText] = useState("");
   const [clearConfirmText, setClearConfirmText] = useState("");
   const [notice, setNotice] = useState("");
-  const [aiServiceStatus, setAiServiceStatus] = useState<AiAccessServiceStatus | null>(null);
-  const [aiServiceBusy, setAiServiceBusy] = useState(false);
-  const [hostedAgentWebsocketUrl, setHostedAgentWebsocketUrl] = useState("");
   const [documentExtractionCapabilities, setDocumentExtractionCapabilities] =
     useState<NativeDocumentExtractionCapabilities | null>(null);
   const [ocrProviderCandidates, setOcrProviderCandidates] = useState<NativeOcrProviderCandidate[]>([]);
@@ -562,48 +549,6 @@ export function App() {
     };
   }, [storageReady]);
 
-  useEffect(() => {
-    if (
-      !storageReady ||
-      !nativePath ||
-      !runtimePreferences.autoStartAiAccess ||
-      autoStartAttemptedRef.current
-    ) {
-      return;
-    }
-    autoStartAttemptedRef.current = true;
-    let cancelled = false;
-    async function autoStartAiAccess() {
-      try {
-        const current = await getAiAccessServiceStatus();
-        if (cancelled) return;
-        if (current?.agentConnected) {
-          setAiServiceStatus(current);
-          return;
-        }
-        setAiServiceBusy(true);
-        const status = await startAiAccessServices();
-        if (cancelled) return;
-        setAiServiceStatus(status);
-        setNotice(
-          status?.agentConnected
-            ? "設定に従ってAI連携を自動起動しました。"
-            : "AI連携の自動起動を開始しました。"
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setNotice(error instanceof Error ? error.message : "AI連携の自動起動に失敗しました。");
-          void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-        }
-      } finally {
-        if (!cancelled) setAiServiceBusy(false);
-      }
-    }
-    void autoStartAiAccess();
-    return () => {
-      cancelled = true;
-    };
-  }, [nativePath, runtimePreferences.autoStartAiAccess, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -695,34 +640,6 @@ export function App() {
       window.clearInterval(interval);
     };
   }, [nativePath, storageReady]);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    let cancelled = false;
-    async function refreshStatus() {
-      try {
-        const status = await getAiAccessServiceStatus();
-        if (!cancelled) setAiServiceStatus(status);
-      } catch (error) {
-        if (!cancelled) {
-          setAiServiceStatus((current) =>
-            current
-              ? {
-                  ...current,
-                  lastError: error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。"
-                }
-              : current
-          );
-        }
-      }
-    }
-    void refreshStatus();
-    const interval = window.setInterval(refreshStatus, 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [storageReady]);
 
   useEffect(() => {
     if (!storageReady || !nativePath) {
@@ -1572,29 +1489,6 @@ export function App() {
     apply(denyContextPackRequest(state, activeRequestId), "このContext Requestを拒否しました。");
   }
 
-  function updateCapture(settings: Partial<PassiveCaptureSettings>) {
-    void updateCaptureThroughCore(settings);
-  }
-
-  async function updateCaptureThroughCore(settings: Partial<PassiveCaptureSettings>) {
-    if (nativePath) {
-      try {
-        const updated = await updateNativePassiveCaptureSettings(settings);
-        if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
-          setNotice("Capture設定をVault Coreで保存しました。");
-          return;
-        }
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでCapture設定を保存できませんでした。");
-        return;
-      }
-    }
-    apply(updatePassiveCaptureSettings(state, settings), "Capture設定を更新しました。");
-  }
-
   function updatePolicy(
     clientId: string,
     settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
@@ -1625,75 +1519,6 @@ export function App() {
       }
     }
     apply(updateAccessPolicy(state, clientId, settings), "AI接続ポリシーを更新しました。");
-  }
-
-  function simulatePassiveCapture() {
-    void simulatePassiveCaptureThroughCore();
-  }
-
-  async function simulatePassiveCaptureThroughCore() {
-    if (!captureText.trim()) {
-      setNotice("Captureする会話断片を入力してください。");
-      return;
-    }
-    const conversationId = captureConversationId || "demo-thread";
-    const url = captureUrlForClient(captureClient, conversationId);
-    if (nativePath) {
-      try {
-        const saved = await saveNativeVault(state, nativeRevisionRef.current);
-        if (saved?.conflict && saved.currentState) {
-          const mergedState = mergeVaultStates(saved.currentState, state);
-          nativeRevisionRef.current = saved.currentUpdatedAt;
-          setNativeRevision(saved.currentUpdatedAt);
-          setState(mergedState);
-          setNotice("外部AI接続からの更新を取り込みました。Captureをもう一度実行してください。");
-          return;
-        }
-        if (saved?.updatedAt) {
-          nativeRevisionRef.current = saved.updatedAt;
-          setNativeRevision(saved.updatedAt);
-        }
-        const captured = await addNativePassiveCaptureEvent({
-          sourceClient: captureClient,
-          conversationId,
-          url,
-          text: captureText,
-          pageTitle: "Manual capture",
-          selected: true
-        });
-        if (!captured) {
-          setNotice("Desktop app外ではローカルCaptureとして処理します。");
-        } else {
-          nativeRevisionRef.current = captured.updatedAt;
-          setNativeRevision(captured.updatedAt);
-          setState(captured.state);
-          setNotice(
-            captured.accepted
-              ? `CaptureからMemory候補を${captured.candidateIds.length}件生成しました。承認されるまでAIには使われません。`
-              : captured.message
-          );
-          if (captured.accepted) {
-            setCaptureText("");
-            setView("inbox");
-          }
-          return;
-        }
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでCaptureを保存できませんでした。");
-        return;
-      }
-    }
-    const next = addPassiveCaptureEvent(state, {
-      sourceClient: captureClient,
-      conversationId,
-      url,
-      text: captureText
-    });
-    apply(next, state.passiveCaptureSettings.enabled ? "CaptureからMemory候補を生成しました。" : "Captureは停止中です。");
-    if (state.passiveCaptureSettings.enabled) {
-      setCaptureText("");
-      setView("inbox");
-    }
   }
 
   async function copyText(value: string, message: string): Promise<boolean> {
@@ -1783,95 +1608,6 @@ export function App() {
     }
   }
 
-  async function refreshAiAccess() {
-    try {
-      const status = await getAiAccessServiceStatus();
-      setAiServiceStatus(status);
-      setNotice(status ? "AI連携の状態を更新しました。" : "Desktop appでのみAI連携を管理できます。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の状態確認に失敗しました。");
-    }
-  }
-
-  async function startAiAccess() {
-    setAiServiceBusy(true);
-    try {
-      const status = await startAiAccessServices();
-      setAiServiceStatus(status);
-      setNotice(status?.agentConnected ? "AI連携を起動しました。" : "AI連携の起動を開始しました。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の起動に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function startHostedRelayAgent() {
-    const trimmedUrl = hostedAgentWebsocketUrl.trim();
-    if (!trimmedUrl || !hostedRelayMcpUrlFromAgentWs(trimmedUrl)) {
-      setNotice("Hosted Relayで発行したwss://のAgent WebSocket URLを入力してください。");
-      return;
-    }
-    setAiServiceBusy(true);
-    try {
-      const status = await startAiAccessAgentForRelay(trimmedUrl);
-      setAiServiceStatus(status);
-      setHostedAgentWebsocketUrl("");
-      setNotice(
-        status?.agentConnected
-          ? "Hosted Relayとのpairingを確認しました。Web AIへMCP URLを登録できます。"
-          : status?.agentManagedRunning
-          ? "Hosted Relayへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
-          : "Hosted Relay Agentの接続を開始しました。"
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Hosted Relay Agentの接続に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function connectManagedRelay() {
-    setAiServiceBusy(true);
-    try {
-      const url = await requestManagedPairingUrl();
-      if (!url) {
-        setNotice("Desktop appでのみ管理リレーに接続できます。");
-        return;
-      }
-      const status = await startAiAccessAgentForRelay(url);
-      setAiServiceStatus(status);
-      setNotice(
-        status?.agentConnected
-          ? "管理リレーとのpairingを確認しました。Web AIへMCP URLを登録できます。"
-          : status?.agentManagedRunning
-          ? "管理リレーへ接続する端末アプリを起動しました。Relay側の確認を待っています。"
-          : "管理リレーAgentの接続を開始しました。"
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "管理リレーへの接続に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
-  async function stopAiAccess() {
-    setAiServiceBusy(true);
-    try {
-      const status = await stopAiAccessServices();
-      setAiServiceStatus(status);
-      setNotice("AI連携を停止しました。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "AI連携の停止に失敗しました。");
-      void getAiAccessServiceStatus().then(setAiServiceStatus).catch(() => undefined);
-    } finally {
-      setAiServiceBusy(false);
-    }
-  }
-
   function updateRuntimePreference(next: Partial<RuntimePreferences>) {
     setRuntimePreferences((current) => {
       const updated = {
@@ -1942,26 +1678,6 @@ export function App() {
       setNotice(error instanceof Error ? error.message : "Claude Desktop設定のインストールに失敗しました。");
     } finally {
       setClaudeInstallBusy(false);
-    }
-  }
-
-  async function installCaptureHostManifest() {
-    setCaptureHostInstallBusy(true);
-    setCaptureHostInstallResult(null);
-    try {
-      const result = await installChromeCaptureHostManifest(captureExtensionId);
-      setCaptureHostInstallResult(result);
-      if (!result) {
-        setNotice("Desktop appでのみChrome Native Messaging hostをインストールできます。");
-      } else if (result.alreadyConfigured) {
-        setNotice("Chrome Native Messaging hostはすでに最新です。");
-      } else {
-        setNotice("Chrome Native Messaging hostをインストールしました。拡張popupからCaptureできます。");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Chrome Native Messaging hostのインストールに失敗しました。");
-    } finally {
-      setCaptureHostInstallBusy(false);
     }
   }
 
@@ -2052,22 +1768,13 @@ export function App() {
             facts={activeFacts}
             candidates={activeCandidates}
             connectors={state.connectorSessions}
-            captureSettings={state.passiveCaptureSettings}
-            captureEvents={state.passiveCaptureEvents}
             sources={state.sources}
             requests={state.contextPackRequests}
             contextPacks={state.contextPacks}
             nativePath={nativePath}
-            aiServiceStatus={aiServiceStatus}
-            aiServiceBusy={aiServiceBusy}
             setup={setup}
             setSetup={setSetup}
             submitBackground={submitBackground}
-            startAiAccess={startAiAccess}
-            updateCapture={updateCapture}
-            purgeAllPassiveCaptures={purgeAllPassiveCaptures}
-            confirmAllCapturePurge={confirmAllCapturePurge}
-            cancelAllCapturePurge={() => setConfirmAllCapturePurge(false)}
             seedDemo={seedDemo}
             goInbox={() => setView("inbox")}
             goSources={() => setView("sources")}
@@ -2261,22 +1968,13 @@ export function HomeView({
   facts,
   candidates,
   connectors,
-  captureSettings,
-  captureEvents,
   sources,
   requests,
   contextPacks,
   nativePath,
-  aiServiceStatus,
-  aiServiceBusy,
   setup,
   setSetup,
   submitBackground,
-  startAiAccess,
-  updateCapture,
-  purgeAllPassiveCaptures,
-  confirmAllCapturePurge,
-  cancelAllCapturePurge,
   seedDemo,
   goInbox,
   goSources,
@@ -2286,22 +1984,13 @@ export function HomeView({
   facts: ApprovedFact[];
   candidates: MemoryCandidate[];
   connectors: ConnectorSession[];
-  captureSettings: PassiveCaptureSettings;
-  captureEvents: PassiveCaptureEvent[];
   sources: VaultState["sources"];
   requests: ContextPackRequest[];
   contextPacks: ContextPack[];
   nativePath: string | null;
-  aiServiceStatus: AiAccessServiceStatus | null;
-  aiServiceBusy: boolean;
   setup: BackgroundSetupInput;
   setSetup: (input: BackgroundSetupInput) => void;
   submitBackground: () => void;
-  startAiAccess: () => void;
-  updateCapture: (settings: Partial<PassiveCaptureSettings>) => void;
-  purgeAllPassiveCaptures: () => void;
-  confirmAllCapturePurge: boolean;
-  cancelAllCapturePurge: () => void;
   seedDemo: () => void;
   goInbox: () => void;
   goSources: () => void;
@@ -2323,7 +2012,7 @@ export function HomeView({
   const grouped = groupByDomain(backgroundFacts);
   const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
   const approvedContextReady = facts.length > 0;
-  const aiAccessReady = Boolean(aiServiceStatus?.agentConnected);
+  const aiAccessReady = Boolean(nativePath);
   const nowMs = Date.now();
   const deliverablePackCount = contextPacks.filter((pack) =>
     contextPackDeliveryState(
@@ -2333,9 +2022,8 @@ export function HomeView({
     ).canDeliver
   ).length;
   const packTried = deliverablePackCount > 0;
-  const accessReadiness = aiAccessReadinessCopy(aiServiceStatus, nativePath);
+  const accessReadiness = { tone: "ready" as const, title: "MCPで接続", body: "Claude Desktop等のMCPクライアントから接続できます。", badge: "ok" };
   const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request, nowMs)).length;
-  const captureSafety = homeCaptureSafetySummary(captureSettings, captureEvents, sources);
   const aiBoundarySections = homeAiBoundarySections({
     facts,
     candidates,
@@ -2394,8 +2082,8 @@ export function HomeView({
           : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
       status: aiAccessReady ? "done" : packTried ? "current" : "blocked",
       actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
-      action: aiAccessReady || !nativePath ? goConnections : startAiAccess,
-      disabled: aiServiceBusy
+      action: aiAccessReady || !nativePath ? goConnections : goConnections,
+      disabled: false
     }
   ];
   const nextAction = (() => {
@@ -2440,7 +2128,7 @@ export function HomeView({
         title: packTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
         body: accessReadiness.body,
         label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
-        action: nativePath ? startAiAccess : goConnections,
+        action: nativePath ? goConnections : goConnections,
         icon: <Plug size={18} />
       };
     }
@@ -2473,7 +2161,7 @@ export function HomeView({
             </div>
             <button
               className="primary-button"
-              disabled={aiServiceBusy && nextAction.action === startAiAccess}
+              disabled={false && nextAction.action === goConnections}
               onClick={nextAction.action}
               type="button"
             >
@@ -6062,7 +5750,7 @@ function connectionCopy(connector: ConnectorSession): string {
   return "MCPが使えないAI向けに、確認済みContext Packを手動で渡します。";
 }
 
-function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
+function serviceManagedCopy(status: any | null): string {
   if (!status) return "Desktopのみ";
   if (status.relayMode === "hosted_agent") return status.agentConnected ? "Hosted接続済み" : status.agentManagedRunning ? "Hosted確認中" : "Hosted停止中";
   if (status.relayManagedRunning && status.agentManagedRunning) return "ローカルRelay + Agent";
@@ -6072,12 +5760,12 @@ function serviceManagedCopy(status: AiAccessServiceStatus | null): string {
   return "停止中";
 }
 
-function hostedAgentProcessCopy(status: AiAccessServiceStatus | null): string {
+function hostedAgentProcessCopy(status: any | null): string {
   if (status?.relayMode !== "hosted_agent") return "未使用";
   return status.agentManagedRunning ? "起動中" : "停止中";
 }
 
-function hostedPairingCopy(status: AiAccessServiceStatus | null): string {
+function hostedPairingCopy(status: any | null): string {
   if (status?.relayMode !== "hosted_agent") return "未接続";
   if (status.agentConnected) return "確認済み";
   const state = status.agentRuntimeStatus?.state;
@@ -6086,13 +5774,13 @@ function hostedPairingCopy(status: AiAccessServiceStatus | null): string {
   return status.agentManagedRunning ? "待機中" : "停止中";
 }
 
-function hostedLastErrorCopy(status: AiAccessServiceStatus | null): string {
+function hostedLastErrorCopy(status: any | null): string {
   if (status?.relayMode !== "hosted_agent") return "なし";
   return redactConnectionDiagnosticText(status.agentRuntimeStatus?.lastError) ?? "なし";
 }
 
 function aiAccessReadinessCopy(
-  status: AiAccessServiceStatus | null,
+  status: any | null,
   nativePath: string | null
 ): {
   badge: string;
@@ -6196,7 +5884,7 @@ export function redactConnectionDiagnosticText(value: string | null | undefined)
 }
 
 export function aiConnectionDiagnostic(
-  status: AiAccessServiceStatus | null,
+  status: any | null,
   nativePath: string | null,
   hostedAgentWebsocketUrl: string,
   webMcpEndpoint: string | null
@@ -6381,7 +6069,7 @@ export function connectionDiagnosticSummaryBadge(
 }
 
 export function hostedRelayRegistrationReadiness(
-  status: AiAccessServiceStatus | null,
+  status: any | null,
   nativePath: string | null,
   hostedAgentWebsocketUrl: string,
   webMcpEndpoint: string | null
@@ -6541,7 +6229,7 @@ export function webAiRegistrationGuides(
 }
 
 export function aiAccessChecklistItems(
-  status: AiAccessServiceStatus | null,
+  status: any | null,
   nativePath: string | null
 ): Array<{ label: string; detail: string; state: "ready" | "pending" | "blocked" }> {
   return [
@@ -6689,26 +6377,26 @@ function hostedRelayMcpUrlFromAgentWs(value: string): string | null {
 }
 
 export function isHostedRelayConfirmed(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null
+  status: Pick<any, "agentConnected" | "relayMode"> | null
 ): boolean {
   return status?.relayMode === "hosted_agent" && Boolean(status.agentConnected);
 }
 
 export function canCopyAiMcpEndpoint(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null
+  status: Pick<any, "agentConnected" | "relayMode"> | null
 ): boolean {
   return status?.relayMode !== "hosted_agent" || Boolean(status.agentConnected);
 }
 
 export function aiMcpEndpointDisplay(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null,
+  status: Pick<any, "agentConnected" | "relayMode"> | null,
   endpoint: string
 ): string {
   return canCopyAiMcpEndpoint(status) ? endpoint : "pairing確認後に表示";
 }
 
 export function webAiMcpEndpoint(
-  status: Pick<AiAccessServiceStatus, "agentConnected" | "relayMode"> | null,
+  status: Pick<any, "agentConnected" | "relayMode"> | null,
   endpoint: string
 ): string | null {
   if (status?.relayMode === "hosted_agent") {

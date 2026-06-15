@@ -38,7 +38,6 @@ import type {
   PassiveCaptureSettings,
   RawSource
 } from "./types";
-import type { AiAccessServiceStatus } from "./nativeStorage";
 
 describe("AI access UI safety", () => {
   it("blocks public MCP endpoint copying while hosted relay pairing is unconfirmed", () => {
@@ -86,7 +85,7 @@ describe("AI access UI safety", () => {
       },
       pairingCode: null,
       lastError: null
-    } satisfies AiAccessServiceStatus;
+    };
 
     const diagnostic = aiConnectionDiagnostic(
       hostedStatus,
@@ -123,7 +122,7 @@ describe("AI access UI safety", () => {
       agentRuntimeStatus: null,
       pairingCode: null,
       lastError: null
-    } satisfies AiAccessServiceStatus;
+    };
 
     const diagnostic = aiConnectionDiagnostic(
       hostedStatus,
@@ -159,7 +158,7 @@ describe("AI access UI safety", () => {
       agentRuntimeStatus: null,
       pairingCode: null,
       lastError: null
-    } satisfies AiAccessServiceStatus;
+    };
 
     const readiness = hostedRelayRegistrationReadiness(
       hostedStatus,
@@ -228,7 +227,7 @@ describe("AI access UI safety", () => {
       agentRuntimeStatus: null,
       pairingCode: null,
       lastError: null
-    } satisfies AiAccessServiceStatus;
+    };
 
     const readiness = hostedRelayRegistrationReadiness(
       pendingStatus,
@@ -284,7 +283,7 @@ describe("AI access UI safety", () => {
       agentRuntimeStatus: null,
       pairingCode: null,
       lastError: null
-    } satisfies AiAccessServiceStatus;
+    };
 
     const streamableHttp = aiAccessChecklistItems(
       status,
@@ -1072,18 +1071,10 @@ describe("AI access UI safety", () => {
         facts: [],
         candidates: [],
         connectors: [],
-        captureSettings: {
-          enabled: false,
-          retentionDays: 14,
-          allowedSites: []
-        },
-        captureEvents: [],
         sources: [],
         requests: [],
         contextPacks: [],
         nativePath: null,
-        aiServiceStatus: null,
-        aiServiceBusy: false,
         setup: {
           displayName: "",
           tonePreference: "",
@@ -1093,11 +1084,6 @@ describe("AI access UI safety", () => {
         },
         setSetup: noop,
         submitBackground: noop,
-        startAiAccess: noop,
-        updateCapture: noop,
-        purgeAllPassiveCaptures: noop,
-        confirmAllCapturePurge: false,
-        cancelAllCapturePurge: noop,
         seedDemo: noop,
         goInbox: noop,
         goSources: noop,

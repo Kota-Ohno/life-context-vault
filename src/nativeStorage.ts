@@ -178,47 +178,10 @@ export async function detectNativeLegacyOfficeProviderCandidates(): Promise<Nati
   return invoke<NativeLegacyOfficeProviderCandidate[]>("detect_legacy_office_provider_candidates");
 }
 
-export type AiAccessRelayMode = "local_managed" | "hosted_agent" | "local_external" | "offline" | "unknown";
-export type AgentRuntimeState = "connecting" | "connected" | "disconnected" | "unknown";
-
-export interface AgentRuntimeStatus {
-  state: AgentRuntimeState;
-  relayBaseUrl: string | null;
-  updatedAt: number | null;
-  lastConnectedAt: number | null;
-  lastError: string | null;
-  statusToken: string | null;
-  processId: number | null;
-}
-
-export interface AiAccessServiceStatus {
-  managedByApp: boolean;
-  relayManagedRunning: boolean;
-  agentManagedRunning: boolean;
-  relayReachable: boolean;
-  agentConnected: boolean;
-  relayUrl: string;
-  mcpServerUrl: string;
-  relayStateStatusUrl: string;
-  relayMode: AiAccessRelayMode;
-  agentRuntimeStatus: AgentRuntimeStatus | null;
-  pairingCode: string | null;
-  lastError: string | null;
-}
-
 export interface ClaudeDesktopConfigInstallResult {
   configPath: string;
   backupPath: string | null;
   serverName: string;
-  alreadyConfigured: boolean;
-}
-
-export interface BrowserCaptureHostInstallResult {
-  manifestPath: string;
-  backupPath: string | null;
-  hostName: string;
-  hostPath: string;
-  extensionId: string;
   alreadyConfigured: boolean;
 }
 
@@ -387,20 +350,6 @@ export interface NativeCandidateReviewResult {
   generatedBy: "native_vault_core";
 }
 
-export interface NativePassiveCaptureResult {
-  state: VaultState;
-  updatedAt: string | null;
-  accepted: boolean;
-  status: NativePassiveCapturePayload["status"];
-  message: string;
-  eventId: string | null;
-  sourceId: string | null;
-  candidateIds: string[];
-  detectedSensitivity: SensitivityTier;
-  retentionUntil: string | null;
-  generatedBy: "native_vault_core";
-}
-
 export interface NativeVaultSettingsUpdateResult {
   state: VaultState;
   updatedAt: string | null;
@@ -456,20 +405,6 @@ export interface NativeFactMetadataResult {
   generatedBy: "native_vault_core";
 }
 
-export async function getAiAccessServiceStatus(): Promise<AiAccessServiceStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<AiAccessServiceStatus>("ai_access_service_status");
-}
-
-export async function startAiAccessServices(): Promise<AiAccessServiceStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<AiAccessServiceStatus>("start_ai_access_services");
-}
-
-/** Write the recovery-key sidecar (wrapping the current vault key). Onboarding
- * calls this after the user writes down the recovery key. */
 export async function writeNativeRecoveryEnvelope(recoveryKey: string): Promise<boolean | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -516,26 +451,6 @@ export async function saveNativeRuntimePreferences(
  * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then
  * passed to `startAiAccessAgentForRelay` to complete one-click pairing.
  */
-export async function requestManagedPairingUrl(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("request_managed_pairing_url");
-}
-
-export async function startAiAccessAgentForRelay(agentWebsocketUrl: string): Promise<AiAccessServiceStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<AiAccessServiceStatus>("start_ai_access_agent_for_relay", {
-    agentWebsocketUrl
-  });
-}
-
-export async function stopAiAccessServices(): Promise<AiAccessServiceStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<AiAccessServiceStatus>("stop_ai_access_services");
-}
-
 export async function installClaudeDesktopConfig(): Promise<ClaudeDesktopConfigInstallResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -546,16 +461,6 @@ export async function getClaudeDesktopConfigTemplate(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("claude_desktop_config_template");
-}
-
-export async function installChromeCaptureHostManifest(
-  extensionId: string
-): Promise<BrowserCaptureHostInstallResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<BrowserCaptureHostInstallResult>("install_chrome_capture_host_manifest", {
-    extensionId
-  });
 }
 
 export async function getLoginItemStatus(): Promise<LoginItemStatus | null> {
@@ -658,22 +563,6 @@ export async function confirmNativeContextPack(packId: string): Promise<NativeCo
     requestId: result.requestId,
     packId: result.packId,
     generatedBy: result.generatedBy
-  };
-}
-
-export async function handoffConfirmedContextPackToRelay(input: {
-  clientId: string;
-  requestId: string;
-}): Promise<RelayContextPackHandoffResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<Omit<RelayContextPackHandoffResult, "state"> & { payload?: string | null }>("handoff_confirmed_context_pack_to_relay", {
-    clientId: input.clientId,
-    requestId: input.requestId
-  });
-  return {
-    ...result,
-    state: result.payload ? normalizeVaultState(JSON.parse(result.payload)) : null
   };
 }
 
@@ -782,61 +671,6 @@ export async function updateNativeCandidateStatus(input: {
     factId: result.factId,
     supersededFactIds: result.supersededFactIds,
     invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
-}
-
-export async function addNativePassiveCaptureEvent(input: {
-  sourceClient: string;
-  conversationId: string;
-  url: string;
-  text: string;
-  pageTitle?: string;
-  selected?: boolean;
-}): Promise<NativePassiveCaptureResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativePassiveCapturePayload>("add_native_passive_capture_event", {
-    sourceClient: input.sourceClient,
-    conversationId: input.conversationId,
-    url: input.url,
-    text: input.text,
-    pageTitle: input.pageTitle ?? null,
-    selected: input.selected ?? false
-  });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    accepted: result.accepted,
-    status: result.status,
-    message: result.message,
-    eventId: result.eventId,
-    sourceId: result.sourceId,
-    candidateIds: result.candidateIds,
-    detectedSensitivity: result.detectedSensitivity,
-    retentionUntil: result.retentionUntil,
-    generatedBy: result.generatedBy
-  };
-}
-
-export async function updateNativePassiveCaptureSettings(input: {
-  enabled?: boolean;
-  retentionDays?: number;
-  allowedSites?: string[];
-}): Promise<NativeVaultSettingsUpdateResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeVaultSettingsUpdatePayload>(
-    "update_native_passive_capture_settings",
-    {
-      enabled: input.enabled ?? null,
-      retentionDays: input.retentionDays ?? null,
-      allowedSites: input.allowedSites ?? null
-    }
-  );
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
     generatedBy: result.generatedBy
   };
 }
