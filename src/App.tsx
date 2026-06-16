@@ -1430,12 +1430,30 @@ export function App() {
         payloadPack = confirmedPack;
       }
     }
-    const payloadText = JSON.stringify(makeAiContextPackPayload(payloadPack), null, 2);
+    const aiPayload = makeAiContextPackPayload(payloadPack);
+    const promptText = [
+      "## Life Context",
+      "",
+      `Task: ${aiPayload.taskText}`,
+      "",
+      "### Context (approved by the user)",
+      "",
+      ...aiPayload.items.map(
+        (item, i) => `${i + 1}. ${item.itemText}${item.sourceTitles?.length ? ` (Source: ${item.sourceTitles.join(", ")})` : ""}`
+      ),
+      "",
+      aiPayload.warnings.length
+        ? `### 注意\n${aiPayload.warnings.map((w) => `- ${w.message}`).join("\n")}\n`
+      : "",
+      "上記の文脈を踏まえて回答してください。",
+      ""
+    ].filter(Boolean).join("\n");
+    const payloadText = promptText;
     const copied = await copyText(
       payloadText,
       shouldConfirm
-        ? "Context Packを承認し、AI向けペイロードをコピーしました。"
-        : "AI向けContext Packをコピーしました。"
+        ? "Context Packを承認し、ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
+        : "ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
     );
     if (copied) {
       setManualCopyPayload(null);
@@ -3114,7 +3132,7 @@ function ContextRequestsView({
                 type="button"
               >
                 <Clipboard size={16} />
-                {aiReady ? "本文をコピー" : "確認してコピーFallback"}
+                {aiReady ? "ChatGPT/Claude用にコピー" : "確認してコピー"}
               </button>
               <button
                 className="secondary-button"
