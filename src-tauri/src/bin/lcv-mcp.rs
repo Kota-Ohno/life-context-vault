@@ -102,7 +102,7 @@ fn handle_message(message: &Value) -> Option<Value> {
 fn tools() -> Value {
   json!([
     {
-      "name": "life_context.request_context_pack",
+      "name": "life_context_request_context_pack",
       "title": "Request Life Context Pack",
       "description": "Request a short-lived, policy-filtered Context Pack. Sensitive packs are queued for user confirmation instead of returned directly.",
       "inputSchema": {
@@ -126,7 +126,7 @@ fn tools() -> Value {
       }
     },
     {
-      "name": "life_context.propose_memory",
+      "name": "life_context_propose_memory",
       "title": "Propose Memory",
       "description": "Create an unapproved Memory Inbox candidate from the current conversation. This never creates an ApprovedFact.",
       "inputSchema": {
@@ -145,7 +145,7 @@ fn tools() -> Value {
       }
     },
     {
-      "name": "life_context.get_policy_summary",
+      "name": "life_context_get_policy_summary",
       "title": "Get Policy Summary",
       "description": "Return the configured connector and policy summary without exposing raw Vault contents.",
       "inputSchema": {
@@ -154,7 +154,7 @@ fn tools() -> Value {
       }
     },
     {
-      "name": "life_context.get_request_status",
+      "name": "life_context_get_request_status",
       "title": "Get Context Request Status",
       "description": "Check whether a queued Context Pack request has been confirmed, denied, expired, or is still pending.",
       "inputSchema": {
@@ -174,13 +174,13 @@ fn tools() -> Value {
 fn call_tool(name: &str, arguments: &Value) -> Result<Value, (i64, String)> {
   let client_id = effective_client_id();
   let result = match name {
-    "life_context.request_context_pack" => request_context_pack(arguments, &client_id),
-    "life_context.propose_memory" => propose_memory(arguments, &client_id),
-    "life_context.get_policy_summary" => {
+    "life_context_request_context_pack" => request_context_pack(arguments, &client_id),
+    "life_context_propose_memory" => propose_memory(arguments, &client_id),
+    "life_context_get_policy_summary" => {
       let vault = load_vault().map_err(|error| (-32000, error))?;
       get_policy_summary(&vault, &client_id)
     }
-    "life_context.get_request_status" => get_request_status(arguments, &client_id),
+    "life_context_get_request_status" => get_request_status(arguments, &client_id),
     _ => Err((-32602, format!("Unknown tool: {name}"))),
   }?;
 
@@ -219,7 +219,7 @@ fn request_context_pack_at_path(
       "expiresAt": result.expires_at,
       "maxSensitivityIncluded": result.max_sensitivity_included,
       "message": "Context Pack was created but not returned because it requires user confirmation in Life Context Vault.",
-      "nextAction": "Open Life Context Vault > Context Requests, confirm or deny the request, then call life_context.get_request_status."
+      "nextAction": "Open Life Context Vault > Context Requests, confirm or deny the request, then call life_context_get_request_status."
     }))
   } else {
     Ok(json!({
@@ -265,7 +265,7 @@ fn get_policy_summary(vault: &Value, client_id: &str) -> Result<Value, (i64, Str
     "summary": {
       "trustBoundary": "ContextPack only. Raw Vault and unapproved MemoryCandidate records are not exposed as trusted context.",
       "confirmationRule": "Context Packs above the calling client's approval threshold are queued for user confirmation.",
-      "tools": ["life_context.request_context_pack", "life_context.propose_memory", "life_context.get_policy_summary", "life_context.get_request_status"],
+      "tools": ["life_context_request_context_pack", "life_context_propose_memory", "life_context_get_policy_summary", "life_context_get_request_status"],
       "clientId": client_id,
       "effectivePolicy": policy
     }
