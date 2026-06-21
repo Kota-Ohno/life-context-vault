@@ -61,16 +61,8 @@ function timeLabel(at: string): string {
 
 // ─── Sensitivity display ──────────────────────────────────────────────────────
 
-const SENSITIVITY_LABELS: Record<string, string> = {
-  public:                  "public",
-  personal:                "personal",
-  private_consequential:   "private_consequential",
-  sensitive:               "sensitive",
-  secret_never_send:       "secret_never_send",
-};
-
 function sensitivityShort(s: string): string {
-  return SENSITIVITY_LABELS[s] ?? s;
+  return s;
 }
 
 // ─── Single entry card ────────────────────────────────────────────────────────

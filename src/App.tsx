@@ -1800,6 +1800,28 @@ export function App() {
             state={state}
             goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
+            onApprovePending={(packId) => {
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (pack) void approvePackForAi(pack);
+            }}
+            onApproveStanding={(packId, clientId) => {
+              setStandingDelivery(clientId, true);
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (pack) void approvePackForAi(pack);
+            }}
+            onRevoke={(packId) => {
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (!pack) return;
+              const ok = window.confirm(
+                "このFactを今後どのAIにも渡しません。よろしいですか？"
+              );
+              if (!ok) return;
+              const next = pack.items.reduce(
+                (s, item) => updateFactLifecycle(s, item.factId, "hide"),
+                state
+              );
+              apply(next, "Factを非表示にしました。今後どのAIにも渡しません。");
+            }}
           />
         )}
         {view === "inbox" && (
