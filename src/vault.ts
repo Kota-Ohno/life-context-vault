@@ -191,7 +191,11 @@ function normalizeAccessPolicies(
   const defaultClientIds = new Set(defaultPolicies.map((policy) => policy.clientId));
   const normalizedDefaults = defaultPolicies.map((defaultPolicy) => {
     const incomingPolicy = incoming.find((policy) => policy.clientId === defaultPolicy.clientId);
-    return normalizeAccessPolicy(incomingPolicy ? { ...defaultPolicy, ...incomingPolicy } : defaultPolicy, defaultPolicy);
+    if (!incomingPolicy) return normalizeAccessPolicy(defaultPolicy, defaultPolicy);
+    // Restore the raw incoming standingDeliveryEnabled after the merge so the default's `true`
+    // cannot silently opt in an existing vault that never had the flag set.
+    const merged = { ...defaultPolicy, ...incomingPolicy, standingDeliveryEnabled: incomingPolicy.standingDeliveryEnabled };
+    return normalizeAccessPolicy(merged, defaultPolicy);
   });
   const extraPolicies = incoming
     .filter((policy) => policy.clientId && !defaultClientIds.has(policy.clientId))
@@ -205,7 +209,10 @@ function normalizeAccessPolicy(policy: AccessPolicy, fallbackPolicy: AccessPolic
     ...policy,
     sensitivityCeiling: policySensitivityValue(policy.sensitivityCeiling, fallbackPolicy.sensitivityCeiling),
     requiresApprovalAbove: policySensitivityValue(policy.requiresApprovalAbove, fallbackPolicy.requiresApprovalAbove),
-    domainAllowlist: normalizePolicyDomainAllowlist(policy.domainAllowlist, cautiousLifeDomains)
+    domainAllowlist: normalizePolicyDomainAllowlist(policy.domainAllowlist, cautiousLifeDomains),
+    // Preserve the policy's own value (including absent/undefined) so the fallback's `true`
+    // can never silently opt in an existing vault that never had this flag set.
+    standingDeliveryEnabled: policy.standingDeliveryEnabled
   };
 }
 

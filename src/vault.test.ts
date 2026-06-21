@@ -962,6 +962,42 @@ describe("vault flow", () => {
     const b2 = buildContextPackForRequest(r2.state, r2.request.id);
     expect(b2.pack?.confirmationStatus).toBe("pending_user_confirmation");
   });
+
+  it("loading an existing vault whose policy lacks standingDeliveryEnabled stays strict (no silent opt-in)", () => {
+    // Simulate an existing vault stored before standingDeliveryEnabled existed:
+    // the persisted accessPolicy for conn_chatgpt has NO standingDeliveryEnabled key.
+    const now = "2026-06-12T00:00:00.000Z";
+    const storedState = {
+      ...createEmptyVault(),
+      facts: [{
+        id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
+        factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+      }],
+      accessPolicies: [{
+        clientId: "conn_chatgpt",
+        clientName: "ChatGPT",
+        sensitivityCeiling: "personal" as const,
+        requiresApprovalAbove: "professional_sensitive" as const,
+        domainAllowlist: [],
+        approvalMode: "always_review" as const,
+        createdAt: now,
+        updatedAt: now
+        // standingDeliveryEnabled intentionally OMITTED — simulates pre-upgrade vault
+      }]
+    };
+
+    // normalizeVaultState is the load path used when reading a persisted vault
+    const loaded = normalizeVaultState(storedState as Parameters<typeof normalizeVaultState>[0]);
+    const chatgptPolicy = loaded.accessPolicies.find((p) => p.clientId === "conn_chatgpt");
+    // The flag must remain absent/undefined — not silently coerced to true
+    expect(chatgptPolicy?.standingDeliveryEnabled).toBeUndefined();
+
+    // Confirm the pack stays strict: personal-tier fact must require user confirmation
+    const req = createContextPackRequest(loaded, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const built = buildContextPackForRequest(req.state, req.request.id);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
 });
 
 function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: ReturnType<typeof buildContextPack>) {
