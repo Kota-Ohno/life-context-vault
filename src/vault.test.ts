@@ -988,7 +988,7 @@ describe("vault flow", () => {
     };
 
     // normalizeVaultState is the load path used when reading a persisted vault
-    const loaded = normalizeVaultState(storedState as Parameters<typeof normalizeVaultState>[0]);
+    const loaded = normalizeVaultState(storedState as unknown as Parameters<typeof normalizeVaultState>[0]);
     const chatgptPolicy = loaded.accessPolicies.find((p) => p.clientId === "conn_chatgpt");
     // The flag must remain absent/undefined — not silently coerced to true
     expect(chatgptPolicy?.standingDeliveryEnabled).toBeUndefined();

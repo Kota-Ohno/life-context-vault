@@ -1905,7 +1905,7 @@ export function App() {
                     <label key={policy.clientId} className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
                       <input
                         type="checkbox"
-                        checked={policy.standingDeliveryEnabled !== false}
+                        checked={policy.standingDeliveryEnabled === true}
                         onChange={(e) => setStandingDelivery(policy.clientId, e.target.checked)}
                       />
                       <span>
