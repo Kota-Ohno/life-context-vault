@@ -3403,8 +3403,12 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
         let Ok(source_sensitivity) = sensitivity_tier(&source_sensitivity) else {
           return false;
         };
+        // The fact's own sensitivity is already gated against the ceiling above; the
+        // source's cautious default sensitivity is only a pre-approval heuristic and
+        // must not override the user's explicit fact-level approval here — otherwise a
+        // pack containing any fact from a cautiously-classified source could never be
+        // approved for AI.
         source_sensitivity != "secret_never_send"
-          && sensitivity_rank(source_sensitivity) <= sensitivity_rank(&ceiling)
       });
       if !has_ai_eligible_source {
         return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
@@ -10716,6 +10720,69 @@ mod tests {
 
     assert_eq!(blocked_status.status, "expired");
     assert!(blocked_status.context_pack.is_none());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn confirmed_context_pack_delivers_fact_within_ceiling_despite_cautious_source_sensitivity() {
+    use_test_vault_key();
+    let path = temp_vault_path("pack-cautious-source-sensitivity");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Weekly routine",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    let approved = approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    approved.fact_id.expect("approved fact id");
+
+    // Reproduce the in-app "承認ができない" pack-approval bug: the approved fact's own
+    // sensitivity stays within the client ceiling, but its source carries a higher,
+    // cautious *default* sensitivity. Delivery must honor the fact, not the source.
+    {
+      let mut connection = open_vault_db_at_path(&path).expect("open vault");
+      let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+      for source in vault
+        .get_mut("sources")
+        .and_then(Value::as_array_mut)
+        .expect("sources")
+      {
+        source["defaultSensitivity"] = Value::String("sensitive".to_string());
+      }
+      for fact in vault
+        .get_mut("facts")
+        .and_then(Value::as_array_mut)
+        .expect("facts")
+      {
+        fact["sensitivity"] = Value::String("personal".to_string());
+      }
+      save_vault_json_with_projection(&mut connection, &vault).expect("save vault");
+    }
+
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("private_consequential"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status");
+    assert_eq!(status.status, "fulfilled");
+    assert!(status.context_pack.is_some());
     remove_temp_vault(&path);
   }
 

@@ -1633,10 +1633,15 @@ function contextPackPolicyViolation(
     if (fact.sourceIds.length > 0) {
       const hasAiEligibleSource = fact.sourceIds.some((sourceId) => {
         const source = state.sources.find((candidate) => candidate.id === sourceId);
+        // A source-backed fact stays deliverable as long as it still has a live,
+        // non-secret source. The fact's OWN sensitivity is already gated against the
+        // client ceiling above; the source's cautious *default* sensitivity is only a
+        // pre-approval heuristic and must not override the user's explicit fact-level
+        // approval here — otherwise a pack containing any fact derived from a
+        // cautiously-classified source could never be approved for AI.
         return (
           source?.deletionState === "active" &&
-          source.defaultSensitivity !== "secret_never_send" &&
-          sensitivityRank[source.defaultSensitivity] <= sensitivityRank[currentCeiling]
+          source.defaultSensitivity !== "secret_never_send"
         );
       });
       if (!hasAiEligibleSource) return "deleted";

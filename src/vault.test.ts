@@ -549,6 +549,63 @@ describe("vault flow", () => {
     expect(built.pack?.items.some((item) => item.factId === "fact_health")).toBe(false);
   });
 
+  it("delivers an approved fact within the client ceiling even when its source default sensitivity is higher", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const normalized = normalizeVaultState({
+      ...base,
+      sources: [
+        {
+          id: "src_cautious",
+          kind: "background_onboarding",
+          title: "Guided background setup",
+          origin: "guided_onboarding",
+          body: "Recurring constraints, with an incidental mention of health.",
+          createdAt: now,
+          capturedAt: now,
+          defaultSensitivity: "sensitive",
+          processingStatus: "ready",
+          deletionState: "active"
+        }
+      ],
+      facts: [
+        {
+          id: "fact_constraint",
+          factText: "Recurring constraints: weekday time is limited.",
+          domain: "constraints_and_accessibility",
+          factType: "constraint",
+          sourceIds: ["src_cautious"],
+          sensitivity: "personal",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: []
+        }
+      ]
+    });
+    const requested = createContextPackRequest(normalized, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me plan my week",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    // The approved fact's own sensitivity (personal) is within the ChatGPT ceiling
+    // (private_consequential), so the build must include it.
+    expect(built.pack?.items.some((item) => item.factId === "fact_constraint")).toBe(true);
+
+    // Confirming must succeed and the pack must stay deliverable: the source's cautious
+    // default sensitivity must NOT override the user's explicit fact-level approval at
+    // delivery time. Regression guard for the "承認ができない" pack-approval bug.
+    const confirmed = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmed.contextPacks.find((pack) => pack.id === built.pack!.id)!;
+    expect(confirmedPack.confirmationStatus).toBe("confirmed");
+    expect(canSendContextPackToAi(confirmed, confirmedPack)).toBe(true);
+  });
+
   it("confirms a context pack for external AI without generating a local answer", () => {
     let state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",
