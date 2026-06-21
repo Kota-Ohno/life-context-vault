@@ -80,6 +80,7 @@ import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
 import { HomeTimeline } from "./components/HomeTimeline";
 import { ConnectView } from "./views/ConnectView";
+import { IngestView } from "./views/IngestView";
 import { Toggle } from "./components/Toggle";
 import { Card } from "./components/Card";
 import { SectionDivider } from "./components/SectionDivider";
@@ -405,7 +406,7 @@ const localRelayToken = "dev-local-token";
 const SHOW_QV_GALLERY = false;
 
 /** Views that render their own Quiet Vault PageHeader — suppress the legacy topbar title for these. */
-const VIEWS_WITH_OWN_HEADER = new Set(["home", "connections"]);
+const VIEWS_WITH_OWN_HEADER = new Set(["home", "connections", "sources"]);
 
 /** Human-readable labels for connector kinds. */
 const CLIENT_LABELS: Record<string, string> = {
@@ -1871,10 +1872,29 @@ export function App() {
           />
         )}
         {view === "sources" && (
-          <SourcesView
+          <IngestView
+            /* ── Candidate review (formerly InboxView) ── */
+            candidates={activeCandidates}
+            facts={activeFacts}
+            edits={candidateEdits}
+            supersedes={candidateSupersedes}
+            setEdit={(id, value) => setCandidateEdits((prev) => ({ ...prev, [id]: value }))}
+            toggleSupersede={(candidateId, factId) =>
+              setCandidateSupersedes((current) => ({
+                ...current,
+                [candidateId]: toggleSelectedId(current[candidateId] ?? [], factId)
+              }))
+            }
+            approve={approve}
+            reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "候補を却下しました。")}
+            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "候補をLaterに移しました。")}
+            markSensitive={(candidate) =>
+              void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
+            }
+            goHome={() => setView("home")}
+            goConnections={() => setView("connections")}
+            /* ── Sources (formerly SourcesView) ── */
             sources={state.sources}
-            candidates={state.candidates}
-            facts={state.facts}
             contextPacks={state.contextPacks}
             manualTitle={manualTitle}
             manualBody={manualBody}
@@ -1892,7 +1912,6 @@ export function App() {
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
             editSourceBody={editSourceBody}
-            goInbox={() => setView("inbox")}
           />
         )}
         {view === "connections" && (
