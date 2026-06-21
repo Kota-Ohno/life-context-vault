@@ -4476,3 +4476,233 @@ button:focus-visible {
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
+
+/* ============================================================
+   QV Toggle — accessible switch for standing-delivery toggles
+   Token-driven; no hard-coded hex.
+   ============================================================ */
+.qv-toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  gap: 0;
+}
+
+.qv-toggle__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.qv-toggle__track {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--hairline);
+  border: 1px solid color-mix(in srgb, var(--ink) 15%, transparent);
+  transition: background 120ms, border-color 120ms;
+  flex-shrink: 0;
+}
+
+.qv-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  transition: transform 120ms, background 120ms;
+}
+
+/* checked state */
+.qv-toggle__input:checked + .qv-toggle__track {
+  background: var(--pine);
+  border-color: var(--pine);
+}
+
+.qv-toggle__input:checked + .qv-toggle__track .qv-toggle__thumb {
+  transform: translateX(16px);
+  background: var(--paper);
+}
+
+/* focus ring */
+.qv-toggle__input:focus-visible + .qv-toggle__track {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* disabled */
+.qv-toggle__input:disabled + .qv-toggle__track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.qv-toggle:has(.qv-toggle__input:disabled) {
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   QV Connect view — Connections / 接続 page layout
+   ============================================================ */
+.qv-connect {
+  padding: var(--space-4) var(--space-6);
+  max-width: 700px;
+}
+
+.qv-connect__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.qv-connect-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.qv-connect-card__title {
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 2px;
+  letter-spacing: -0.01em;
+}
+
+.qv-connect-card__sub {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0;
+}
+
+.qv-connect-card__icon {
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.qv-connect-card__desc {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0 0 var(--space-3);
+}
+
+.qv-connect-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.qv-connect-card__result {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  margin: var(--space-2) 0 0;
+}
+
+.qv-connect-card__disclosure {
+  border: none;
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.qv-connect-card__disclosure summary {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.qv-connect-card__disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.qv-connect-card__disclosure summary::before {
+  content: "▸ ";
+  font-size: 0.6rem;
+}
+
+.qv-connect-card__disclosure[open] summary::before {
+  content: "▾ ";
+}
+
+.qv-connect-card__code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink-soft);
+  margin: var(--space-2) 0 0;
+  line-height: 1.5;
+}
+
+/* Standing delivery rows */
+.qv-standing-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.qv-standing-row:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.qv-standing-row__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.qv-standing-row__name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 3px;
+}
+
+.qv-standing-row__threshold {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.qv-standing-note {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  line-height: 1.55;
+  margin: var(--space-3) 0 0;
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-3);
+}

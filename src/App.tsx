@@ -80,6 +80,9 @@ import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
 import { HomeTimeline } from "./components/HomeTimeline";
 import { ConnectView } from "./views/ConnectView";
+import { Toggle } from "./components/Toggle";
+import { Card } from "./components/Card";
+import { SectionDivider } from "./components/SectionDivider";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -1892,32 +1895,56 @@ export function App() {
               goRequests={() => setView("requests")}
             />
             {state.accessPolicies.length > 0 && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">AI Access Policies</p>
-                    <h3>自動配信（Standing Delivery）</h3>
-                  </div>
-                </div>
-                <div className="form-stack">
-                  {state.accessPolicies.map((policy) => (
-                    <label key={policy.clientId} className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={policy.standingDeliveryEnabled === true}
-                        onChange={(e) => setStandingDelivery(policy.clientId, e.target.checked)}
-                      />
-                      <span>
-                        <strong>{policy.clientId}</strong>
-                        {"　"}閾値まで自動配信（standing delivery）
-                      </span>
-                    </label>
-                  ))}
-                  <p className="muted" style={{ fontSize: "0.85em" }}>
-                    有効にすると、この接続の感度閾値（requiresApprovalAbove）以下のContext PackはユーザーのタップなしでAIへ返されます。閾値を超えるPackは引き続き確認が必要です。
+              <div className="qv-connect" style={{ paddingTop: 0 }}>
+                <SectionDivider label="自動配信 Standing Delivery" />
+                <Card>
+                  {state.accessPolicies.map((policy) => {
+                    const session = state.connectorSessions.find(
+                      (s) => s.clientKind === policy.clientId
+                    );
+                    const clientLabels: Record<string, string> = {
+                      claude_desktop: "Claude Desktop",
+                      chatgpt: "ChatGPT",
+                      claude_remote: "Claude (リモート)",
+                      gemini: "Gemini",
+                      codex: "Codex",
+                      generic_mcp: "MCP クライアント",
+                      copy_fallback: "コピー経由",
+                    };
+                    const displayName =
+                      session?.clientName ??
+                      clientLabels[policy.clientId] ??
+                      policy.clientId;
+                    const thresholdLabel = (() => {
+                      switch (policy.requiresApprovalAbove) {
+                        case "public": return "public より上は確認";
+                        case "personal": return "personal より上は確認";
+                        case "private_consequential": return "private より上は確認";
+                        case "sensitive": return "sensitive より上は確認";
+                        case "secret_never_send": return "すべて確認なし（非推奨）";
+                        default: return String(policy.requiresApprovalAbove);
+                      }
+                    })();
+                    return (
+                      <div key={policy.clientId} className="qv-standing-row">
+                        <div className="qv-standing-row__info">
+                          <p className="qv-standing-row__name">{displayName}</p>
+                          <p className="qv-standing-row__threshold">{thresholdLabel}</p>
+                        </div>
+                        <Toggle
+                          id={`standing-${policy.clientId}`}
+                          checked={policy.standingDeliveryEnabled === true}
+                          onChange={(checked) => setStandingDelivery(policy.clientId, checked)}
+                          label={`${displayName} の自動配信`}
+                        />
+                      </div>
+                    );
+                  })}
+                  <p className="qv-standing-note">
+                    有効にすると、この接続の閾値以下のContext PackはAIへ自動で返されます。閾値を超えるPackは引き続きあなたの確認が必要です。
                   </p>
-                </div>
-              </section>
+                </Card>
+              </div>
             )}
           </>
         )}

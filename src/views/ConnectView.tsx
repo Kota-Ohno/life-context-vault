@@ -1,5 +1,9 @@
 import { Plug, MessageSquare } from "lucide-react";
 import type { ClaudeDesktopConfigInstallResult, LoginItemStatus } from "../nativeStorage";
+import { PageHeader } from "../components/PageHeader";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { SectionDivider } from "../components/SectionDivider";
 
 export function ConnectView({
   nativePath,
@@ -11,7 +15,7 @@ export function ConnectView({
   loginItemBusy,
   enableLoginItem,
   disableLoginItem,
-  goRequests
+  goRequests,
 }: {
   nativePath: string | null;
   claudeInstallBusy: boolean;
@@ -25,64 +29,85 @@ export function ConnectView({
   goRequests: () => void;
 }) {
   return (
-    <section className="view-grid">
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Claude Desktop (MCP)</p>
-            <h3>ローカルMCPで接続</h3>
-          </div>
-          <Plug size={18} />
-        </div>
-        <p className="muted">
-          Claude Desktop設定に Life Context Vault のMCPサーバーを追加します。追加後、Claude Desktopから承認済みの文脈(Context Pack)を要求できます。
-        </p>
-        <div className="service-actions">
-          <button
-            className="primary-button"
-            disabled={claudeInstallBusy || !nativePath}
-            onClick={installClaudeConfig}
-            type="button"
-          >
-            <Plug size={16} />
-            Claude設定へ追加
-          </button>
-          {loginItemStatus && loginItemStatus.supported ? (
-            <button
-              className="secondary-button"
-              disabled={loginItemBusy}
-              onClick={loginItemStatus.enabled ? disableLoginItem : enableLoginItem}
-              type="button"
-            >
-              {loginItemStatus.enabled ? "ログイン時起動を解除" : "ログイン時に起動"}
-            </button>
-          ) : null}
-        </div>
-        {claudeInstallResult ? <p className="muted">設定パス: {claudeInstallResult.configPath}</p> : null}
-        <details className="advanced-panel">
-          <summary>MCP設定（手動コピー用）</summary>
-          <pre className="code-box">{claudeConfig}</pre>
-        </details>
-      </div>
+    <div className="qv-connect">
+      <PageHeader
+        eyebrow="設定 · 接続"
+        title="接続とAIアクセス"
+        lede="AIクライアントを接続すると、あなたが審査・承認した情報だけをContext Packとして渡します。金庫の中身がそのまま渡されることはありません。"
+      />
 
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Copy fallback</p>
-            <h3>コピーでAIに渡す</h3>
+      <div className="qv-connect__cards">
+        {/* Claude Desktop — MCP card */}
+        <Card>
+          <div className="qv-connect-card__head">
+            <div>
+              <p className="qv-connect-card__sub">ローカル MCP</p>
+              <h2 className="qv-connect-card__title">Claude Desktop</h2>
+            </div>
+            <Plug size={16} className="qv-connect-card__icon" />
           </div>
-          <MessageSquare size={18} />
-        </div>
-        <p className="muted">
-          MCPを使わず、Requests で Context Pack を作成してコピーし、任意のAI（ChatGPT / Claude 等）に貼り付けられます。設定不要です。
-        </p>
-        <div className="service-actions">
-          <button className="secondary-button" onClick={goRequests} type="button">
-            <MessageSquare size={16} />
-            Requestsへ
-          </button>
-        </div>
+
+          <p className="qv-connect-card__desc">
+            Claude Desktopの設定ファイルにMCPサーバーを追加します。接続後、Claude DesktopからContext Packを要求できます。毎回の要求はあなたの確認を経てから返されます。
+          </p>
+
+          <div className="qv-connect-card__actions">
+            <Button
+              variant="primary"
+              size="md"
+              disabled={claudeInstallBusy || !nativePath}
+              onClick={installClaudeConfig}
+            >
+              <Plug size={14} />
+              Claude設定へ追加
+            </Button>
+
+            {loginItemStatus && loginItemStatus.supported ? (
+              <Button
+                variant="ghost"
+                size="md"
+                disabled={loginItemBusy}
+                onClick={loginItemStatus.enabled ? disableLoginItem : enableLoginItem}
+              >
+                {loginItemStatus.enabled ? "ログイン時起動を解除" : "ログイン時に起動"}
+              </Button>
+            ) : null}
+          </div>
+
+          {claudeInstallResult ? (
+            <p className="qv-connect-card__result">
+              設定パス: {claudeInstallResult.configPath}
+            </p>
+          ) : null}
+
+          <details className="qv-connect-card__disclosure">
+            <summary>MCP設定（手動コピー用）</summary>
+            <pre className="qv-connect-card__code">{claudeConfig}</pre>
+          </details>
+        </Card>
+
+        {/* Copy fallback card */}
+        <Card>
+          <div className="qv-connect-card__head">
+            <div>
+              <p className="qv-connect-card__sub">コピー経由</p>
+              <h2 className="qv-connect-card__title">ChatGPT · その他のAI</h2>
+            </div>
+            <MessageSquare size={16} className="qv-connect-card__icon" />
+          </div>
+
+          <p className="qv-connect-card__desc">
+            MCPを使わず、RequestsでContext Packを作成してコピーし、ChatGPTやClaudeなど任意のAIに貼り付けられます。設定は不要です。
+          </p>
+
+          <div className="qv-connect-card__actions">
+            <Button variant="ghost" size="md" onClick={goRequests}>
+              <MessageSquare size={14} />
+              Requestsへ
+            </Button>
+          </div>
+        </Card>
       </div>
-    </section>
+    </div>
   );
 }
