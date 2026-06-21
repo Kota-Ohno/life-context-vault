@@ -698,6 +698,23 @@ export async function updateNativeAccessPolicy(input: {
   };
 }
 
+export async function setNativeConnectionStandingDelivery(input: {
+  clientId: string;
+  enabled: boolean;
+}): Promise<NativeVaultSettingsUpdateResult | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<NativeVaultSettingsUpdatePayload>("set_connection_standing_delivery", {
+    clientId: input.clientId,
+    enabled: input.enabled
+  });
+  return {
+    state: normalizeVaultState(JSON.parse(result.payload)),
+    updatedAt: result.updatedAt,
+    generatedBy: result.generatedBy
+  };
+}
+
 export async function updateNativeSourceLifecycle(input: {
   sourceId: string;
   action: SourceLifecycleAction;

@@ -7566,6 +7566,28 @@ fn update_native_access_policy(
 }
 
 #[tauri::command]
+fn set_connection_standing_delivery(
+  app: AppHandle,
+  client_id: String,
+  enabled: bool,
+) -> Result<NativeVaultSettingsUpdateResult, String> {
+  let path = vault_db_path(&app)?;
+  set_connection_standing_delivery_at_path(&path, &client_id, enabled)?;
+  let connection = open_vault_db_at_path(&path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = serde_json::to_string(&vault).map_err(|e| e.to_string())?;
+  let updated_at = vault
+    .get("updatedAt")
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+  Ok(NativeVaultSettingsUpdateResult {
+    payload,
+    updated_at,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn update_native_source_lifecycle(
   app: AppHandle,
   source_id: String,
@@ -7722,6 +7744,7 @@ pub fn run() {
       approve_native_candidate,
       update_native_candidate_status,
       update_native_access_policy,
+      set_connection_standing_delivery,
       update_native_source_lifecycle,
       update_native_source_metadata,
       update_native_source_body,

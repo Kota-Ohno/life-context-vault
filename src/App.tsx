@@ -54,6 +54,7 @@ import {
   loadNativeVaultSnapshot,
   saveNativeVault,
   searchNativeFacts,
+  setNativeConnectionStandingDelivery,
   updateNativeAccessPolicy,
   updateNativeCandidateStatus,
   updateNativeContextPackItemVisibility,
@@ -1544,6 +1545,29 @@ export function App() {
     apply(updateAccessPolicy(state, clientId, settings), "AI接続ポリシーを更新しました。");
   }
 
+  async function setStandingDeliveryThroughCore(clientId: string, enabled: boolean) {
+    if (nativePath) {
+      try {
+        const updated = await setNativeConnectionStandingDelivery({ clientId, enabled });
+        if (updated) {
+          nativeRevisionRef.current = updated.updatedAt;
+          setNativeRevision(updated.updatedAt);
+          setState(updated.state);
+          setNotice(enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+          return;
+        }
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Standing delivery設定を保存できませんでした。");
+        return;
+      }
+    }
+    apply(updateAccessPolicy(state, clientId, { standingDeliveryEnabled: enabled }), enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+  }
+
+  function setStandingDelivery(clientId: string, enabled: boolean) {
+    void setStandingDeliveryThroughCore(clientId, enabled);
+  }
+
   async function copyText(value: string, message: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(value);
@@ -1855,18 +1879,48 @@ export function App() {
           />
         )}
         {view === "connections" && (
-          <ConnectView
-            nativePath={nativePath}
-            claudeInstallBusy={claudeInstallBusy}
-            claudeInstallResult={claudeInstallResult}
-            claudeConfig={claudeConfig}
-            installClaudeConfig={installClaudeConfig}
-            loginItemStatus={loginItemStatus}
-            loginItemBusy={loginItemBusy}
-            enableLoginItem={enableLoginItem}
-            disableLoginItem={disableLoginItem}
-            goRequests={() => setView("requests")}
-          />
+          <>
+            <ConnectView
+              nativePath={nativePath}
+              claudeInstallBusy={claudeInstallBusy}
+              claudeInstallResult={claudeInstallResult}
+              claudeConfig={claudeConfig}
+              installClaudeConfig={installClaudeConfig}
+              loginItemStatus={loginItemStatus}
+              loginItemBusy={loginItemBusy}
+              enableLoginItem={enableLoginItem}
+              disableLoginItem={disableLoginItem}
+              goRequests={() => setView("requests")}
+            />
+            {state.accessPolicies.length > 0 && (
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">AI Access Policies</p>
+                    <h3>自動配信（Standing Delivery）</h3>
+                  </div>
+                </div>
+                <div className="form-stack">
+                  {state.accessPolicies.map((policy) => (
+                    <label key={policy.clientId} className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={policy.standingDeliveryEnabled !== false}
+                        onChange={(e) => setStandingDelivery(policy.clientId, e.target.checked)}
+                      />
+                      <span>
+                        <strong>{policy.clientId}</strong>
+                        {"　"}閾値まで自動配信（standing delivery）
+                      </span>
+                    </label>
+                  ))}
+                  <p className="muted" style={{ fontSize: "0.85em" }}>
+                    有効にすると、この接続の感度閾値（requiresApprovalAbove）以下のContext PackはユーザーのタップなしでAIへ返されます。閾値を超えるPackは引き続き確認が必要です。
+                  </p>
+                </div>
+              </section>
+            )}
+          </>
         )}
         {view === "requests" && (
           <ContextRequestsView

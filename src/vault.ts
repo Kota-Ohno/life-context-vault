@@ -1862,7 +1862,7 @@ export function updatePassiveCaptureSettings(
 export function updateAccessPolicy(
   state: VaultState,
   clientId: string,
-  settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist">>
+  settings: Partial<Pick<AccessPolicy, "sensitivityCeiling" | "requiresApprovalAbove" | "passiveCaptureAllowed" | "domainAllowlist" | "standingDeliveryEnabled">>
 ): VaultState {
   const now = nowIso();
   const existingPolicy = state.accessPolicies.find((policy) => policy.clientId === clientId);
