@@ -1186,7 +1186,19 @@ fn create_native_context_pack_request_in_connection(
     .unwrap_or(policy_ceiling);
   let requires_approval_above = policy_requires_approval_above_for_client(vault, client_id);
   let domain_allowlist = policy_domain_allowlist_for_client(vault, client_id);
-  let approval_mode = approval_mode.unwrap_or("explicit_sensitive");
+  let resolved_mode = match approval_mode {
+    Some(mode) => mode.to_string(),
+    // Caller (e.g. lcv-mcp) defers to the connection's standing-delivery opt-in.
+    // Single enforcement point: the core decides, not the sidecar.
+    None => {
+      if connection_standing_delivery_enabled(vault, client_id) {
+        "explicit_sensitive".to_string()
+      } else {
+        "always_review".to_string()
+      }
+    }
+  };
+  let approval_mode = resolved_mode.as_str();
   let facts = rank_context_facts_in_connection(connection, task_text, &ceiling, 24)?;
   let mut items = Vec::new();
   let mut excluded_items = Vec::new();
@@ -2449,6 +2461,36 @@ pub fn update_access_policy_at_path(
 
   let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
   Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+}
+
+pub fn set_connection_standing_delivery_at_path(
+  path: &Path,
+  client_id: &str,
+  enabled: bool,
+) -> Result<(), String> {
+  let client_id = client_id.trim();
+  if client_id.is_empty() {
+    return Err("clientId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  ensure_access_policy_for_client(&mut vault, client_id);
+  let now = now_iso();
+  {
+    let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+      return Err("Vault has no accessPolicies array.".to_string());
+    };
+    let Some(policy) = policies
+      .iter_mut()
+      .find(|policy| str_field(policy, "clientId") == client_id)
+    else {
+      return Err(format!("AccessPolicy was not found for client: {client_id}"));
+    };
+    policy["standingDeliveryEnabled"] = Value::Bool(enabled);
+    policy["updatedAt"] = Value::String(now);
+  }
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(())
 }
 
 pub fn update_source_lifecycle_at_path(
@@ -6406,6 +6448,14 @@ fn is_expired(value: &str) -> bool {
     return date < Utc::now().date_naive();
   }
   false
+}
+
+fn connection_standing_delivery_enabled(vault: &Value, client_id: &str) -> bool {
+  value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .and_then(|policy| policy.get("standingDeliveryEnabled").and_then(Value::as_bool))
+    .unwrap_or(false) // absent = legacy/strict; opt-in is explicit
 }
 
 fn policy_ceiling_for_client(vault: &Value, client_id: &str) -> String {
@@ -11437,5 +11487,36 @@ mod tests {
       window_lifecycle_decision(WindowLifecycleEventKind::Other),
       WindowLifecycleDecision::Ignore
     );
+  }
+
+  #[test]
+  fn standing_delivery_flag_governs_mcp_auto_delivery() {
+    use_test_vault_key();
+    let path = temp_vault_path("standing-delivery-flag");
+    let source = add_source_with_candidates_at_path(
+      &path, "manual_note", "manual_entry",
+      "Passport reminder", "Passport expires on 2028-05-01.",
+    ).expect("source");
+    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+
+    // Connection opted into standing delivery, request approval mode = None (core decides).
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable");
+    let auto = create_context_pack_request_at_path(
+      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+    ).expect("auto pack");
+    assert_eq!(auto.confirmation_status, "not_required");
+    assert!(auto.context_pack.is_some(), "<=threshold must auto-deliver");
+
+    // Same connection with standing delivery OFF must pend.
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
+    let pend = create_context_pack_request_at_path(
+      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+    ).expect("pending pack");
+    assert_eq!(pend.confirmation_status, "pending_user_confirmation");
+    assert!(pend.context_pack.is_none(), "strict connection must not auto-deliver");
+    remove_temp_vault(&path);
   }
 }
