@@ -7,10 +7,12 @@ import {
   attachLocalAnswer,
   buildContextPack,
   buildContextPackForRequest,
+  buildActivityTimeline,
   canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
   createEmptyVault,
+  domainLabel,
   exportEncryptedBackup,
   importEncryptedBackup,
   makeAiContextPackPayload,
@@ -961,6 +963,184 @@ describe("vault flow", () => {
     const r2 = createContextPackRequest(disabled, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
     const b2 = buildContextPackForRequest(r2.state, r2.request.id);
     expect(b2.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  // ── buildActivityTimeline ─────────────────────────────────────────────────
+
+  it("buildActivityTimeline returns [] for an empty vault", () => {
+    const result = buildActivityTimeline(createEmptyVault());
+    expect(result).toEqual([]);
+  });
+
+  it("buildActivityTimeline groups today's packs into one day labelled 今日 with correct disclosures and fact categories", () => {
+    const now = new Date("2026-06-21T12:00:00.000Z");
+    const todayTs = "2026-06-21T10:00:00.000Z";
+    const todayTs2 = "2026-06-21T11:00:00.000Z";
+
+    const base = createEmptyVault();
+    const state: typeof base = {
+      ...base,
+      facts: [
+        {
+          id: "fact_1",
+          factText: "My name is Kota",
+          domain: "identity_and_profile",
+          factType: "identity",
+          sourceIds: [],
+          sensitivity: "personal",
+          confidence: "user_asserted",
+          status: "active",
+          createdAt: todayTs,
+          approvedAt: todayTs,
+          updatedAt: todayTs,
+          supersedesFactIds: [],
+        },
+      ],
+      contextPackRequests: [
+        {
+          id: "req_chatgpt",
+          clientId: "client_chatgpt",
+          clientName: "ChatGPT",
+          taskText: "What is my name?",
+          purpose: "answering question",
+          requestedDomains: ["identity_and_profile"],
+          sensitivityCeiling: "personal",
+          approvalMode: "auto_low_risk",
+          createdAt: todayTs,
+          expiresAt: "2026-06-21T10:10:00.000Z",
+          status: "fulfilled",
+        },
+        {
+          id: "req_claude",
+          clientId: "client_claude",
+          clientName: "Claude",
+          taskText: "Who am I?",
+          purpose: "answering question",
+          requestedDomains: ["identity_and_profile"],
+          sensitivityCeiling: "personal",
+          approvalMode: "always_review",
+          createdAt: todayTs2,
+          expiresAt: "2026-06-21T11:10:00.000Z",
+          status: "pending_user_confirmation",
+        },
+      ],
+      contextPacks: [
+        {
+          id: "pack_auto",
+          requestId: "req_chatgpt",
+          taskText: "What is my name?",
+          taskDomain: "identity_and_profile",
+          riskLevel: "low",
+          generatedAt: todayTs,
+          maxSensitivityIncluded: "personal",
+          items: [
+            {
+              id: "item_1",
+              factId: "fact_1",
+              itemText: "My name is Kota",
+              reasonIncluded: "relevant",
+              sensitivity: "personal",
+              sourceTitles: [],
+              confidence: "user_asserted",
+            },
+          ],
+          excludedItems: [],
+          warnings: [],
+          confirmationStatus: "not_required",
+        },
+        {
+          id: "pack_pending",
+          requestId: "req_claude",
+          taskText: "Who am I?",
+          taskDomain: "identity_and_profile",
+          riskLevel: "low",
+          generatedAt: todayTs2,
+          maxSensitivityIncluded: "personal",
+          items: [
+            {
+              id: "item_2",
+              factId: "fact_1",
+              itemText: "My name is Kota",
+              reasonIncluded: "relevant",
+              sensitivity: "personal",
+              sourceTitles: [],
+              confidence: "user_asserted",
+            },
+          ],
+          excludedItems: [],
+          warnings: [],
+          confirmationStatus: "pending_user_confirmation",
+        },
+      ],
+    };
+
+    const days = buildActivityTimeline(state, { scope: "all", now });
+    expect(days).toHaveLength(1);
+    expect(days[0].label).toBe("今日");
+    expect(days[0].entries).toHaveLength(2);
+
+    // Entries are sorted newest-first within the day
+    const [first, second] = days[0].entries;
+    expect(first.packId).toBe("pack_pending");
+    expect(first.disclosure).toBe("pending");
+    expect(first.clientName).toBe("Claude");
+
+    expect(second.packId).toBe("pack_auto");
+    expect(second.disclosure).toBe("auto");
+    expect(second.clientName).toBe("ChatGPT");
+
+    // Fact category via domainLabel
+    expect(first.facts[0].category).toBe(domainLabel("identity_and_profile"));
+    expect(second.facts[0].category).toBe(domainLabel("identity_and_profile"));
+  });
+
+  it("buildActivityTimeline scope:week excludes packs older than 7 days but scope:all includes them", () => {
+    const now = new Date("2026-06-21T12:00:00.000Z");
+    const todayTs = "2026-06-21T10:00:00.000Z";
+    const oldTs = "2026-05-22T10:00:00.000Z"; // 30 days ago
+
+    const base = createEmptyVault();
+    const state: typeof base = {
+      ...base,
+      facts: [],
+      contextPackRequests: [],
+      contextPacks: [
+        {
+          id: "pack_today",
+          taskText: "recent",
+          taskDomain: "identity_and_profile",
+          riskLevel: "low",
+          generatedAt: todayTs,
+          maxSensitivityIncluded: "public",
+          items: [],
+          excludedItems: [],
+          warnings: [],
+          confirmationStatus: "not_required",
+        },
+        {
+          id: "pack_old",
+          taskText: "old task",
+          taskDomain: "identity_and_profile",
+          riskLevel: "low",
+          generatedAt: oldTs,
+          maxSensitivityIncluded: "public",
+          items: [],
+          excludedItems: [],
+          warnings: [],
+          confirmationStatus: "confirmed",
+        },
+      ],
+    };
+
+    const weekResult = buildActivityTimeline(state, { scope: "week", now });
+    const allPackIds = weekResult.flatMap((d) => d.entries.map((e) => e.packId));
+    expect(allPackIds).toContain("pack_today");
+    expect(allPackIds).not.toContain("pack_old");
+
+    const allResult = buildActivityTimeline(state, { scope: "all", now });
+    const allIds = allResult.flatMap((d) => d.entries.map((e) => e.packId));
+    expect(allIds).toContain("pack_today");
+    expect(allIds).toContain("pack_old");
   });
 
   it("loading an existing vault whose policy lacks standingDeliveryEnabled stays strict (no silent opt-in)", () => {

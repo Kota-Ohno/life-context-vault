@@ -2105,6 +2105,185 @@ export function sensitivityLabel(sensitivity: SensitivityTier): string {
   }[sensitivity];
 }
 
+// ── Activity Timeline (pure selector for Home disclosure ledger) ──────────────
+
+export type TimelineDisclosure = "auto" | "pending" | "confirmed" | "cancelled";
+
+export type TimelineFact = {
+  factId: string;
+  text: string;
+  category: string;
+  sensitivity: SensitivityTier;
+};
+
+export type TimelineEntry = {
+  packId: string;
+  requestId?: string;
+  clientId: string;
+  clientName: string;
+  task: string;
+  at: string;
+  disclosure: TimelineDisclosure;
+  maxSensitivity: SensitivityTier;
+  facts: TimelineFact[];
+};
+
+export type TimelineDay = {
+  dayKey: string;
+  label: string;
+  entries: TimelineEntry[];
+};
+
+/**
+ * Derives the Home disclosure-ledger timeline from VaultState.
+ *
+ * @param state      - current VaultState
+ * @param opts.scope - "week" (default, last 7 days) | "month" (~31 days) | "all"
+ * @param opts.now   - override "now" for testing (ISO string or Date); default new Date()
+ */
+export function buildActivityTimeline(
+  state: VaultState,
+  opts?: { scope?: "week" | "month" | "all"; now?: string | Date }
+): TimelineDay[] {
+  const scope = opts?.scope ?? "week";
+  const now = opts?.now ? new Date(opts.now) : new Date();
+
+  // Compute earliest allowed timestamp by scope
+  let cutoffMs: number | null = null;
+  if (scope === "week") {
+    cutoffMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  } else if (scope === "month") {
+    cutoffMs = now.getTime() - 31 * 24 * 60 * 60 * 1000;
+  }
+
+  // Lookup maps
+  const factById = new Map<string, ApprovedFact>();
+  for (const f of state.facts) {
+    factById.set(f.id, f);
+  }
+  const requestById = new Map<string, ContextPackRequest>();
+  for (const r of state.contextPackRequests) {
+    requestById.set(r.id, r);
+  }
+
+  // Map confirmationStatus → TimelineDisclosure
+  function toDisclosure(
+    status: ContextPack["confirmationStatus"]
+  ): TimelineDisclosure {
+    if (status === "not_required") return "auto";
+    if (status === "confirmed" || status === "edited_by_user") return "confirmed";
+    if (status === "pending_user_confirmation") return "pending";
+    if (status === "cancelled") return "cancelled";
+    return "confirmed";
+  }
+
+  // Highest sensitivity tier among an array (fallback "public")
+  const sensitivityOrder: SensitivityTier[] = [
+    "public",
+    "personal",
+    "private_consequential",
+    "sensitive",
+    "secret_never_send",
+  ];
+  function highestSensitivity(tiers: SensitivityTier[]): SensitivityTier {
+    let best = 0;
+    for (const t of tiers) {
+      const rank = sensitivityOrder.indexOf(t);
+      if (rank > best) best = rank;
+    }
+    return sensitivityOrder[best];
+  }
+
+  // Build entries, applying scope filter
+  const entries: TimelineEntry[] = [];
+  for (const pack of state.contextPacks) {
+    const at = pack.confirmedAt ?? pack.generatedAt;
+    if (cutoffMs !== null && new Date(at).getTime() < cutoffMs) {
+      continue;
+    }
+
+    const request = pack.requestId ? requestById.get(pack.requestId) : undefined;
+    const clientId = request?.clientId ?? "";
+    const clientName = request?.clientName ?? "不明なクライアント";
+    const task = request?.taskText ?? pack.taskText ?? "";
+
+    const facts: TimelineFact[] = pack.items.map((item) => {
+      const fact = factById.get(item.factId);
+      const domain = fact?.domain;
+      const category = domain ? domainLabel(domain) : "";
+      return {
+        factId: item.factId,
+        text: item.itemText,
+        sensitivity: item.sensitivity,
+        category,
+      };
+    });
+
+    const maxSensitivity: SensitivityTier =
+      pack.maxSensitivityIncluded ??
+      highestSensitivity(facts.map((f) => f.sensitivity));
+
+    entries.push({
+      packId: pack.id,
+      requestId: pack.requestId,
+      clientId,
+      clientName,
+      task,
+      at,
+      disclosure: toDisclosure(pack.confirmationStatus),
+      maxSensitivity,
+      facts,
+    });
+  }
+
+  // Group by local calendar day of `at`
+  const dayMap = new Map<string, TimelineEntry[]>();
+  for (const entry of entries) {
+    const d = new Date(entry.at);
+    const dayKey = [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, "0"),
+      String(d.getDate()).padStart(2, "0"),
+    ].join("-");
+    const bucket = dayMap.get(dayKey);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      dayMap.set(dayKey, [entry]);
+    }
+  }
+
+  // Compute today/yesterday keys in local time
+  const todayKey = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  const yd = new Date(now);
+  yd.setDate(yd.getDate() - 1);
+  const yesterdayKey = [
+    yd.getFullYear(),
+    String(yd.getMonth() + 1).padStart(2, "0"),
+    String(yd.getDate()).padStart(2, "0"),
+  ].join("-");
+
+  function dayLabel(key: string): string {
+    if (key === todayKey) return "今日";
+    if (key === yesterdayKey) return "昨日";
+    const [, mm, dd] = key.split("-");
+    return `${parseInt(mm, 10)}月${parseInt(dd, 10)}日`;
+  }
+
+  // Sort days descending; within each day sort entries descending by `at`
+  return Array.from(dayMap.entries())
+    .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+    .map(([dayKey, dayEntries]) => ({
+      dayKey,
+      label: dayLabel(dayKey),
+      entries: dayEntries.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)),
+    }));
+}
+
 export function makeDemoVault(): VaultState {
   let state = createEmptyVault();
   state = createBackgroundSource(state, {
