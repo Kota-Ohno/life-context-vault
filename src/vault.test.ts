@@ -932,6 +932,36 @@ describe("vault flow", () => {
     expect(restored.sources[0].title).toBe("Legacy backup note");
     expect(restored.sources[0].body).toContain("Legacy backup import");
   });
+
+  it("standing-delivery opt-in governs whether a personal-tier pack auto-delivers", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const withFact = normalizeVaultState({
+      ...base,
+      facts: [{
+        id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
+        factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+      }]
+    });
+    const enabled = {
+      ...withFact,
+      accessPolicies: withFact.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt" ? { ...p, standingDeliveryEnabled: true } : p)
+    };
+    const r1 = createContextPackRequest(enabled, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const b1 = buildContextPackForRequest(r1.state, r1.request.id);
+    expect(b1.pack?.confirmationStatus).toBe("not_required");
+
+    const disabled = {
+      ...withFact,
+      accessPolicies: withFact.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt" ? { ...p, standingDeliveryEnabled: false } : p)
+    };
+    const r2 = createContextPackRequest(disabled, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const b2 = buildContextPackForRequest(r2.state, r2.request.id);
+    expect(b2.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
 });
 
 function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: ReturnType<typeof buildContextPack>) {

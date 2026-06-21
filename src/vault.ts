@@ -1141,7 +1141,7 @@ export function createContextPackRequest(
     purpose: input.purpose ?? "Answer with user-approved life context",
     requestedDomains: input.requestedDomains ?? [classifyDomain(input.taskText)],
     sensitivityCeiling: lowerSensitivityTier(policyCeiling, requestedCeiling),
-    approvalMode: input.approvalMode ?? "explicit_sensitive",
+    approvalMode: input.approvalMode ?? connectionApprovalMode(state, input.clientId),
     createdAt: now,
     expiresAt: minutesFromNow(input.ttlMinutes ?? 10),
     status: "pending_user_confirmation"
@@ -2473,6 +2473,7 @@ function createDefaultAccessPolicy(clientId: string, createdAt: string): AccessP
           : "private_consequential",
     requiresApprovalAbove: clientId === "conn_browser_capture" ? "public" : "personal",
     passiveCaptureAllowed: false,
+    standingDeliveryEnabled: true,
     createdAt,
     updatedAt: createdAt
   };
@@ -2497,6 +2498,11 @@ function policyRequiresApprovalAboveForClient(state: VaultState, clientId: strin
     state.accessPolicies.find((policy) => policy.clientId === clientId)?.requiresApprovalAbove,
     "personal"
   );
+}
+
+function connectionApprovalMode(state: VaultState, clientId: string): ContextPackRequest["approvalMode"] {
+  const policy = state.accessPolicies.find((p) => p.clientId === clientId);
+  return policy?.standingDeliveryEnabled === true ? "explicit_sensitive" : "always_review";
 }
 
 function touchConnector(
