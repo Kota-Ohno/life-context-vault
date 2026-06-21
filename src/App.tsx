@@ -404,6 +404,9 @@ const localRelayToken = "dev-local-token";
 /** Set to true to mount the QV component gallery at startup (dev only). */
 const SHOW_QV_GALLERY = false;
 
+/** Views that render their own Quiet Vault PageHeader — suppress the legacy topbar title for these. */
+const VIEWS_WITH_OWN_HEADER = new Set(["home", "connections"]);
+
 export function App() {
   const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
   const [state, setState] = useState<VaultState>(() => loadVault());
@@ -1778,7 +1781,7 @@ export function App() {
 
       <main className="workspace">
         <header className="topbar">
-          {view !== "home" && (
+          {!VIEWS_WITH_OWN_HEADER.has(view) && (
             <div>
               <p className="eyebrow">User-owned life context</p>
               <h2>{titleForView(view)}</h2>
