@@ -16,6 +16,7 @@
   --tone-attention-soft: #F0E7D6;
   --tone-blocked:      #B0322B;
   --tone-blocked-soft: #FBE9E7;
+  --tone-warn:         #8B6914;
 
   /* ── Quiet Vault semantic aliases ──────────────────────────────── */
   --paper:        var(--bg-app);
@@ -87,6 +88,7 @@
   --tone-attention-soft: #2A2417;
   --tone-blocked:      #D96359;
   --tone-blocked-soft: #2E1715;
+  --tone-warn:         #C9A35E;
 
   /* semantic aliases re-pointed for dark */
   --paper:        var(--bg-app);

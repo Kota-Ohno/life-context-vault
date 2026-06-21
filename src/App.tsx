@@ -168,7 +168,6 @@ import {
 
 type View =
   | "home"
-  | "inbox"
   | "sources"
   | "connections"
   | "requests"
@@ -812,7 +811,7 @@ export function App() {
     if (addStatus === "unavailable") {
       const next = createBackgroundSource(state, setup);
       apply(next, "背景Sourceを保存し、Memory Inboxに候補を追加しました。");
-      setView("inbox");
+      setView("sources");
     }
     if (addStatus === "failed") return;
     setSetup(blankSetup);
@@ -840,7 +839,7 @@ export function App() {
         body: manualBody
       });
       apply(next, "Sourceを保存し、Memory Inboxに候補を追加しました。");
-      setView("inbox");
+      setView("sources");
     }
     if (addStatus === "failed") return;
     setManualTitle("");
@@ -959,7 +958,7 @@ export function App() {
         body: text
       });
       apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`);
-      setView("inbox");
+      setView("sources");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
   }
@@ -983,7 +982,7 @@ export function App() {
       setNotice(
         `${message} ${added.candidateIds.length}件の候補が作成されました。承認されるまでAIには使われません。`
       );
-      setView("inbox");
+      setView("sources");
       return "saved";
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
@@ -1847,30 +1846,6 @@ export function App() {
             }}
           />
         )}
-        {view === "inbox" && (
-          <InboxView
-            candidates={activeCandidates}
-            facts={activeFacts}
-            edits={candidateEdits}
-            supersedes={candidateSupersedes}
-            setEdit={(id, value) => setCandidateEdits((prev) => ({ ...prev, [id]: value }))}
-            toggleSupersede={(candidateId, factId) =>
-              setCandidateSupersedes((current) => ({
-                ...current,
-                [candidateId]: toggleSelectedId(current[candidateId] ?? [], factId)
-              }))
-            }
-            approve={approve}
-            reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "候補を却下しました。")}
-            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "候補をLaterに移しました。")}
-            markSensitive={(candidate) =>
-              void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
-            }
-            goHome={() => setView("home")}
-            goSources={() => setView("sources")}
-            goConnections={() => setView("connections")}
-          />
-        )}
         {view === "sources" && (
           <IngestView
             /* ── Candidate review (formerly InboxView) ── */
@@ -2018,7 +1993,7 @@ export function App() {
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
-            goInbox={() => setView("inbox")}
+            goInbox={() => setView("sources")}
             goSources={() => setView("sources")}
           />
         )}
@@ -2392,153 +2367,6 @@ function SetupForm({
         候補を作成
       </button>
     </div>
-  );
-}
-
-export function InboxView({
-  candidates,
-  facts,
-  edits,
-  supersedes,
-  setEdit,
-  toggleSupersede,
-  approve,
-  reject,
-  archive,
-  markSensitive,
-  goHome,
-  goSources,
-  goConnections
-}: {
-  candidates: MemoryCandidate[];
-  facts: ApprovedFact[];
-  edits: Record<string, string>;
-  supersedes: Record<string, string[]>;
-  setEdit: (id: string, value: string) => void;
-  toggleSupersede: (candidateId: string, factId: string) => void;
-  approve: (candidate: MemoryCandidate) => void;
-  reject: (candidate: MemoryCandidate) => void;
-  archive: (candidate: MemoryCandidate) => void;
-  markSensitive: (candidate: MemoryCandidate) => void;
-  goHome: () => void;
-  goSources: () => void;
-  goConnections: () => void;
-}) {
-  if (candidates.length === 0) {
-    return (
-      <EmptyState
-        title="Inboxは空です"
-        body="まずは生活背景、文書・メモ、AI会話Captureのどれかから候補を作れます。"
-        action={
-          <div className="inbox-empty-actions" aria-label="Memory Inbox start actions" role="group">
-            <div className="inbox-empty-action-grid">
-              <button className="primary-button" onClick={goHome} type="button">
-                <Sparkles size={16} />
-                背景情報を追加
-              </button>
-              <button className="secondary-button" onClick={goSources} type="button">
-                <FileText size={16} />
-                文書・メモを追加
-              </button>
-              <button className="secondary-button" onClick={goConnections} type="button">
-                <Plug size={16} />
-                AI会話Captureを設定
-              </button>
-            </div>
-            <div className="trust-note compact-note inbox-empty-note">
-              <ShieldCheck size={16} />
-              <span>候補は承認するとFactになり、Context Pack確認後だけAIに渡ります。</span>
-            </div>
-          </div>
-        }
-      />
-    );
-  }
-
-  return (
-    <section className="candidate-list">
-      {candidates.map((candidate) => {
-        const conflictFactIds = candidate.conflictWithFactIds ?? [];
-        const conflictOptions = facts.filter((fact) => conflictFactIds.includes(fact.id));
-        const replacementOptions = [
-          ...conflictOptions,
-          ...facts.filter(
-            (fact) =>
-              fact.domain === candidate.domain &&
-              fact.status === "active" &&
-              !conflictFactIds.includes(fact.id)
-          )
-        ].slice(0, 4);
-        const selectedSupersedes = supersedes[candidate.id] ?? [];
-        return (
-          <article className="candidate-card" key={candidate.id}>
-            <div className="candidate-meta">
-              <Badge>{domainLabel(candidate.domain)}</Badge>
-              <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
-              <Badge>{candidate.confidence}</Badge>
-              {conflictFactIds.length > 0 && <Badge>衝突候補</Badge>}
-            </div>
-            <textarea
-              aria-label="Candidate text"
-              value={edits[candidate.id] ?? candidate.proposedFactText}
-              onChange={(event) => setEdit(candidate.id, event.target.value)}
-            />
-            <p>{candidate.reasonToRemember}</p>
-            {conflictFactIds.length > 0 && (
-              <div className="warning-line conflict-line">
-                <ShieldAlert size={16} />
-                {candidate.conflictReason ?? "既存のFactと異なる可能性があります。保存前に置き換えるか確認してください。"}
-              </div>
-            )}
-            {replacementOptions.length > 0 && (
-              <div className="supersede-panel">
-                <div className="trust-note compact-note">
-                  <RefreshCw size={16} />
-                  <span>この候補で古いFactを置き換える場合だけ選択します。置き換えたFactはContext Pack候補から外れ、履歴に残ります。</span>
-                </div>
-                <div className="supersede-options">
-                  {replacementOptions.map((fact) => (
-                    <label className="supersede-option" key={fact.id}>
-                      <input
-                        checked={selectedSupersedes.includes(fact.id)}
-                        onChange={() => toggleSupersede(candidate.id, fact.id)}
-                        type="checkbox"
-                      />
-                      <span>{fact.factText}</span>
-                      {conflictFactIds.includes(fact.id) && <Badge>衝突</Badge>}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-            {candidate.status === "blocked_sensitive" && (
-              <div className="warning-line">
-                <ShieldAlert size={16} />
-                センシティブ候補です。保存すると、この情報はContext Pack使用時にも確認対象になります。
-              </div>
-            )}
-            <div className="action-row">
-              <button className="primary-button" onClick={() => approve(candidate)} type="button">
-                <Check size={16} />
-                {selectedSupersedes.length > 0 ? "置き換えて保存" : "保存"}
-              </button>
-              <button className="secondary-button" onClick={() => markSensitive(candidate)} type="button">
-                <ShieldAlert size={16} />
-                Sensitive
-              </button>
-              <button className="secondary-button" onClick={() => archive(candidate)} type="button">
-                <Archive size={16} />
-                Later
-              </button>
-              <button className="danger-button" onClick={() => reject(candidate)} type="button">
-                <X size={16} />
-                却下
-              </button>
-            </div>
-          </article>
-        );
-      })}
-    </section>
   );
 }
 
@@ -5561,7 +5389,6 @@ function makeCaptureSetupCommand(extensionId: string): string {
 function titleForView(view: View): string {
   return {
     home: "Life Context Home",
-    inbox: "Memory Inbox",
     sources: "Sources",
     connections: "AI Connections",
     requests: "Context Requests",

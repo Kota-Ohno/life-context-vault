@@ -4766,7 +4766,7 @@ button:focus-visible {
 .qv-ingest__conflict-tag {
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  color: var(--tone-warn, #8B6914);
+  color: var(--tone-warn);
   background: color-mix(in srgb, var(--brass) 15%, var(--paper));
   border: 1px solid color-mix(in srgb, var(--brass) 30%, transparent);
   padding: 2px 6px;
@@ -5176,8 +5176,8 @@ button:focus-visible {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
-  background: color-mix(in srgb, var(--tone-blocked, #C0392B) 5%, var(--paper));
-  border: 1px solid color-mix(in srgb, var(--tone-blocked, #C0392B) 20%, transparent);
+  background: color-mix(in srgb, var(--tone-blocked) 5%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--tone-blocked) 20%, transparent);
   border-radius: var(--radius-sm);
   font-size: 0.8125rem;
 }

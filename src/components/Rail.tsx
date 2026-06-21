@@ -5,7 +5,6 @@ import { SearchField } from "./SearchField";
 
 export type RailView =
   | "home"
-  | "inbox"
   | "sources"
   | "connections"
   | "requests"
