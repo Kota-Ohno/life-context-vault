@@ -7,6 +7,10 @@
   text-rendering: optimizeLegibility;
 }
 
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -40,8 +44,8 @@ button {
   flex-direction: column;
   gap: 24px;
   padding: 22px;
-  background: #18201d;
-  color: #f8faf7;
+  background: var(--paper-rail);
+  color: var(--ink);
 }
 
 .brand {
@@ -55,10 +59,10 @@ button {
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 1px solid #7ca982;
+  border: 1px solid var(--pine-tint);
   border-radius: 8px;
-  background: #e9f3df;
-  color: #18201d;
+  background: var(--pine-tint);
+  color: var(--pine);
   font-weight: 800;
 }
 
@@ -80,7 +84,7 @@ button {
 
 .brand p {
   margin-top: 2px;
-  color: #bdc9c0;
+  color: var(--ink-faint);
   font-size: 13px;
 }
 
@@ -100,22 +104,22 @@ button {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #e6ece7;
+  color: var(--ink-soft);
   text-align: left;
 }
 
 .nav-item:hover,
 .nav-item.active {
-  border-color: #4e6b55;
-  background: #243028;
+  border-color: var(--hairline-strong);
+  background: var(--bg-sunken);
 }
 
 .nav-item strong {
   min-width: 24px;
   padding: 2px 6px;
   border-radius: 999px;
-  background: #d99a3d;
-  color: #18201d;
+  background: var(--brass);
+  color: var(--bg-surface);
   font-size: 12px;
   text-align: center;
 }
@@ -130,11 +134,32 @@ button {
   display: flex;
   justify-content: space-between;
   padding: 10px 0;
-  border-top: 1px solid #324138;
+  border-top: 1px solid var(--hairline);
 }
 
 .sidebar-stats span {
-  color: #bdc9c0;
+  color: var(--ink-faint);
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: color var(--motion-fast), border-color var(--motion-fast);
+}
+.theme-toggle:hover {
+  color: var(--ink);
+  border-color: var(--hairline-strong);
 }
 
 .workspace {
@@ -157,6 +182,7 @@ button {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+  margin-left: auto;
 }
 
 .topbar h2 {
@@ -2970,14 +2996,14 @@ button:focus-visible {
   display: grid;
   gap: 7px;
   padding: 10px;
-  border: 1px solid #e2e8df;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .source-snippet.empty {
   border-style: dashed;
-  background: #f8faf7;
+  background: var(--bg-surface);
 }
 
 .source-snippet div {
@@ -3073,10 +3099,10 @@ button:focus-visible {
   overflow: auto;
   max-height: 440px;
   padding: 14px;
-  border: 1px solid #dce2d9;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: #f8faf7;
-  color: #1b241f;
+  background: var(--bg-surface);
+  color: var(--ink-primary);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
@@ -3455,4 +3481,998 @@ button:focus-visible {
 
 .lang-toggle:hover {
   background: rgba(125, 125, 125, 0.1);
+}
+
+/* ============================================================
+   QV Design System — base components (A2)
+   All rules prefixed .qv- to avoid collisions with legacy CSS.
+   Token-driven only; no hard-coded hex.
+   ============================================================ */
+
+/* --- Button ------------------------------------------------- */
+.qv-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 80ms, color 80ms, border-color 80ms;
+  white-space: nowrap;
+  outline: none;
+}
+
+.qv-button:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* sizes */
+.qv-button--sm {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  line-height: 1.2;
+}
+
+.qv-button--md {
+  font-size: 0.8125rem;
+  padding: 6px 14px;
+  line-height: 1.4;
+}
+
+/* variants */
+.qv-button--primary {
+  background: var(--pine);
+  color: var(--paper);
+  border-color: var(--pine);
+}
+
+.qv-button--primary:hover {
+  background: color-mix(in srgb, var(--pine) 80%, #000);
+  border-color: color-mix(in srgb, var(--pine) 80%, #000);
+}
+
+.qv-button--ghost {
+  background: transparent;
+  color: var(--pine);
+  border-color: var(--pine);
+}
+
+.qv-button--ghost:hover {
+  background: color-mix(in srgb, var(--pine) 10%, transparent);
+}
+
+.qv-button--quiet {
+  background: transparent;
+  color: var(--ink-soft);
+  border-color: var(--hairline);
+}
+
+.qv-button--quiet:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+/* --- Card --------------------------------------------------- */
+.qv-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-panel);
+  position: relative;
+}
+
+.qv-card--pending {
+  border-left: 3px solid var(--brass);
+}
+
+/* --- Tag ---------------------------------------------------- */
+.qv-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pine) 10%, var(--paper));
+  color: var(--pine);
+  border: 1px solid color-mix(in srgb, var(--pine) 20%, transparent);
+}
+
+.qv-tag--sealed {
+  background: color-mix(in srgb, var(--pine) 20%, var(--paper));
+  border-color: color-mix(in srgb, var(--pine) 35%, transparent);
+}
+
+.qv-tag__cat {
+  color: var(--ink-faint);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- Seal --------------------------------------------------- */
+.qv-seal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qv-seal__stamp {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 2px solid var(--brass);
+  color: var(--brass);
+  background: color-mix(in srgb, var(--brass) 8%, transparent);
+  transform: rotate(-6deg);
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 30%, transparent);
+}
+
+.qv-seal__stamp--pine {
+  border-color: var(--pine);
+  color: var(--pine);
+  background: color-mix(in srgb, var(--pine) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pine) 30%, transparent);
+}
+
+.qv-seal__txt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qv-seal__txt b {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.qv-seal__txt small {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* --- BoundaryRule ------------------------------------------- */
+.qv-boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: var(--space-3) 0;
+}
+
+.qv-boundary__line {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- PageHeader --------------------------------------------- */
+.qv-page-header {
+  padding: var(--space-6) 0 var(--space-4);
+}
+
+.qv-page-header__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 var(--space-2);
+}
+
+.qv-page-header__title {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 var(--space-2);
+}
+
+.qv-page-header__lede {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  max-width: 52ch;
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* --- SectionDivider ----------------------------------------- */
+.qv-section-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-3);
+}
+
+.qv-section-divider__label {
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.qv-section-divider__rule {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- SearchField -------------------------------------------- */
+.qv-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 0.8125rem;
+  font-family: var(--font-body);
+  transition: border-color 80ms, box-shadow 80ms;
+  user-select: none;
+}
+
+.qv-search:hover {
+  border-color: var(--pine);
+  color: var(--ink-soft);
+}
+
+.qv-search:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+.qv-search__placeholder {
+  flex: 1;
+}
+
+.qv-search__kbd {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--paper-raised);
+  color: var(--ink-faint);
+  letter-spacing: 0;
+}
+
+/* --- VaultStatus -------------------------------------------- */
+.qv-vault-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+}
+
+.qv-vault-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pine);
+  flex-shrink: 0;
+}
+
+/* --- Chip --------------------------------------------------- */
+.qv-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 80ms, color 80ms, border-color 80ms;
+  white-space: nowrap;
+}
+
+.qv-chip:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+.qv-chip:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+.qv-chip--on {
+  background: var(--pine);
+  color: var(--paper);
+  border-color: var(--pine);
+}
+
+.qv-chip--on:hover {
+  background: color-mix(in srgb, var(--pine) 80%, #000);
+  border-color: color-mix(in srgb, var(--pine) 80%, #000);
+  color: var(--paper);
+}
+
+/* --- Gallery shell ------------------------------------------ */
+.qv-gallery {
+  padding: var(--space-6);
+  max-width: 780px;
+  margin: 0 auto;
+  font-family: var(--font-body);
+}
+
+.qv-gallery__strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.qv-gallery__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.qv-gallery__swatch-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  margin-bottom: var(--space-2);
+}
+
+/* back navigation in gallery */
+.qv-gallery__back {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: var(--space-4);
+  text-decoration: underline;
+}
+
+.qv-gallery__back:hover {
+  color: var(--ink);
+}
+
+/* colour swatches in gallery */
+.qv-gallery__swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  display: inline-block;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   QV Rail — Quiet Vault 3-pillar navigation rail
+   Replaces the legacy .sidebar. All values token-driven.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* AppShell override: slim rail + workspace */
+.app-shell {
+  grid-template-columns: 248px 1fr;
+}
+
+/* Rail container */
+.qv-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+  background: var(--paper-rail);
+  border-right: 1px solid var(--hairline);
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* Brand */
+.qv-rail__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.qv-rail__brand-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--pine-tint);
+  color: var(--pine);
+  flex-shrink: 0;
+}
+
+.qv-rail__brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.qv-rail__brand-text strong {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qv-rail__brand-text span {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Primary pillars nav */
+.qv-rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.qv-rail__pillar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 10px var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__pillar:hover {
+  background: var(--bg-sunken);
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.qv-rail__pillar--active {
+  background: var(--pine-tint);
+  border-color: transparent;
+  color: var(--pine);
+}
+
+.qv-rail__pillar--active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 20%;
+  bottom: 20%;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--pine);
+}
+
+.qv-rail__pillar--active:hover {
+  background: var(--pine-tint);
+  border-color: transparent;
+  color: var(--pine);
+}
+
+.qv-rail__pillar-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.qv-rail__pillar-label {
+  flex: 1;
+}
+
+/* Pine dot (active connection marker) */
+.qv-rail__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pine);
+  flex-shrink: 0;
+}
+
+/* Badge */
+.qv-rail__badge {
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--brass);
+  color: var(--bg-surface);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.qv-rail__badge--sm {
+  font-size: var(--fs-xs);
+  min-width: 16px;
+  padding: 0 4px;
+}
+
+/* Secondary group */
+.qv-rail__secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.qv-rail__secondary-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+.qv-rail__secondary-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__secondary-item:hover {
+  background: var(--bg-sunken);
+  color: var(--ink-soft);
+}
+
+.qv-rail__secondary-item--active {
+  background: var(--bg-sunken);
+  color: var(--ink-soft);
+}
+
+/* Foot */
+.qv-rail__foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.qv-rail__foot-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.qv-rail__settings-btn,
+.qv-rail__lang-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__settings-btn:hover,
+.qv-rail__lang-btn:hover {
+  background: var(--bg-sunken);
+  color: var(--ink);
+}
+
+.qv-rail__settings-btn[aria-current="page"] {
+  background: var(--bg-sunken);
+  color: var(--ink);
+}
+
+/* ThemeToggle inside rail foot: make it compact */
+.qv-rail__foot-row .theme-toggle {
+  flex: 1;
+  margin-top: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  justify-content: center;
+}
+
+/* ── Responsive: collapse to top row below 980px ──────────────────── */
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .qv-rail {
+    position: static;
+    height: auto;
+    min-height: unset;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+    overflow-y: visible;
+  }
+
+  .qv-rail__brand {
+    margin-right: var(--space-2);
+  }
+
+  .qv-rail__brand-text span {
+    display: none;
+  }
+
+  .qv-rail .qv-search {
+    flex: 1;
+    min-width: 120px;
+    max-width: 200px;
+  }
+
+  .qv-rail__nav {
+    flex-direction: row;
+    gap: var(--space-1);
+  }
+
+  .qv-rail__pillar {
+    padding: 6px var(--space-2);
+    font-size: var(--fs-xs);
+    gap: var(--space-1);
+  }
+
+  .qv-rail__pillar--active::before {
+    display: none;
+  }
+
+  .qv-rail__secondary {
+    flex-direction: row;
+    border-top: none;
+    padding-top: 0;
+    border-left: 1px solid var(--hairline);
+    padding-left: var(--space-2);
+    gap: var(--space-1);
+  }
+
+  .qv-rail__secondary-label {
+    display: none;
+  }
+
+  .qv-rail__secondary-item {
+    padding: 6px var(--space-2);
+    font-size: var(--fs-xs);
+  }
+
+  .qv-rail__foot {
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    border-top: none;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .qv-rail__foot > .qv-vault-status {
+    display: none;
+  }
+
+  .qv-rail__foot-row {
+    gap: var(--space-1);
+  }
+
+  .qv-rail__foot-row .theme-toggle {
+    flex: none;
+  }
+}
+
+/* ============================================================
+   HomeTimeline — disclosure-ledger timeline screen
+   All rules prefixed .qv-tl- to avoid collisions.
+   Token-driven only; no hard-coded hex.
+   ============================================================ */
+
+/* --- Container ---------------------------------------------- */
+.qv-tl {
+  padding: 0 0 var(--space-8);
+}
+
+/* --- Scope filter row --------------------------------------- */
+.qv-tl-scoperow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-6);
+}
+
+.qv-tl-scoperow__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.qv-tl-scoperow__count b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* --- Timeline body ----------------------------------------- */
+.qv-tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* --- Day section ------------------------------------------- */
+.qv-tl-day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.qv-tl-day-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.qv-tl-day-label {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.qv-tl-day-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- Entry card -------------------------------------------- */
+/* Non-pending cards get a subtle pine left-bar via ::before.
+   Pending cards already get the brass border-left from qv-card--pending. */
+.qv-tl-entry {
+  margin-bottom: 0; /* gap from day section handles spacing */
+  overflow: hidden;
+}
+
+.qv-tl-entry:not(.qv-tl-entry--pending)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--pine);
+  opacity: 0.55;
+}
+
+/* --- Entry head -------------------------------------------- */
+.qv-tl-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.qv-tl-client {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.qv-tl-client-name {
+  font-size: 0.9rem;
+}
+
+/* Client glyph square */
+.qv-tl-glyph {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--paper);
+  background: var(--ink-soft);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.qv-tl-glyph--gpt {
+  background: var(--pine);
+}
+
+.qv-tl-glyph--claude {
+  background: var(--brass);
+}
+
+.qv-tl-glyph--codex {
+  background: color-mix(in srgb, var(--pine) 60%, var(--ink));
+}
+
+.qv-tl-glyph--default {
+  background: var(--ink-faint);
+}
+
+.qv-tl-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* --- Task line (Mincho) ------------------------------------ */
+.qv-tl-task {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--ink);
+  margin: var(--space-1) 0 var(--space-3);
+  line-height: 1.5;
+}
+
+.qv-tl-task__q {
+  color: var(--ink-faint);
+}
+
+/* --- Facts wrap -------------------------------------------- */
+.qv-tl-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* --- Entry footer ------------------------------------------ */
+.qv-tl-entry-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/* Approve button group */
+.qv-tl-approve {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Revoke link-button */
+.qv-tl-revoke {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0 0 1px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: color 80ms, border-color 80ms;
+}
+
+.qv-tl-revoke:hover {
+  color: var(--pine);
+  border-color: var(--pine);
+}
+
+.qv-tl-revoke:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* --- Cancelled (revoked) note — I1 --------------------------------- */
+/* A cancelled pack was NOT delivered; render as muted historical note */
+.qv-tl-cancelled-note {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  font-style: italic;
+  letter-spacing: 0.01em;
+}
+
+/* --- Empty state ------------------------------------------- */
+.qv-tl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-8) 0;
+  max-width: 42ch;
+}
+
+.qv-tl-empty__kana {
+  font-size: 1.75rem;
+  color: var(--hairline);
+  margin: 0;
+  line-height: 1;
+}
+
+.qv-tl-empty__heading {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.qv-tl-empty__body {
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.qv-tl-empty__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }

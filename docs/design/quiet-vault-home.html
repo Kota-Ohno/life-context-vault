@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Life Context Vault — Quiet Vault reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* ---- Quiet Vault tokens · light ---- */
+  --paper:#F7F5F0;          /* warm off-white field */
+  --paper-rail:#F2EFE8;     /* rail, a shade deeper than field */
+  --paper-raised:#FCFBF8;   /* cards */
+  --ink:#20201D;            /* iron-gall near-black */
+  --ink-soft:#6A675E;       /* secondary */
+  --ink-faint:#9A968B;      /* tertiary / captions */
+  --pine:#2E5A4E;           /* primary accent — custody/trust */
+  --pine-tint:#E6EDE9;      /* pine wash */
+  --brass:#A9803F;          /* seal — disclosure moments only */
+  --brass-tint:#F0E7D6;
+  --hairline:rgba(32,32,29,.10);
+  --hairline-strong:rgba(32,32,29,.16);
+  --shadow:0 1px 2px rgba(32,32,29,.04),0 6px 22px -12px rgba(32,32,29,.18);
+  --radius:14px; --radius-sm:9px;
+  --space:8px;
+}
+[data-theme="dark"]{
+  /* ---- warm-dark, not cold black ---- */
+  --paper:#1A1916; --paper-rail:#16150F; --paper-raised:#232220;
+  --ink:#ECE8DF; --ink-soft:#A7A399; --ink-faint:#76726A;
+  --pine:#7FB29F; --pine-tint:#1F2A26;
+  --brass:#CBA45E; --brass-tint:#2A2417;
+  --hairline:rgba(236,232,223,.10); --hairline-strong:rgba(236,232,223,.18);
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px -14px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:"Zen Kaku Gothic New",system-ui,sans-serif;
+  font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;
+  display:grid;grid-template-columns:248px 1fr;min-height:100vh;
+}
+@media (prefers-reduced-motion:no-preference){
+  *{transition:background-color .25s ease,color .2s ease,border-color .2s ease,transform .15s ease}
+}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.serif{font-family:"Shippori Mincho",serif}
+
+/* ---------- rail ---------- */
+.rail{
+  background:var(--paper-rail);border-right:1px solid var(--hairline);
+  padding:22px 16px;display:flex;flex-direction:column;gap:22px;position:sticky;top:0;height:100vh;
+}
+.brand{display:flex;align-items:center;gap:10px;padding:2px 6px}
+.brand .key{width:26px;height:26px;border-radius:7px;background:var(--pine);color:#fff;display:grid;place-items:center;font-size:13px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+.brand b{font-weight:600;font-size:14.5px;letter-spacing:.01em}
+.brand span{display:block;font-size:10.5px;color:var(--ink-faint);letter-spacing:.06em}
+.search{display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--hairline);border-radius:var(--radius-sm);padding:8px 10px;color:var(--ink-faint);font-size:13px;cursor:text}
+.search kbd{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:10.5px;background:var(--paper-raised);border:1px solid var(--hairline);border-radius:5px;padding:1px 5px;color:var(--ink-faint)}
+.nav{display:flex;flex-direction:column;gap:3px;margin-top:2px}
+.nav a{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--radius-sm);color:var(--ink-soft);text-decoration:none;font-size:14px;position:relative}
+.nav a .ic{width:18px;text-align:center;opacity:.75}
+.nav a .sub{margin-left:auto;font-size:11px;color:var(--ink-faint)}
+.nav a:hover{background:var(--paper-raised);color:var(--ink)}
+.nav a.active{background:var(--paper-raised);color:var(--ink);font-weight:500;box-shadow:var(--shadow)}
+.nav a.active::before{content:"";position:absolute;left:-16px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:0 3px 3px 0;background:var(--pine)}
+.rail .group-label{font-size:10.5px;letter-spacing:.1em;color:var(--ink-faint);text-transform:uppercase;padding:0 11px;margin-top:4px}
+.rail .foot{margin-top:auto;display:flex;flex-direction:column;gap:10px}
+.statuschip{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-soft);padding:8px 11px;border:1px solid var(--hairline);border-radius:var(--radius-sm);background:var(--paper)}
+.statuschip .dot{width:7px;height:7px;border-radius:50%;background:var(--pine)}
+.railbtns{display:flex;gap:8px}
+.railbtns button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--paper);border:1px solid var(--hairline);border-radius:var(--radius-sm);padding:8px;color:var(--ink-soft);font:inherit;font-size:12.5px;cursor:pointer}
+.railbtns button:hover{color:var(--ink);border-color:var(--hairline-strong)}
+
+/* ---------- main ---------- */
+.main{padding:40px 56px 80px;max-width:880px;width:100%}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint)}
+h1.title{font-family:"Shippori Mincho",serif;font-weight:600;font-size:34px;line-height:1.25;letter-spacing:.01em;margin:10px 0 8px}
+.lede{color:var(--ink-soft);font-size:15px;max-width:52ch;margin:0}
+.scoperow{display:flex;align-items:center;gap:10px;margin:26px 0 8px}
+.chip{font-size:12.5px;padding:5px 12px;border-radius:999px;border:1px solid var(--hairline);color:var(--ink-soft);background:var(--paper-raised);cursor:pointer}
+.chip.on{background:var(--pine);border-color:var(--pine);color:#fff}
+.scoperow .count{margin-left:auto;font-size:12px;color:var(--ink-faint)}
+.scoperow .count b{color:var(--ink-soft);font-weight:600}
+
+/* ledger / timeline */
+.day{display:flex;align-items:center;gap:12px;margin:28px 0 14px}
+.day h2{font-family:"Shippori Mincho",serif;font-weight:500;font-size:15px;color:var(--ink-soft);margin:0;white-space:nowrap}
+.day .rule{flex:1;height:1px;background:var(--hairline)}
+
+.entry{background:var(--paper-raised);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;margin-bottom:14px;position:relative;overflow:hidden}
+.entry::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--pine);opacity:.55}
+.entry.pending::before{background:var(--brass)}
+.entry-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.client{display:flex;align-items:center;gap:8px;font-weight:500;font-size:14.5px}
+.client .glyph{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:11px;color:#fff;font-weight:700;background:#3b3a36}
+.client .glyph.gpt{background:#1f7a63}.client .glyph.claude{background:#9a5a37}
+.entry-head .time{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-faint)}
+.task{font-family:"Shippori Mincho",serif;font-size:16px;color:var(--ink);margin:2px 0 12px}
+.task .q{color:var(--ink-faint)}
+
+.boundary{display:flex;align-items:center;gap:8px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin:2px 0 10px}
+.boundary .l{flex:1;height:1px;background:repeating-linear-gradient(90deg,var(--hairline-strong) 0 5px,transparent 5px 9px)}
+
+.facts{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}
+.fact{display:inline-flex;align-items:center;gap:7px;background:var(--paper);border:1px solid var(--hairline);border-radius:999px;padding:5px 11px 5px 9px;font-size:13px;color:var(--ink)}
+.fact .cat{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.04em;color:var(--ink-faint);text-transform:uppercase}
+.fact.sealed{border-color:var(--brass);background:var(--brass-tint)}
+
+.entry-foot{display:flex;align-items:center;gap:14px;border-top:1px solid var(--hairline);padding-top:12px}
+/* the signature: a wax/brass disclosure seal */
+.seal{display:inline-flex;align-items:center;gap:9px}
+.seal .stamp{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;color:#fff;background:radial-gradient(circle at 32% 28%,#c79a52,var(--brass) 60%,#8a672f);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.18),inset 0 -4px 8px rgba(0,0,0,.22);transform:rotate(-8deg)}
+.seal .stamp.pine{background:radial-gradient(circle at 32% 28%,#56907f,var(--pine) 60%,#22443a)}
+.seal .txt{line-height:1.3}
+.seal .txt b{display:block;font-size:13px;font-weight:600}
+.seal .txt small{font-size:11px;color:var(--ink-faint);font-family:"IBM Plex Mono",monospace}
+.entry-foot .revoke{margin-left:auto;font-size:12.5px;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid var(--hairline-strong);padding-bottom:1px}
+.entry-foot .revoke:hover{color:var(--pine);border-color:var(--pine)}
+.approve{margin-left:auto;display:flex;gap:8px}
+.approve button{font:inherit;font-size:12.5px;border-radius:var(--radius-sm);padding:7px 14px;cursor:pointer;border:1px solid var(--hairline)}
+.approve .ghost{background:transparent;color:var(--ink-soft)}
+.approve .primary{background:var(--pine);border-color:var(--pine);color:#fff;font-weight:500}
+
+a:focus-visible,button:focus-visible,.chip:focus-visible{outline:2px solid var(--pine);outline-offset:2px}
+@media (max-width:880px){
+  body{grid-template-columns:1fr}
+  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center}
+  .rail .foot{margin:0}.main{padding:28px 22px 60px}
+}
+</style>
+</head>
+<body>
+  <!-- ───────────── rail ───────────── -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="key">🔑</div>
+      <div><b>Life Context Vault</b><span>あなたの中に留める</span></div>
+    </div>
+    <div class="search" tabindex="0">🔍 検索 <kbd>⌘K</kbd></div>
+    <nav class="nav" aria-label="主導線">
+      <a href="#" class="active"><span class="ic">◷</span>文脈</a>
+      <a href="#"><span class="ic">＋</span>取り込み<span class="sub">3</span></a>
+      <a href="#"><span class="ic">⇄</span>接続</a>
+    </nav>
+    <div class="foot">
+      <div class="statuschip"><span class="dot"></span>ローカルに暗号化・鍵はこの端末のみ</div>
+      <div class="railbtns">
+        <button onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ 表示</button>
+        <button>⚙ 設定</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ───────────── main ───────────── -->
+  <main class="main">
+    <p class="eyebrow">ホーム · アクティビティ</p>
+    <h1 class="title">AIが見たあなたの文脈</h1>
+    <p class="lede">どのAIに、いつ、何を渡したか。すべてここに残ります。いつでも取り消せます。</p>
+
+    <div class="scoperow">
+      <button class="chip on">今週</button>
+      <button class="chip">今月</button>
+      <button class="chip">すべて</button>
+      <span class="count">今週渡したFact <b>4件</b> ・ 承認待ち <b>1件</b></span>
+    </div>
+
+    <!-- today -->
+    <div class="day"><h2>今日</h2><div class="rule"></div></div>
+
+    <article class="entry">
+      <div class="entry-head">
+        <span class="client"><span class="glyph gpt">G</span>ChatGPT</span>
+        <span class="time">09:44</span>
+      </div>
+      <p class="task"><span class="q">「</span>今週の引っ越し準備を手伝って<span class="q">」</span></p>
+      <div class="boundary"><span>AIに渡った内容</span><span class="l"></span></div>
+      <div class="facts">
+        <span class="fact"><span class="cat">本人</span>呼び名：テスト太郎</span>
+        <span class="fact"><span class="cat">価値観</span>口調：丁寧に</span>
+        <span class="fact"><span class="cat">予定</span>引っ越し準備中</span>
+      </div>
+      <div class="entry-foot">
+        <span class="seal">
+          <span class="stamp pine">✓</span>
+          <span class="txt"><b>自動で渡しました</b><small>personal まで · 即時</small></span>
+        </span>
+        <a href="#" class="revoke">取り消す</a>
+      </div>
+    </article>
+
+    <!-- pending / above threshold -->
+    <article class="entry pending">
+      <div class="entry-head">
+        <span class="client"><span class="glyph claude">C</span>Claude</span>
+        <span class="time">11:20</span>
+      </div>
+      <p class="task"><span class="q">「</span>保険の更新、いつ何をすればいい？<span class="q">」</span></p>
+      <div class="boundary"><span>承認すると渡る内容</span><span class="l"></span></div>
+      <div class="facts">
+        <span class="fact sealed"><span class="cat">重要</span>保険更新 2026-08-31・要住所変更</span>
+      </div>
+      <div class="entry-foot">
+        <span class="seal">
+          <span class="stamp">!</span>
+          <span class="txt"><b>あなたの承認待ち</b><small>private_consequential · 閾値より上</small></span>
+        </span>
+        <span class="approve">
+          <button class="ghost">今回だけ</button>
+          <button class="primary">今後このAIに自動</button>
+        </span>
+      </div>
+    </article>
+
+    <!-- yesterday -->
+    <div class="day"><h2>昨日</h2><div class="rule"></div></div>
+
+    <article class="entry">
+      <div class="entry-head">
+        <span class="client"><span class="glyph gpt">G</span>ChatGPT</span>
+        <span class="time">昨日 18:02</span>
+      </div>
+      <p class="task"><span class="q">「</span>週末の予定を相談<span class="q">」</span></p>
+      <div class="boundary"><span>AIに渡った内容</span><span class="l"></span></div>
+      <div class="facts">
+        <span class="fact"><span class="cat">本人</span>呼び名：テスト太郎</span>
+        <span class="fact"><span class="cat">制約</span>平日は時間が限られる</span>
+      </div>
+      <div class="entry-foot">
+        <span class="seal">
+          <span class="stamp pine">✓</span>
+          <span class="txt"><b>自動で渡しました</b><small>personal まで · 即時</small></span>
+        </span>
+        <a href="#" class="revoke">取り消す</a>
+      </div>
+    </article>
+  </main>
+</body>
+</html>

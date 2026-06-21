@@ -75,6 +75,10 @@ import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
 import { EmptyState } from "./components/EmptyState";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { Rail } from "./components/Rail";
+import { QVGallery } from "./components/_gallery";
+import { HomeTimeline } from "./components/HomeTimeline";
 import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
@@ -394,7 +398,11 @@ const localRelayBaseUrl = "http://127.0.0.1:8765";
 const localRelayUrl = `${localRelayBaseUrl}/mcp`;
 const localRelayToken = "dev-local-token";
 
+/** Set to true to mount the QV component gallery at startup (dev only). */
+const SHOW_QV_GALLERY = false;
+
 export function App() {
+  const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
   const [state, setState] = useState<VaultState>(() => loadVault());
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
@@ -1561,7 +1569,11 @@ export function App() {
         return;
       }
     }
-    apply(updateAccessPolicy(state, clientId, { standingDeliveryEnabled: enabled }), enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+    // M1: use functional updater so this state write is not clobbered if
+    // approvePackForAi (called synchronously right after setStandingDelivery)
+    // also applies a state update from the same stale closure on this path.
+    setState((prev) => updateAccessPolicy(prev, clientId, { standingDeliveryEnabled: enabled }));
+    setNotice(enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
   }
 
   function setStandingDelivery(clientId: string, enabled: boolean) {
@@ -1744,54 +1756,31 @@ export function App() {
     setView("home");
   }
 
+  if (showGallery) {
+    return <QVGallery onClose={() => setShowGallery(false)} />;
+  }
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">LC</div>
-          <div>
-            <h1>Life Context Vault</h1>
-            <p>Control Center</p>
-          </div>
-        </div>
-        <nav className="nav-list" aria-label="Primary">
-          <NavButton icon={<Home size={18} />} label={t(lang, "nav.home")} ariaLabel={t(lang, "nav.home")} active={view === "home"} onClick={() => setView("home")} />
-          <NavButton icon={<Inbox size={18} />} label={t(lang, "nav.inbox")} ariaLabel={t(lang, "nav.inbox")} active={view === "inbox"} onClick={() => setView("inbox")} badge={activeCandidates.length} />
-          <NavButton icon={<FileText size={18} />} label={t(lang, "nav.sources")} ariaLabel={t(lang, "nav.sources")} active={view === "sources"} onClick={() => setView("sources")} />
-          <NavButton icon={<Plug size={18} />} label={t(lang, "nav.connections")} ariaLabel={t(lang, "nav.connections")} active={view === "connections"} onClick={() => setView("connections")} />
-          <NavButton
-            icon={<MessageSquare size={18} />}
-            label={t(lang, "nav.requests")}
-            ariaLabel={t(lang, "nav.requests")}
-            active={view === "requests"}
-            onClick={() => setView("requests")}
-            badge={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
-          />
-          <NavButton icon={<Search size={18} />} label={t(lang, "nav.search")} ariaLabel={t(lang, "nav.search")} active={view === "search"} onClick={() => setView("search")} badge={reviewFacts.length} />
-          <NavButton icon={<Settings size={18} />} label={t(lang, "nav.settings")} ariaLabel={t(lang, "nav.settings")} active={view === "settings"} onClick={() => setView("settings")} />
-          <button
-            className="lang-toggle"
-            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
-            aria-label="Toggle language"
-            title={lang === "ja" ? "Switch to English" : "日本語に切り替え"}
-            type="button"
-          >
-            {lang.toUpperCase()}
-          </button>
-        </nav>
-        <div className="sidebar-stats">
-          <Metric label="元データ" value={state.sources.length} />
-          <Metric label="Fact" value={activeFacts.length} />
-          <Metric label="依頼" value={state.contextPackRequests.length} />
-        </div>
-      </aside>
+      <Rail
+        view={view}
+        setView={setView}
+        lang={lang}
+        setLang={setLang}
+        candidateCount={activeCandidates.length}
+        requestCount={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
+        reviewFactCount={reviewFacts.length}
+        hasActiveConnection={state.connectorSessions.some((s) => s.status === "connected")}
+      />
 
       <main className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">User-owned life context</p>
-            <h2>{titleForView(view)}</h2>
-          </div>
+          {view !== "home" && (
+            <div>
+              <p className="eyebrow">User-owned life context</p>
+              <h2>{titleForView(view)}</h2>
+            </div>
+          )}
           <div className="topbar-actions">
             {nativePath && (
               <button className="secondary-button" onClick={refreshFromNative} type="button">
@@ -1811,22 +1800,32 @@ export function App() {
         </header>
 
         {view === "home" && (
-          <HomeView
-            facts={activeFacts}
-            candidates={activeCandidates}
-            connectors={state.connectorSessions}
-            sources={state.sources}
-            requests={state.contextPackRequests}
-            contextPacks={state.contextPacks}
-            nativePath={nativePath}
-            setup={setup}
-            setSetup={setSetup}
-            submitBackground={submitBackground}
-            seedDemo={seedDemo}
-            goInbox={() => setView("inbox")}
+          <HomeTimeline
+            state={state}
             goSources={() => setView("sources")}
-            goRequests={() => setView("requests")}
             goConnections={() => setView("connections")}
+            onApprovePending={(packId) => {
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (pack) void approvePackForAi(pack);
+            }}
+            onApproveStanding={(packId, clientId) => {
+              setStandingDelivery(clientId, true);
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (pack) void approvePackForAi(pack);
+            }}
+            onRevoke={(packId) => {
+              const pack = state.contextPacks.find((p) => p.id === packId);
+              if (!pack) return;
+              const ok = window.confirm(
+                "このFactを今後どのAIにも渡しません。よろしいですか？"
+              );
+              if (!ok) return;
+              const next = pack.items.reduce(
+                (s, item) => updateFactLifecycle(s, item.factId, "hide"),
+                state
+              );
+              apply(next, "Factを非表示にしました。今後どのAIにも渡しません。");
+            }}
           />
         )}
         {view === "inbox" && (
@@ -2002,35 +2001,6 @@ export function App() {
   );
 }
 
-function NavButton({
-  icon,
-  label,
-  ariaLabel,
-  active,
-  onClick,
-  badge
-}: {
-  icon: React.ReactNode;
-  label: string;
-  ariaLabel?: string;
-  active: boolean;
-  onClick: () => void;
-  badge?: number;
-}) {
-  return (
-    <button
-      aria-label={ariaLabel ?? label}
-      aria-current={active ? "page" : undefined}
-      className={active ? "nav-item active" : "nav-item"}
-      onClick={onClick}
-      type="button"
-    >
-      {icon}
-      <span>{label}</span>
-      {badge ? <strong>{badge}</strong> : null}
-    </button>
-  );
-}
 
 export function HomeView({
   facts,
