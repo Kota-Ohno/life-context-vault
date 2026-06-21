@@ -4220,3 +4220,249 @@ button:focus-visible {
     flex: none;
   }
 }
+
+/* ============================================================
+   HomeTimeline — disclosure-ledger timeline screen
+   All rules prefixed .qv-tl- to avoid collisions.
+   Token-driven only; no hard-coded hex.
+   ============================================================ */
+
+/* --- Container ---------------------------------------------- */
+.qv-tl {
+  padding: 0 0 var(--space-8);
+}
+
+/* --- Scope filter row --------------------------------------- */
+.qv-tl-scoperow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-6);
+}
+
+.qv-tl-scoperow__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.qv-tl-scoperow__count b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* --- Timeline body ----------------------------------------- */
+.qv-tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* --- Day section ------------------------------------------- */
+.qv-tl-day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.qv-tl-day-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.qv-tl-day-label {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.qv-tl-day-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- Entry card -------------------------------------------- */
+/* Non-pending cards get a subtle pine left-bar via ::before.
+   Pending cards already get the brass border-left from qv-card--pending. */
+.qv-tl-entry {
+  margin-bottom: 0; /* gap from day section handles spacing */
+  overflow: hidden;
+}
+
+.qv-tl-entry:not(.qv-tl-entry--pending)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--pine);
+  opacity: 0.55;
+}
+
+/* --- Entry head -------------------------------------------- */
+.qv-tl-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.qv-tl-client {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.qv-tl-client-name {
+  font-size: 0.9rem;
+}
+
+/* Client glyph square */
+.qv-tl-glyph {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--paper);
+  background: var(--ink-soft);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.qv-tl-glyph--gpt {
+  background: var(--pine);
+}
+
+.qv-tl-glyph--claude {
+  background: var(--brass);
+}
+
+.qv-tl-glyph--codex {
+  background: color-mix(in srgb, var(--pine) 60%, var(--ink));
+}
+
+.qv-tl-glyph--default {
+  background: var(--ink-faint);
+}
+
+.qv-tl-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* --- Task line (Mincho) ------------------------------------ */
+.qv-tl-task {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--ink);
+  margin: var(--space-1) 0 var(--space-3);
+  line-height: 1.5;
+}
+
+.qv-tl-task__q {
+  color: var(--ink-faint);
+}
+
+/* --- Facts wrap -------------------------------------------- */
+.qv-tl-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* --- Entry footer ------------------------------------------ */
+.qv-tl-entry-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/* Approve button group */
+.qv-tl-approve {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Revoke link-button */
+.qv-tl-revoke {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0 0 1px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: color 80ms, border-color 80ms;
+}
+
+.qv-tl-revoke:hover {
+  color: var(--pine);
+  border-color: var(--pine);
+}
+
+.qv-tl-revoke:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* --- Empty state ------------------------------------------- */
+.qv-tl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-8) 0;
+  max-width: 42ch;
+}
+
+.qv-tl-empty__kana {
+  font-size: 1.75rem;
+  color: var(--hairline);
+  margin: 0;
+  line-height: 1;
+}
+
+.qv-tl-empty__heading {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.qv-tl-empty__body {
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.qv-tl-empty__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}

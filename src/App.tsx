@@ -78,6 +78,7 @@ import { EmptyState } from "./components/EmptyState";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
+import { HomeTimeline } from "./components/HomeTimeline";
 import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
@@ -1793,21 +1794,9 @@ export function App() {
         </header>
 
         {view === "home" && (
-          <HomeView
-            facts={activeFacts}
-            candidates={activeCandidates}
-            connectors={state.connectorSessions}
-            sources={state.sources}
-            requests={state.contextPackRequests}
-            contextPacks={state.contextPacks}
-            nativePath={nativePath}
-            setup={setup}
-            setSetup={setSetup}
-            submitBackground={submitBackground}
-            seedDemo={seedDemo}
-            goInbox={() => setView("inbox")}
+          <HomeTimeline
+            state={state}
             goSources={() => setView("sources")}
-            goRequests={() => setView("requests")}
             goConnections={() => setView("connections")}
           />
         )}
