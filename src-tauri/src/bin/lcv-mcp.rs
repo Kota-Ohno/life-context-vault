@@ -207,7 +207,7 @@ fn request_context_pack_at_path(
     task_text,
     Some("MCP client requested life context"),
     ceiling,
-    Some("always_review"),
+    None, // core decides per-connection standing-delivery opt-in
   )
   .map_err(|error| (-32000, error))?;
 
