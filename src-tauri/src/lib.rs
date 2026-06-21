@@ -4528,6 +4528,7 @@ fn default_access_policy_for_client(client_id: &str, now: &str) -> Value {
     "sensitivityCeiling": default_policy_ceiling(client_id),
     "requiresApprovalAbove": "personal",
     "passiveCaptureAllowed": default_policy_passive_capture_allowed(client_id),
+    "standingDeliveryEnabled": true,
     "createdAt": now,
     "updatedAt": now
   })
@@ -11517,6 +11518,81 @@ mod tests {
     ).expect("pending pack");
     assert_eq!(pend.confirmation_status, "pending_user_confirmation");
     assert!(pend.context_pack.is_none(), "strict connection must not auto-deliver");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn new_policy_created_by_ensure_defaults_standing_delivery_on() {
+    use_test_vault_key();
+    let path = temp_vault_path("new-policy-standing-default");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // No policy exists yet for conn_chatgpt
+    ensure_access_policy_for_client(&mut vault, "conn_chatgpt");
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    assert!(
+      connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+      "brand-new policy must default standingDeliveryEnabled to true"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn legacy_policy_without_flag_stays_strict() {
+    use_test_vault_key();
+    let path = temp_vault_path("legacy-policy-strict");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // Simulate a legacy/upgraded vault: policy persisted WITHOUT standingDeliveryEnabled
+    push_json_array(&mut vault, "accessPolicies", json!({
+      "id": "policy_chatgpt",
+      "clientId": "conn_chatgpt",
+      "scopes": [],
+      "domainAllowlist": [],
+      "sensitivityCeiling": "private_consequential",
+      "requiresApprovalAbove": "personal",
+      "passiveCaptureAllowed": false,
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+      // standingDeliveryEnabled deliberately absent
+    }));
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    assert!(
+      !connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+      "legacy policy without flag must stay strict (no backfill)"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn fresh_default_vault_connections_have_standing_delivery_on() {
+    use_test_vault_key();
+    let path = temp_vault_path("fresh-vault-standing");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // Simulate fresh install: ensure policies for the canonical connection IDs
+    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+      ensure_access_policy_for_client(&mut vault, client_id);
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+      assert!(
+        connection_standing_delivery_enabled(&vault, client_id),
+        "fresh install connection {client_id} must have standingDeliveryEnabled=true"
+      );
+    }
     remove_temp_vault(&path);
   }
 }
