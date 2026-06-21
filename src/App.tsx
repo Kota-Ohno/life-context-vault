@@ -415,6 +415,7 @@ const CLIENT_LABELS: Record<string, string> = {
   gemini: "Gemini",
   codex: "Codex",
   generic_mcp: "MCP クライアント",
+  browser_capture: "ブラウザキャプチャ",
   copy_fallback: "コピー経由",
 };
 
