@@ -214,13 +214,47 @@ function DaySection({
 
 function TimelineEmpty({
   scope,
+  state,
   goSources,
   goConnections,
 }: {
   scope: Scope;
+  state: VaultState;
   goSources: () => void;
   goConnections: () => void;
 }) {
+  // Zero-facts onboarding branch: vault has never had an approved fact yet.
+  if (state.facts.length === 0) {
+    const PENDING_STATUSES = new Set<string>(["new", "needs_user_detail", "blocked_sensitive"]);
+    const pendingCount = state.candidates.filter((c) =>
+      PENDING_STATUSES.has(c.status),
+    ).length;
+
+    return (
+      <div className="qv-tl-empty">
+        <p className="qv-tl-empty__kana" aria-hidden="true">◇</p>
+        <p className="qv-tl-empty__heading">
+          まだ文脈が追加されていません
+        </p>
+        <p className="qv-tl-empty__body">
+          情報を追加して承認すると、AIに渡せる文脈パックが作られます。
+        </p>
+        <div className="qv-tl-empty__actions">
+          {pendingCount > 0 ? (
+            <Button variant="primary" size="sm" onClick={goSources}>
+              承認待ち {pendingCount} 件
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={goSources}>
+              最初の文脈を追加
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Scope-filtered branch: vault has facts but none fall in the selected scope.
   const scopeNote = scope === "week" ? "今週" : scope === "month" ? "今月" : "";
   return (
     <div className="qv-tl-empty">
@@ -308,7 +342,7 @@ export function HomeTimeline({
 
       {/* Timeline body */}
       {days.length === 0 ? (
-        <TimelineEmpty scope={scope} goSources={goSources} goConnections={goConnections} />
+        <TimelineEmpty scope={scope} state={state} goSources={goSources} goConnections={goConnections} />
       ) : (
         <div className="qv-tl-body">
           {days.map((day) => (
