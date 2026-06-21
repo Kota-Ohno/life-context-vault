@@ -3874,3 +3874,349 @@ button:focus-visible {
   border: 1px solid var(--hairline);
   display: inline-block;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   QV Rail — Quiet Vault 3-pillar navigation rail
+   Replaces the legacy .sidebar. All values token-driven.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* AppShell override: slim rail + workspace */
+.app-shell {
+  grid-template-columns: 248px 1fr;
+}
+
+/* Rail container */
+.qv-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+  background: var(--paper-rail);
+  border-right: 1px solid var(--hairline);
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* Brand */
+.qv-rail__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.qv-rail__brand-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--pine-tint);
+  color: var(--pine);
+  flex-shrink: 0;
+}
+
+.qv-rail__brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.qv-rail__brand-text strong {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qv-rail__brand-text span {
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Primary pillars nav */
+.qv-rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.qv-rail__pillar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 10px var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__pillar:hover {
+  background: var(--bg-sunken);
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.qv-rail__pillar--active {
+  background: var(--pine-tint);
+  border-color: transparent;
+  color: var(--pine);
+}
+
+.qv-rail__pillar--active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 20%;
+  bottom: 20%;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--pine);
+}
+
+.qv-rail__pillar--active:hover {
+  background: var(--pine-tint);
+  border-color: transparent;
+  color: var(--pine);
+}
+
+.qv-rail__pillar-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.qv-rail__pillar-label {
+  flex: 1;
+}
+
+/* Pine dot (active connection marker) */
+.qv-rail__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pine);
+  flex-shrink: 0;
+}
+
+/* Badge */
+.qv-rail__badge {
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--brass);
+  color: var(--bg-surface);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.qv-rail__badge--sm {
+  font-size: 10px;
+  min-width: 16px;
+  padding: 0 4px;
+}
+
+/* Secondary group */
+.qv-rail__secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.qv-rail__secondary-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+.qv-rail__secondary-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__secondary-item:hover {
+  background: var(--bg-sunken);
+  color: var(--ink-soft);
+}
+
+.qv-rail__secondary-item--active {
+  background: var(--bg-sunken);
+  color: var(--ink-soft);
+}
+
+/* Foot */
+.qv-rail__foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.qv-rail__foot-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.qv-rail__settings-btn,
+.qv-rail__lang-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.qv-rail__settings-btn:hover,
+.qv-rail__lang-btn:hover {
+  background: var(--bg-sunken);
+  color: var(--ink);
+}
+
+.qv-rail__settings-btn[aria-current="page"] {
+  background: var(--bg-sunken);
+  color: var(--ink);
+}
+
+/* ThemeToggle inside rail foot: make it compact */
+.qv-rail__foot-row .theme-toggle {
+  flex: 1;
+  margin-top: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  justify-content: center;
+}
+
+/* ── Responsive: collapse to top row below 880px ──────────────────── */
+@media (max-width: 880px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .qv-rail {
+    position: static;
+    height: auto;
+    min-height: unset;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+    overflow-y: visible;
+  }
+
+  .qv-rail__brand {
+    margin-right: var(--space-2);
+  }
+
+  .qv-rail__brand-text span {
+    display: none;
+  }
+
+  .qv-rail .qv-search {
+    flex: 1;
+    min-width: 120px;
+    max-width: 200px;
+  }
+
+  .qv-rail__nav {
+    flex-direction: row;
+    gap: var(--space-1);
+  }
+
+  .qv-rail__pillar {
+    padding: 6px var(--space-2);
+    font-size: var(--fs-xs);
+    gap: var(--space-1);
+  }
+
+  .qv-rail__pillar--active::before {
+    display: none;
+  }
+
+  .qv-rail__secondary {
+    flex-direction: row;
+    border-top: none;
+    padding-top: 0;
+    border-left: 1px solid var(--hairline);
+    padding-left: var(--space-2);
+    gap: var(--space-1);
+  }
+
+  .qv-rail__secondary-label {
+    display: none;
+  }
+
+  .qv-rail__secondary-item {
+    padding: 6px var(--space-2);
+    font-size: var(--fs-xs);
+  }
+
+  .qv-rail__foot {
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    border-top: none;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .qv-rail__foot > .qv-vault-status {
+    display: none;
+  }
+
+  .qv-rail__foot-row {
+    gap: var(--space-1);
+  }
+
+  .qv-rail__foot-row .theme-toggle {
+    flex: none;
+  }
+}
