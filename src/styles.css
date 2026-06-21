@@ -3481,3 +3481,396 @@ button:focus-visible {
 .lang-toggle:hover {
   background: rgba(125, 125, 125, 0.1);
 }
+
+/* ============================================================
+   QV Design System — base components (A2)
+   All rules prefixed .qv- to avoid collisions with legacy CSS.
+   Token-driven only; no hard-coded hex.
+   ============================================================ */
+
+/* --- Button ------------------------------------------------- */
+.qv-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 80ms, color 80ms, border-color 80ms;
+  white-space: nowrap;
+  outline: none;
+}
+
+.qv-button:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* sizes */
+.qv-button--sm {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  line-height: 1.2;
+}
+
+.qv-button--md {
+  font-size: 0.8125rem;
+  padding: 6px 14px;
+  line-height: 1.4;
+}
+
+/* variants */
+.qv-button--primary {
+  background: var(--pine);
+  color: var(--paper);
+  border-color: var(--pine);
+}
+
+.qv-button--primary:hover {
+  background: color-mix(in srgb, var(--pine) 80%, #000);
+  border-color: color-mix(in srgb, var(--pine) 80%, #000);
+}
+
+.qv-button--ghost {
+  background: transparent;
+  color: var(--pine);
+  border-color: var(--pine);
+}
+
+.qv-button--ghost:hover {
+  background: color-mix(in srgb, var(--pine) 10%, transparent);
+}
+
+.qv-button--quiet {
+  background: transparent;
+  color: var(--ink-soft);
+  border-color: var(--hairline);
+}
+
+.qv-button--quiet:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+/* --- Card --------------------------------------------------- */
+.qv-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-panel);
+  position: relative;
+}
+
+.qv-card--pending {
+  border-left: 3px solid var(--brass);
+}
+
+/* --- Tag ---------------------------------------------------- */
+.qv-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pine) 10%, var(--paper));
+  color: var(--pine);
+  border: 1px solid color-mix(in srgb, var(--pine) 20%, transparent);
+}
+
+.qv-tag--sealed {
+  background: color-mix(in srgb, var(--pine) 20%, var(--paper));
+  border-color: color-mix(in srgb, var(--pine) 35%, transparent);
+}
+
+.qv-tag__cat {
+  color: var(--ink-faint);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- Seal --------------------------------------------------- */
+.qv-seal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qv-seal__stamp {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 2px solid var(--brass);
+  color: var(--brass);
+  background: color-mix(in srgb, var(--brass) 8%, transparent);
+  transform: rotate(-6deg);
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 30%, transparent);
+}
+
+.qv-seal__stamp--pine {
+  border-color: var(--pine);
+  color: var(--pine);
+  background: color-mix(in srgb, var(--pine) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pine) 30%, transparent);
+}
+
+.qv-seal__txt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qv-seal__txt b {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.qv-seal__txt small {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* --- BoundaryRule ------------------------------------------- */
+.qv-boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: var(--space-3) 0;
+}
+
+.qv-boundary__line {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- PageHeader --------------------------------------------- */
+.qv-page-header {
+  padding: var(--space-6) 0 var(--space-4);
+}
+
+.qv-page-header__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 var(--space-2);
+}
+
+.qv-page-header__title {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 var(--space-2);
+}
+
+.qv-page-header__lede {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  max-width: 52ch;
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* --- SectionDivider ----------------------------------------- */
+.qv-section-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-3);
+}
+
+.qv-section-divider__label {
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.qv-section-divider__rule {
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* --- SearchField -------------------------------------------- */
+.qv-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 0.8125rem;
+  font-family: var(--font-body);
+  transition: border-color 80ms, box-shadow 80ms;
+  user-select: none;
+}
+
+.qv-search:hover {
+  border-color: var(--pine);
+  color: var(--ink-soft);
+}
+
+.qv-search:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+.qv-search__placeholder {
+  flex: 1;
+}
+
+.qv-search__kbd {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--paper-raised);
+  color: var(--ink-faint);
+  letter-spacing: 0;
+}
+
+/* --- VaultStatus -------------------------------------------- */
+.qv-vault-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+}
+
+.qv-vault-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pine);
+  flex-shrink: 0;
+}
+
+/* --- Chip --------------------------------------------------- */
+.qv-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 80ms, color 80ms, border-color 80ms;
+  white-space: nowrap;
+}
+
+.qv-chip:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+.qv-chip:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+.qv-chip--on {
+  background: var(--pine);
+  color: var(--paper);
+  border-color: var(--pine);
+}
+
+.qv-chip--on:hover {
+  background: color-mix(in srgb, var(--pine) 80%, #000);
+  border-color: color-mix(in srgb, var(--pine) 80%, #000);
+  color: var(--paper);
+}
+
+/* --- Gallery shell ------------------------------------------ */
+.qv-gallery {
+  padding: var(--space-6);
+  max-width: 780px;
+  margin: 0 auto;
+  font-family: var(--font-body);
+}
+
+.qv-gallery__strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.qv-gallery__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.qv-gallery__swatch-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  margin-bottom: var(--space-2);
+}
+
+/* back navigation in gallery */
+.qv-gallery__back {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: var(--space-4);
+  text-decoration: underline;
+}
+
+.qv-gallery__back:hover {
+  color: var(--ink);
+}
+
+/* colour swatches in gallery */
+.qv-gallery__swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  display: inline-block;
+}

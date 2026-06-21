@@ -76,6 +76,7 @@ import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
 import { EmptyState } from "./components/EmptyState";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { QVGallery } from "./components/_gallery";
 import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
@@ -395,7 +396,11 @@ const localRelayBaseUrl = "http://127.0.0.1:8765";
 const localRelayUrl = `${localRelayBaseUrl}/mcp`;
 const localRelayToken = "dev-local-token";
 
+/** Set to true to mount the QV component gallery at startup (dev only). */
+const SHOW_QV_GALLERY = false;
+
 export function App() {
+  const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
   const [state, setState] = useState<VaultState>(() => loadVault());
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
@@ -1743,6 +1748,10 @@ export function App() {
   function seedDemo() {
     apply(makeDemoVault(), "デモデータを投入しました。");
     setView("home");
+  }
+
+  if (showGallery) {
+    return <QVGallery onClose={() => setShowGallery(false)} />;
   }
 
   return (
