@@ -141,7 +141,7 @@ describe("HomeTimeline – zero-facts onboarding empty state (D1)", () => {
     expect(html).not.toContain("デモで試す");
   });
 
-  it("does NOT show onboarding when vault has only superseded facts (not counted as active)", () => {
+  it("still shows onboarding when vault has only superseded facts (superseded ≠ active)", () => {
     const state: VaultState = {
       ...createEmptyVault(),
       facts: [makeFact("fact_s", "superseded")],

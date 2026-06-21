@@ -12,8 +12,6 @@ import {
   factSourceNames,
   homeAiBoundarySections,
   homeCaptureSafetySummary,
-  homeNextActionKind,
-  HomeView,
   makeRestorePreview,
   manualCopyPayloadForPack,
   shouldShowCopyFallbackStarter,
@@ -689,59 +687,6 @@ describe("AI access UI safety", () => {
     expect(summary.purgeableCount).toBe(0);
   });
 
-  it("prioritizes a first Context Pack trial before MCP setup once facts are approved", () => {
-    expect(
-      homeNextActionKind({
-        candidateCount: 0,
-        backgroundStarted: true,
-        approvedFactCount: 2,
-        pendingRequestCount: 0,
-        deliverablePackCount: 0,
-        aiAccessReady: false
-      })
-    ).toBe("try_context_pack");
-    expect(
-      homeNextActionKind({
-        candidateCount: 0,
-        backgroundStarted: true,
-        approvedFactCount: 2,
-        pendingRequestCount: 0,
-        deliverablePackCount: 0,
-        aiAccessReady: false
-      })
-    ).toBe("try_context_pack");
-    expect(
-      homeNextActionKind({
-        candidateCount: 0,
-        backgroundStarted: true,
-        approvedFactCount: 2,
-        pendingRequestCount: 0,
-        deliverablePackCount: 1,
-        aiAccessReady: false
-      })
-    ).toBe("connect_ai");
-    expect(
-      homeNextActionKind({
-        candidateCount: 1,
-        backgroundStarted: true,
-        approvedFactCount: 2,
-        pendingRequestCount: 0,
-        deliverablePackCount: 0,
-        aiAccessReady: false
-      })
-    ).toBe("review_candidates");
-    expect(
-      homeNextActionKind({
-        candidateCount: 0,
-        backgroundStarted: true,
-        approvedFactCount: 0,
-        pendingRequestCount: 0,
-        deliverablePackCount: 0,
-        aiAccessReady: false
-      })
-    ).toBe("add_background");
-  });
-
   it("summarizes the Home AI boundary without exposing stored context text", () => {
     const nowMs = Date.parse("2026-06-13T12:00:00.000Z");
     const facts = [
@@ -797,39 +742,6 @@ describe("AI access UI safety", () => {
     expect(JSON.stringify(sections)).not.toContain("Candidate text");
     expect(JSON.stringify(sections)).not.toContain("request text");
     expect(JSON.stringify(sections)).not.toContain("pack text");
-  });
-
-  it("sends first-time Home onboarding to the guided background setup", () => {
-    const noop = () => undefined;
-    const html = renderToStaticMarkup(
-      createElement(HomeView, {
-        facts: [],
-        candidates: [],
-        connectors: [],
-        sources: [],
-        requests: [],
-        contextPacks: [],
-        nativePath: null,
-        setup: {
-          displayName: "",
-          tonePreference: "",
-          activeLifeAreas: "",
-          recurringConstraints: "",
-          confirmationTopics: ""
-        },
-        setSetup: noop,
-        submitBackground: noop,
-        seedDemo: noop,
-        goInbox: noop,
-        goSources: noop,
-        goRequests: noop,
-        goConnections: noop
-      })
-    );
-
-    expect(html).toContain("生活背景を入れる");
-    expect(html).toContain("入力欄へ");
-    expect(html).toContain("生活背景を追加");
   });
 
   it("describes AI delivery receipts by life domain without storing body text", () => {

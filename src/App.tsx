@@ -109,12 +109,10 @@ import {
   addPassiveCaptureEvent,
   approveCandidate,
   attachLocalAnswer,
-  backgroundSetupBody,
   buildContextPackForRequest,
   canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
-  createBackgroundSource,
   createEmptyVault,
   denyContextPackRequest,
   domainLabel,
@@ -143,7 +141,6 @@ import {
 import {
   ApprovedFact,
   AccessPolicy,
-  BackgroundSetupInput,
   CandidateStatus,
   ConnectorKind,
   ConnectorSession,
@@ -246,22 +243,6 @@ interface HomeCaptureSafetySummary {
   lastPreview: string | null;
   purgeableCount: number;
 }
-
-type OnboardingStep = {
-  title: string;
-  body: string;
-  status: "done" | "current" | "blocked";
-  actionLabel: string;
-  action?: () => void;
-  disabled?: boolean;
-};
-
-type HomeNextActionKind =
-  | "review_candidates"
-  | "add_background"
-  | "review_pending_request"
-  | "try_context_pack"
-  | "connect_ai";
 
 type SearchMode = "native_fts" | "browser_fallback" | "loading";
 
@@ -387,14 +368,6 @@ const policySensitivityOptions: SensitivityTier[] = [
   "sensitive"
 ];
 
-const blankSetup: BackgroundSetupInput = {
-  displayName: "",
-  tonePreference: "",
-  activeLifeAreas: "",
-  recurringConstraints: "",
-  confirmationTopics: ""
-};
-
 const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
 const localAgentBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-agent";
 const localRelayBaseUrl = "http://127.0.0.1:8765";
@@ -437,7 +410,6 @@ export function App() {
       /* localStorage unavailable; language stays in-memory for this session */
     }
   }, [lang]);
-  const [setup, setSetup] = useState<BackgroundSetupInput>(blankSetup);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
@@ -792,31 +764,6 @@ export function App() {
     setState(next);
     if (message) setNotice(message);
   }
-
-  async function submitBackground() {
-    const body = backgroundSetupBody(setup);
-    if (!body.trim()) {
-      setNotice("背景情報を1つ以上入力してください。");
-      return;
-    }
-    const addStatus = await addSourceThroughCore(
-      {
-        kind: "background_onboarding",
-        origin: "guided_onboarding",
-        title: "Guided background setup",
-        body
-      },
-      "背景Sourceを保存し、Memory Inboxに候補を追加しました。"
-    );
-    if (addStatus === "unavailable") {
-      const next = createBackgroundSource(state, setup);
-      apply(next, "背景Sourceを保存し、Memory Inboxに候補を追加しました。");
-      setView("sources");
-    }
-    if (addStatus === "failed") return;
-    setSetup(blankSetup);
-  }
-
   async function addManualSource() {
     if (!manualBody.trim()) {
       setNotice("メモ本文を入力してください。");
@@ -2029,348 +1976,6 @@ export function App() {
     </div>
   );
 }
-
-
-export function HomeView({
-  facts,
-  candidates,
-  connectors,
-  sources,
-  requests,
-  contextPacks,
-  nativePath,
-  setup,
-  setSetup,
-  submitBackground,
-  seedDemo,
-  goInbox,
-  goSources,
-  goRequests,
-  goConnections
-}: {
-  facts: ApprovedFact[];
-  candidates: MemoryCandidate[];
-  connectors: ConnectorSession[];
-  sources: VaultState["sources"];
-  requests: ContextPackRequest[];
-  contextPacks: ContextPack[];
-  nativePath: string | null;
-  setup: BackgroundSetupInput;
-  setSetup: (input: BackgroundSetupInput) => void;
-  submitBackground: () => void;
-  seedDemo: () => void;
-  goInbox: () => void;
-  goSources: () => void;
-  goRequests: () => void;
-  goConnections: () => void;
-}) {
-  const backgroundFacts = facts.filter((fact) =>
-    [
-      "identity_and_profile",
-      "values_goals_and_preferences",
-      "life_events_and_plans",
-      "routines_and_logistics",
-      "home_and_places",
-      "work_and_education",
-      "relationships_and_household",
-      "constraints_and_accessibility"
-    ].includes(fact.domain)
-  );
-  const grouped = groupByDomain(backgroundFacts);
-  const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
-  const approvedContextReady = facts.length > 0;
-  const aiAccessReady = Boolean(nativePath);
-  const nowMs = Date.now();
-  const deliverablePackCount = contextPacks.filter((pack) =>
-    contextPackDeliveryState(
-      pack,
-      requests.find((request) => request.id === pack.requestId) ?? null,
-      nowMs
-    ).canDeliver
-  ).length;
-  const packTried = deliverablePackCount > 0;
-  const accessReadiness = { tone: "ready" as const, title: "MCPで接続", body: "Claude Desktop等のMCPクライアントから接続できます。", badge: "ok" };
-  const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request, nowMs)).length;
-  const aiBoundarySections = homeAiBoundarySections({
-    facts,
-    candidates,
-    requests,
-    contextPacks
-  });
-  const nextActionKind = homeNextActionKind({
-    candidateCount: candidates.length,
-    backgroundStarted,
-    approvedFactCount: facts.length,
-    pendingRequestCount,
-    deliverablePackCount,
-    aiAccessReady
-  });
-  const focusSetup = () => {
-    document.getElementById("home-guided-setup")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  const onboardingSteps: OnboardingStep[] = [
-    {
-      title: "生活背景を入れる",
-      body: backgroundStarted
-        ? "Sourceまたは候補が作成されています。"
-        : "呼び名、制約、いま動いている生活領域から始めます。",
-      status: backgroundStarted ? "done" : "current",
-      actionLabel: backgroundStarted ? "Sourceを見る" : "入力欄へ",
-      action: backgroundStarted ? goSources : focusSetup
-    },
-    {
-      title: "候補を承認する",
-      body: approvedContextReady
-        ? `${facts.length}件のApprovedFactがAIに使える状態です。`
-        : candidates.length > 0
-          ? `${candidates.length}件の候補が承認待ちです。`
-          : "候補ができたら、保存するものだけFactにします。",
-      status: approvedContextReady ? "done" : candidates.length > 0 ? "current" : "blocked",
-      actionLabel: "Inboxを開く",
-      action: goInbox
-    },
-    {
-      title: "Context Packを試す",
-      body: packTried
-        ? `${deliverablePackCount}件の取得可能Context Packがあります。`
-        : approvedContextReady
-          ? "MCPなしでも、確認してコピーすれば普段使うAIで試せます。"
-          : "ApprovedFactができたら、AIへ渡す最小文脈を確認します。",
-      status: packTried ? "done" : approvedContextReady ? "current" : "blocked",
-      actionLabel: "Requestsを開く",
-      action: goRequests
-    },
-    {
-      title: "AI連携を常用化する",
-      body: aiAccessReady
-        ? "外部AIからContext Packを呼べる状態です。"
-        : packTried
-          ? accessReadiness.body
-          : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
-      status: aiAccessReady ? "done" : packTried ? "current" : "blocked",
-      actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
-      action: aiAccessReady || !nativePath ? goConnections : goConnections,
-      disabled: false
-    }
-  ];
-  const nextAction = (() => {
-    if (nextActionKind === "review_candidates") {
-      return {
-        title: `${candidates.length}件の候補を確認`,
-        body: "保存する生活文脈だけをFactにします。承認前の候補はAIには渡りません。",
-        label: "Inboxで確認",
-        action: goInbox,
-        icon: <Inbox size={18} />
-      };
-    }
-    if (nextActionKind === "add_background") {
-      return {
-        title: "生活背景を追加",
-        body: "呼び名、制約、いま動いている生活領域からMemory Inbox候補を作ります。",
-        label: "入力欄へ",
-        action: focusSetup,
-        icon: <Sparkles size={18} />
-      };
-    }
-    if (nextActionKind === "review_pending_request") {
-      return {
-        title: `${pendingRequestCount}件のContext Packを確認`,
-        body: "外部AIに渡る最小文脈を見て、不要なFactを外してから承認できます。",
-        label: "Requestsで確認",
-        action: goRequests,
-        icon: <MessageSquare size={18} />
-      };
-    }
-    if (nextActionKind === "try_context_pack") {
-      return {
-        title: "Context Packを試す",
-        body: "MCP接続前でも、確認した内容だけをコピーして普段使うAIに渡せます。",
-        label: "Packを確認",
-        action: goRequests,
-        icon: <MessageSquare size={18} />
-      };
-    }
-    if (nextActionKind === "connect_ai") {
-      return {
-        title: packTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
-        body: accessReadiness.body,
-        label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
-        action: nativePath ? goConnections : goConnections,
-        icon: <Plug size={18} />
-      };
-    }
-    return {
-      title: "Context Packを試す",
-      body: "普段使うAIに渡る文脈を、Requestsで事前確認できます。",
-      label: "Requestsを開く",
-      action: goRequests,
-      icon: <MessageSquare size={18} />
-    };
-  })();
-
-  return (
-    <section className="view-grid home-grid">
-      <div className="panel wide launch-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">First 10 minutes</p>
-            <h3>AIがあなたの生活文脈を使えるまで</h3>
-          </div>
-          <Badge>{accessReadiness.badge}</Badge>
-        </div>
-        <div className="home-start-grid">
-          <div className="next-action-card">
-            <div className="next-action-icon">{nextAction.icon}</div>
-            <div>
-              <p className="eyebrow">Next action</p>
-              <h4>{nextAction.title}</h4>
-              <p>{nextAction.body}</p>
-            </div>
-            <button
-              className="primary-button"
-              disabled={false && nextAction.action === goConnections}
-              onClick={nextAction.action}
-              type="button"
-            >
-              {nextAction.icon}
-              {nextAction.label}
-            </button>
-          </div>
-          <details className="onboarding-details">
-            <summary>セットアップの手順を見る</summary>
-          <div className="onboarding-checklist">
-            {onboardingSteps.map((step, index) => (
-              <button
-                className={`onboarding-step ${step.status}`}
-                disabled={step.disabled}
-                key={step.title}
-                onClick={step.action}
-                type="button"
-              >
-                <span className="step-index">
-                  {step.status === "done" ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}
-                  {index + 1}
-                </span>
-                <strong>{step.title}</strong>
-                <small>{step.body}</small>
-                <span className="step-action">
-                  {step.actionLabel}
-                  <ArrowRight size={14} />
-                </span>
-              </button>
-            ))}
-          </div>
-          </details>
-        </div>
-      </div>
-
-      <div className="panel quick-setup-panel" id="home-guided-setup">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Guided setup</p>
-            <h3>背景情報を追加</h3>
-          </div>
-        </div>
-        <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} compact />
-      </div>
-
-
-      <div className="panel background-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Background Snapshot</p>
-            <h3>AIがいま理解している生活背景</h3>
-          </div>
-          <button className="secondary-button" onClick={goRequests} type="button">
-            <MessageSquare size={16} />
-            Requests
-          </button>
-        </div>
-        {backgroundFacts.length === 0 ? (
-          <div className="onboarding-card" role="region" aria-label="初回ガイド">
-            <p className="eyebrow">Getting started</p>
-            <h3>まずは3ステップで始めましょう</h3>
-            <ol className="onboarding-steps">
-              <li>
-                <strong>1. 生活背景を少し書く</strong>
-                <span>ガイド入力またはデモデータで、AIに覚えておいてほしい背景を追加します。保存前にMemory Inboxで確認します。</span>
-                <button className="primary-button" onClick={seedDemo} type="button">
-                  <Sparkles size={16} />
-                  デモ投入
-                </button>
-              </li>
-              <li>
-                <strong>2. Memory Inbox で承認</strong>
-                <span>生成された候補を確認します。承認したものだけがAIの確定文脈になります。</span>
-                <button className="secondary-button" onClick={goInbox} type="button">
-                  <Inbox size={16} />
-                  Inboxを開く
-                </button>
-              </li>
-              <li>
-                <strong>3. 暗号化バックアップを作る</strong>
-                <span>機種変・故障に備え、左の Settings から暗号化バックアップを書き出します（パスフレーズは紛失しないよう管理してください）。</span>
-              </li>
-            </ol>
-          </div>
-        ) : (
-          <div className="domain-list">
-            {Object.entries(grouped).map(([domain, items]) => (
-              <section className="domain-section" key={domain}>
-                <h4>{domainLabel(domain as LifeContextDomain)}</h4>
-                {items.map((fact) => (
-                  <FactRow fact={fact} key={fact.id} sources={sources} />
-                ))}
-              </section>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Review queue</p>
-            <h3>Memory Inbox</h3>
-          </div>
-          <button className="secondary-button" onClick={goInbox} type="button">
-            <Inbox size={16} />
-            Open
-          </button>
-        </div>
-        <p className="large-number">{candidates.length}</p>
-        <p className="muted">承認待ちの候補があります。承認されるまでAIの確定文脈には使われません。</p>
-      </div>
-    </section>
-  );
-}
-
-function SetupForm({
-  setup,
-  setSetup,
-  submitBackground,
-  compact = false
-}: {
-  setup: BackgroundSetupInput;
-  setSetup: (input: BackgroundSetupInput) => void;
-  submitBackground: () => void;
-  compact?: boolean;
-}) {
-  return (
-    <div className={compact ? "form-stack setup-form compact" : "form-stack setup-form"}>
-      <Input label="呼び名" value={setup.displayName} onChange={(displayName) => setSetup({ ...setup, displayName })} placeholder="例: Kota" />
-      <Input label="好みの口調" value={setup.tonePreference} onChange={(tonePreference) => setSetup({ ...setup, tonePreference })} placeholder="例: 落ち着いて具体的に" />
-      <Textarea label="いま動いている生活領域" value={setup.activeLifeAreas} onChange={(activeLifeAreas) => setSetup({ ...setup, activeLifeAreas })} placeholder="仕事、家族、引っ越し、学習、健康管理など" />
-      <Textarea label="繰り返し考慮してほしい制約" value={setup.recurringConstraints} onChange={(recurringConstraints) => setSetup({ ...setup, recurringConstraints })} placeholder="時間、予算、体力、移動、コミュニケーション上の制約" />
-      <Textarea label="毎回確認してほしい話題" value={setup.confirmationTopics} onChange={(confirmationTopics) => setSetup({ ...setup, confirmationTopics })} placeholder="健康、給付、金融、家族など" />
-      <button className="primary-button" onClick={submitBackground} type="button">
-        <Sparkles size={16} />
-        候補を作成
-      </button>
-    </div>
-  );
-}
-
 function SourcesView({
   sources,
   candidates,
@@ -4219,31 +3824,6 @@ export function shouldShowCopyFallbackStarter(
 ): boolean {
   return !currentPack;
 }
-
-export function homeNextActionKind({
-  candidateCount,
-  backgroundStarted,
-  approvedFactCount,
-  pendingRequestCount,
-  deliverablePackCount,
-  aiAccessReady
-}: {
-  candidateCount: number;
-  backgroundStarted: boolean;
-  approvedFactCount: number;
-  pendingRequestCount: number;
-  deliverablePackCount: number;
-  aiAccessReady: boolean;
-}): HomeNextActionKind {
-  if (candidateCount > 0) return "review_candidates";
-  if (!backgroundStarted) return "add_background";
-  if (pendingRequestCount > 0) return "review_pending_request";
-  if (approvedFactCount === 0) return "add_background";
-  if (approvedFactCount > 0 && deliverablePackCount === 0) return "try_context_pack";
-  if (!aiAccessReady) return "connect_ai";
-  return "try_context_pack";
-}
-
 export function homeAiBoundarySections({
   facts,
   candidates,
