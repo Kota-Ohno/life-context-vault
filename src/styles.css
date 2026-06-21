@@ -171,6 +171,10 @@ button {
   flex-direction: column;
   gap: 20px;
   min-width: 0;
+  /* Workspace is the single scroll container; min-height:0 lets it shrink
+     inside the viewport-pinned shell so its content scrolls here, not the page. */
+  min-height: 0;
+  overflow-y: auto;
   padding: 28px;
 }
 
@@ -3892,6 +3896,10 @@ button:focus-visible {
 /* AppShell override: slim rail + workspace */
 .app-shell {
   grid-template-columns: 248px 1fr;
+  /* Pin the shell to the viewport so only the workspace scrolls (not the whole
+     page); keeps the rail fixed instead of scrolling away with content. */
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Rail container */
