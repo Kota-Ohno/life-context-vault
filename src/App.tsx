@@ -75,6 +75,7 @@ import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
 import { EmptyState } from "./components/EmptyState";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { ConnectView } from "./views/ConnectView";
 import {
   RuntimePreferences,
@@ -1784,6 +1785,7 @@ export function App() {
           <Metric label="Fact" value={activeFacts.length} />
           <Metric label="依頼" value={state.contextPackRequests.length} />
         </div>
+        <ThemeToggle />
       </aside>
 
       <main className="workspace">

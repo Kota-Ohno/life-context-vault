@@ -1,23 +1,37 @@
 :root {
-  /* Color: calm, low-saturation paper */
-  --bg-app: #f7f7f5;
-  --bg-surface: #ffffff;
-  --bg-sunken: #efefec;
-  --border-subtle: #e2e2de;
-  --border-strong: #c9c9c4;
-  --ink-primary: #1a1a1a;
-  --ink-secondary: #555558;
-  --ink-muted: #8a8a8e;
-  --accent: #2f5fa8;
-  --accent-soft: #e8eff8;
-  --tone-ready: #2e7d5b;
-  --tone-ready-soft: #e6f4ee;
-  --tone-attention: #b26a00;
-  --tone-attention-soft: #fbf0e0;
-  --tone-blocked: #b0322b;
-  --tone-blocked-soft: #fbe9e7;
+  /* ── Quiet Vault palette (light) ───────────────────────────────── */
+  --bg-app:      #F7F5F0;
+  --bg-surface:  #FCFBF8;
+  --bg-sunken:   #EFEDE7;
+  --border-subtle: rgba(32, 32, 29, .10);
+  --border-strong: rgba(32, 32, 29, .16);
+  --ink-primary:   #20201D;
+  --ink-secondary: #6A675E;
+  --ink-muted:     #9A968B;
+  --accent:        #2E5A4E;
+  --accent-soft:   #E6EDE9;
+  --tone-ready:        #2E7D5B;
+  --tone-ready-soft:   #E4F0E9;
+  --tone-attention:    #A9803F;
+  --tone-attention-soft: #F0E7D6;
+  --tone-blocked:      #B0322B;
+  --tone-blocked-soft: #FBE9E7;
 
-  /* Spacing: 4px base */
+  /* ── Quiet Vault semantic aliases ──────────────────────────────── */
+  --paper:        var(--bg-app);
+  --paper-rail:   #F2EFE8;
+  --paper-raised: var(--bg-surface);
+  --ink:          var(--ink-primary);
+  --ink-soft:     var(--ink-secondary);
+  --ink-faint:    var(--ink-muted);
+  --pine:         var(--accent);
+  --pine-tint:    var(--accent-soft);
+  --brass:        #A9803F;
+  --brass-tint:   #F0E7D6;
+  --hairline:       var(--border-subtle);
+  --hairline-strong: var(--border-strong);
+
+  /* ── Spacing: 4px base ─────────────────────────────────────────── */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -27,26 +41,80 @@
   --space-7: 48px;
   --space-8: 64px;
 
-  /* Type: system stack + 7-level scale */
-  --font-sans: -apple-system, "Hiragino Kaku Gothic ProN", "Segoe UI", system-ui, sans-serif;
-  --fs-xs: 12px;
-  --fs-sm: 13px;
+  /* ── Type ──────────────────────────────────────────────────────── */
+  --font-display: "Shippori Mincho", serif;
+  --font-body:    "Zen Kaku Gothic New", system-ui, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, monospace;
+  --font-sans:    var(--font-body);
+  --fs-xs:   12px;
+  --fs-sm:   13px;
   --fs-base: 14px;
-  --fs-md: 15px;
-  --fs-lg: 18px;
-  --fs-xl: 22px;
-  --fs-2xl: 28px;
-  --lh-body: 1.5;
+  --fs-md:   15px;
+  --fs-lg:   18px;
+  --fs-xl:   22px;
+  --fs-2xl:  28px;
+  --lh-body:    1.5;
   --lh-heading: 1.25;
 
-  /* Radii */
+  /* ── Radii ─────────────────────────────────────────────────────── */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  /* Shadow */
-  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.04);
+  /* ── Shadow ────────────────────────────────────────────────────── */
+  --shadow-panel: 0 1px 2px rgba(32, 32, 29, .04),
+                  0 6px 22px -12px rgba(32, 32, 29, .18);
 
-  /* Motion */
+  /* ── Motion ────────────────────────────────────────────────────── */
   --motion-fast: 120ms ease;
+}
+
+/* ── Dark mode overrides ──────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-app:      #1A1916;
+  --bg-surface:  #232220;
+  --bg-sunken:   #1F1E1A;
+  --border-subtle: rgba(236, 232, 223, .10);
+  --border-strong: rgba(236, 232, 223, .18);
+  --ink-primary:   #ECE8DF;
+  --ink-secondary: #A7A399;
+  --ink-muted:     #76726A;
+  --accent:        #7FB29F;
+  --accent-soft:   #1F2A26;
+  --tone-ready:        #4FAD84;
+  --tone-ready-soft:   #162A21;
+  --tone-attention:    #CBA45E;
+  --tone-attention-soft: #2A2417;
+  --tone-blocked:      #D96359;
+  --tone-blocked-soft: #2E1715;
+
+  /* semantic aliases re-pointed for dark */
+  --paper:        var(--bg-app);
+  --paper-rail:   #16150F;
+  --paper-raised: var(--bg-surface);
+  --ink:          var(--ink-primary);
+  --ink-soft:     var(--ink-secondary);
+  --ink-faint:    var(--ink-muted);
+  --pine:         var(--accent);
+  --pine-tint:    var(--accent-soft);
+  --brass:        #CBA45E;
+  --brass-tint:   #2A2417;
+  --hairline:       var(--border-subtle);
+  --hairline-strong: var(--border-strong);
+
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, .30),
+                  0 8px 26px -14px rgba(0, 0, 0, .60);
+}
+
+/* ── Accessibility guards ─────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }
