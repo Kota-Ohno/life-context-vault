@@ -80,6 +80,10 @@ import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
 import { HomeTimeline } from "./components/HomeTimeline";
 import { ConnectView } from "./views/ConnectView";
+import { IngestView } from "./views/IngestView";
+import { Toggle } from "./components/Toggle";
+import { Card } from "./components/Card";
+import { SectionDivider } from "./components/SectionDivider";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -105,12 +109,10 @@ import {
   addPassiveCaptureEvent,
   approveCandidate,
   attachLocalAnswer,
-  backgroundSetupBody,
   buildContextPackForRequest,
   canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
-  createBackgroundSource,
   createEmptyVault,
   denyContextPackRequest,
   domainLabel,
@@ -139,7 +141,6 @@ import {
 import {
   ApprovedFact,
   AccessPolicy,
-  BackgroundSetupInput,
   CandidateStatus,
   ConnectorKind,
   ConnectorSession,
@@ -164,7 +165,6 @@ import {
 
 type View =
   | "home"
-  | "inbox"
   | "sources"
   | "connections"
   | "requests"
@@ -243,22 +243,6 @@ interface HomeCaptureSafetySummary {
   lastPreview: string | null;
   purgeableCount: number;
 }
-
-type OnboardingStep = {
-  title: string;
-  body: string;
-  status: "done" | "current" | "blocked";
-  actionLabel: string;
-  action?: () => void;
-  disabled?: boolean;
-};
-
-type HomeNextActionKind =
-  | "review_candidates"
-  | "add_background"
-  | "review_pending_request"
-  | "try_context_pack"
-  | "connect_ai";
 
 type SearchMode = "native_fts" | "browser_fallback" | "loading";
 
@@ -384,14 +368,6 @@ const policySensitivityOptions: SensitivityTier[] = [
   "sensitive"
 ];
 
-const blankSetup: BackgroundSetupInput = {
-  displayName: "",
-  tonePreference: "",
-  activeLifeAreas: "",
-  recurringConstraints: "",
-  confirmationTopics: ""
-};
-
 const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
 const localAgentBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-agent";
 const localRelayBaseUrl = "http://127.0.0.1:8765";
@@ -400,6 +376,21 @@ const localRelayToken = "dev-local-token";
 
 /** Set to true to mount the QV component gallery at startup (dev only). */
 const SHOW_QV_GALLERY = false;
+
+/** Views that render their own Quiet Vault PageHeader — suppress the legacy topbar title for these. */
+const VIEWS_WITH_OWN_HEADER = new Set(["home", "connections", "sources"]);
+
+/** Human-readable labels for connector kinds. */
+const CLIENT_LABELS: Record<string, string> = {
+  claude_desktop: "Claude Desktop",
+  chatgpt: "ChatGPT",
+  claude_remote: "Claude (リモート)",
+  gemini: "Gemini",
+  codex: "Codex",
+  generic_mcp: "MCP クライアント",
+  browser_capture: "ブラウザキャプチャ",
+  copy_fallback: "コピー経由",
+};
 
 export function App() {
   const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
@@ -419,7 +410,6 @@ export function App() {
       /* localStorage unavailable; language stays in-memory for this session */
     }
   }, [lang]);
-  const [setup, setSetup] = useState<BackgroundSetupInput>(blankSetup);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
@@ -774,31 +764,6 @@ export function App() {
     setState(next);
     if (message) setNotice(message);
   }
-
-  async function submitBackground() {
-    const body = backgroundSetupBody(setup);
-    if (!body.trim()) {
-      setNotice("背景情報を1つ以上入力してください。");
-      return;
-    }
-    const addStatus = await addSourceThroughCore(
-      {
-        kind: "background_onboarding",
-        origin: "guided_onboarding",
-        title: "Guided background setup",
-        body
-      },
-      "背景Sourceを保存し、Memory Inboxに候補を追加しました。"
-    );
-    if (addStatus === "unavailable") {
-      const next = createBackgroundSource(state, setup);
-      apply(next, "背景Sourceを保存し、Memory Inboxに候補を追加しました。");
-      setView("inbox");
-    }
-    if (addStatus === "failed") return;
-    setSetup(blankSetup);
-  }
-
   async function addManualSource() {
     if (!manualBody.trim()) {
       setNotice("メモ本文を入力してください。");
@@ -821,7 +786,7 @@ export function App() {
         body: manualBody
       });
       apply(next, "Sourceを保存し、Memory Inboxに候補を追加しました。");
-      setView("inbox");
+      setView("sources");
     }
     if (addStatus === "failed") return;
     setManualTitle("");
@@ -940,7 +905,7 @@ export function App() {
         body: text
       });
       apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`);
-      setView("inbox");
+      setView("sources");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
   }
@@ -964,7 +929,7 @@ export function App() {
       setNotice(
         `${message} ${added.candidateIds.length}件の候補が作成されました。承認されるまでAIには使われません。`
       );
-      setView("inbox");
+      setView("sources");
       return "saved";
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
@@ -1775,7 +1740,7 @@ export function App() {
 
       <main className="workspace">
         <header className="topbar">
-          {view !== "home" && (
+          {!VIEWS_WITH_OWN_HEADER.has(view) && (
             <div>
               <p className="eyebrow">User-owned life context</p>
               <h2>{titleForView(view)}</h2>
@@ -1804,6 +1769,7 @@ export function App() {
             state={state}
             goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
+            seedDemo={seedDemo}
             onApprovePending={(packId) => {
               const pack = state.contextPacks.find((p) => p.id === packId);
               if (pack) void approvePackForAi(pack);
@@ -1828,8 +1794,9 @@ export function App() {
             }}
           />
         )}
-        {view === "inbox" && (
-          <InboxView
+        {view === "sources" && (
+          <IngestView
+            /* ── Candidate review (formerly InboxView) ── */
             candidates={activeCandidates}
             facts={activeFacts}
             edits={candidateEdits}
@@ -1848,15 +1815,8 @@ export function App() {
               void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
             }
             goHome={() => setView("home")}
-            goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
-          />
-        )}
-        {view === "sources" && (
-          <SourcesView
             sources={state.sources}
-            candidates={state.candidates}
-            facts={state.facts}
             contextPacks={state.contextPacks}
             manualTitle={manualTitle}
             manualBody={manualBody}
@@ -1874,7 +1834,6 @@ export function App() {
             changeSourceLifecycle={changeSourceLifecycle}
             editSourceMetadata={editSourceMetadata}
             editSourceBody={editSourceBody}
-            goInbox={() => setView("inbox")}
           />
         )}
         {view === "connections" && (
@@ -1892,32 +1851,48 @@ export function App() {
               goRequests={() => setView("requests")}
             />
             {state.accessPolicies.length > 0 && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">AI Access Policies</p>
-                    <h3>自動配信（Standing Delivery）</h3>
-                  </div>
-                </div>
-                <div className="form-stack">
-                  {state.accessPolicies.map((policy) => (
-                    <label key={policy.clientId} className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={policy.standingDeliveryEnabled === true}
-                        onChange={(e) => setStandingDelivery(policy.clientId, e.target.checked)}
-                      />
-                      <span>
-                        <strong>{policy.clientId}</strong>
-                        {"　"}閾値まで自動配信（standing delivery）
-                      </span>
-                    </label>
-                  ))}
-                  <p className="muted" style={{ fontSize: "0.85em" }}>
-                    有効にすると、この接続の感度閾値（requiresApprovalAbove）以下のContext PackはユーザーのタップなしでAIへ返されます。閾値を超えるPackは引き続き確認が必要です。
+              <div className="qv-connect" style={{ paddingTop: 0 }}>
+                <SectionDivider label="自動配信 Standing Delivery" />
+                <Card>
+                  {state.accessPolicies.map((policy) => {
+                    const clientKind = policy.clientId.replace(/^conn_/, "");
+                    const session = state.connectorSessions.find(
+                      (s) => s.clientKind === clientKind
+                    );
+                    const displayName =
+                      session?.clientName ??
+                      CLIENT_LABELS[clientKind] ??
+                      policy.clientId;
+                    const thresholdLabel = (() => {
+                      switch (policy.requiresApprovalAbove) {
+                        case "public": return "public より上は確認";
+                        case "personal": return "personal より上は確認";
+                        case "private_consequential": return "private より上は確認";
+                        case "sensitive": return "sensitive より上は確認";
+                        case "secret_never_send": return "すべて確認なし（非推奨）";
+                        default: return String(policy.requiresApprovalAbove);
+                      }
+                    })();
+                    return (
+                      <div key={policy.clientId} className="qv-standing-row">
+                        <div className="qv-standing-row__info">
+                          <p className="qv-standing-row__name">{displayName}</p>
+                          <p className="qv-standing-row__threshold">{thresholdLabel}</p>
+                        </div>
+                        <Toggle
+                          id={`standing-${policy.clientId}`}
+                          checked={policy.standingDeliveryEnabled === true}
+                          onChange={(checked) => setStandingDelivery(policy.clientId, checked)}
+                          label={`${displayName} の自動配信`}
+                        />
+                      </div>
+                    );
+                  })}
+                  <p className="qv-standing-note">
+                    有効にすると、この接続の閾値以下のContext PackはAIへ自動で返されます。閾値を超えるPackは引き続きあなたの確認が必要です。
                   </p>
-                </div>
-              </section>
+                </Card>
+              </div>
             )}
           </>
         )}
@@ -1965,7 +1940,7 @@ export function App() {
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
-            goInbox={() => setView("inbox")}
+            goInbox={() => setView("sources")}
             goSources={() => setView("sources")}
           />
         )}
@@ -2000,952 +1975,6 @@ export function App() {
     </div>
   );
 }
-
-
-export function HomeView({
-  facts,
-  candidates,
-  connectors,
-  sources,
-  requests,
-  contextPacks,
-  nativePath,
-  setup,
-  setSetup,
-  submitBackground,
-  seedDemo,
-  goInbox,
-  goSources,
-  goRequests,
-  goConnections
-}: {
-  facts: ApprovedFact[];
-  candidates: MemoryCandidate[];
-  connectors: ConnectorSession[];
-  sources: VaultState["sources"];
-  requests: ContextPackRequest[];
-  contextPacks: ContextPack[];
-  nativePath: string | null;
-  setup: BackgroundSetupInput;
-  setSetup: (input: BackgroundSetupInput) => void;
-  submitBackground: () => void;
-  seedDemo: () => void;
-  goInbox: () => void;
-  goSources: () => void;
-  goRequests: () => void;
-  goConnections: () => void;
-}) {
-  const backgroundFacts = facts.filter((fact) =>
-    [
-      "identity_and_profile",
-      "values_goals_and_preferences",
-      "life_events_and_plans",
-      "routines_and_logistics",
-      "home_and_places",
-      "work_and_education",
-      "relationships_and_household",
-      "constraints_and_accessibility"
-    ].includes(fact.domain)
-  );
-  const grouped = groupByDomain(backgroundFacts);
-  const backgroundStarted = sources.length > 0 || candidates.length > 0 || facts.length > 0;
-  const approvedContextReady = facts.length > 0;
-  const aiAccessReady = Boolean(nativePath);
-  const nowMs = Date.now();
-  const deliverablePackCount = contextPacks.filter((pack) =>
-    contextPackDeliveryState(
-      pack,
-      requests.find((request) => request.id === pack.requestId) ?? null,
-      nowMs
-    ).canDeliver
-  ).length;
-  const packTried = deliverablePackCount > 0;
-  const accessReadiness = { tone: "ready" as const, title: "MCPで接続", body: "Claude Desktop等のMCPクライアントから接続できます。", badge: "ok" };
-  const pendingRequestCount = requests.filter((request) => requestNeedsUserAction(request, nowMs)).length;
-  const aiBoundarySections = homeAiBoundarySections({
-    facts,
-    candidates,
-    requests,
-    contextPacks
-  });
-  const nextActionKind = homeNextActionKind({
-    candidateCount: candidates.length,
-    backgroundStarted,
-    approvedFactCount: facts.length,
-    pendingRequestCount,
-    deliverablePackCount,
-    aiAccessReady
-  });
-  const focusSetup = () => {
-    document.getElementById("home-guided-setup")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  const onboardingSteps: OnboardingStep[] = [
-    {
-      title: "生活背景を入れる",
-      body: backgroundStarted
-        ? "Sourceまたは候補が作成されています。"
-        : "呼び名、制約、いま動いている生活領域から始めます。",
-      status: backgroundStarted ? "done" : "current",
-      actionLabel: backgroundStarted ? "Sourceを見る" : "入力欄へ",
-      action: backgroundStarted ? goSources : focusSetup
-    },
-    {
-      title: "候補を承認する",
-      body: approvedContextReady
-        ? `${facts.length}件のApprovedFactがAIに使える状態です。`
-        : candidates.length > 0
-          ? `${candidates.length}件の候補が承認待ちです。`
-          : "候補ができたら、保存するものだけFactにします。",
-      status: approvedContextReady ? "done" : candidates.length > 0 ? "current" : "blocked",
-      actionLabel: "Inboxを開く",
-      action: goInbox
-    },
-    {
-      title: "Context Packを試す",
-      body: packTried
-        ? `${deliverablePackCount}件の取得可能Context Packがあります。`
-        : approvedContextReady
-          ? "MCPなしでも、確認してコピーすれば普段使うAIで試せます。"
-          : "ApprovedFactができたら、AIへ渡す最小文脈を確認します。",
-      status: packTried ? "done" : approvedContextReady ? "current" : "blocked",
-      actionLabel: "Requestsを開く",
-      action: goRequests
-    },
-    {
-      title: "AI連携を常用化する",
-      body: aiAccessReady
-        ? "外部AIからContext Packを呼べる状態です。"
-        : packTried
-          ? accessReadiness.body
-          : "最初のPack確認後に、Claude DesktopやHosted Relayへ接続できます。",
-      status: aiAccessReady ? "done" : packTried ? "current" : "blocked",
-      actionLabel: aiAccessReady ? "Connectionsを見る" : nativePath ? "AI Accessを起動" : "Connectionsを見る",
-      action: aiAccessReady || !nativePath ? goConnections : goConnections,
-      disabled: false
-    }
-  ];
-  const nextAction = (() => {
-    if (nextActionKind === "review_candidates") {
-      return {
-        title: `${candidates.length}件の候補を確認`,
-        body: "保存する生活文脈だけをFactにします。承認前の候補はAIには渡りません。",
-        label: "Inboxで確認",
-        action: goInbox,
-        icon: <Inbox size={18} />
-      };
-    }
-    if (nextActionKind === "add_background") {
-      return {
-        title: "生活背景を追加",
-        body: "呼び名、制約、いま動いている生活領域からMemory Inbox候補を作ります。",
-        label: "入力欄へ",
-        action: focusSetup,
-        icon: <Sparkles size={18} />
-      };
-    }
-    if (nextActionKind === "review_pending_request") {
-      return {
-        title: `${pendingRequestCount}件のContext Packを確認`,
-        body: "外部AIに渡る最小文脈を見て、不要なFactを外してから承認できます。",
-        label: "Requestsで確認",
-        action: goRequests,
-        icon: <MessageSquare size={18} />
-      };
-    }
-    if (nextActionKind === "try_context_pack") {
-      return {
-        title: "Context Packを試す",
-        body: "MCP接続前でも、確認した内容だけをコピーして普段使うAIに渡せます。",
-        label: "Packを確認",
-        action: goRequests,
-        icon: <MessageSquare size={18} />
-      };
-    }
-    if (nextActionKind === "connect_ai") {
-      return {
-        title: packTried ? "AI連携を常用化する" : nativePath ? "AI Accessを起動" : "DesktopでAI Accessを有効化",
-        body: accessReadiness.body,
-        label: nativePath ? "AI Accessを起動" : "Connectionsを見る",
-        action: nativePath ? goConnections : goConnections,
-        icon: <Plug size={18} />
-      };
-    }
-    return {
-      title: "Context Packを試す",
-      body: "普段使うAIに渡る文脈を、Requestsで事前確認できます。",
-      label: "Requestsを開く",
-      action: goRequests,
-      icon: <MessageSquare size={18} />
-    };
-  })();
-
-  return (
-    <section className="view-grid home-grid">
-      <div className="panel wide launch-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">First 10 minutes</p>
-            <h3>AIがあなたの生活文脈を使えるまで</h3>
-          </div>
-          <Badge>{accessReadiness.badge}</Badge>
-        </div>
-        <div className="home-start-grid">
-          <div className="next-action-card">
-            <div className="next-action-icon">{nextAction.icon}</div>
-            <div>
-              <p className="eyebrow">Next action</p>
-              <h4>{nextAction.title}</h4>
-              <p>{nextAction.body}</p>
-            </div>
-            <button
-              className="primary-button"
-              disabled={false && nextAction.action === goConnections}
-              onClick={nextAction.action}
-              type="button"
-            >
-              {nextAction.icon}
-              {nextAction.label}
-            </button>
-          </div>
-          <details className="onboarding-details">
-            <summary>セットアップの手順を見る</summary>
-          <div className="onboarding-checklist">
-            {onboardingSteps.map((step, index) => (
-              <button
-                className={`onboarding-step ${step.status}`}
-                disabled={step.disabled}
-                key={step.title}
-                onClick={step.action}
-                type="button"
-              >
-                <span className="step-index">
-                  {step.status === "done" ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}
-                  {index + 1}
-                </span>
-                <strong>{step.title}</strong>
-                <small>{step.body}</small>
-                <span className="step-action">
-                  {step.actionLabel}
-                  <ArrowRight size={14} />
-                </span>
-              </button>
-            ))}
-          </div>
-          </details>
-        </div>
-      </div>
-
-      <div className="panel quick-setup-panel" id="home-guided-setup">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Guided setup</p>
-            <h3>背景情報を追加</h3>
-          </div>
-        </div>
-        <SetupForm setup={setup} setSetup={setSetup} submitBackground={submitBackground} compact />
-      </div>
-
-
-      <div className="panel background-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Background Snapshot</p>
-            <h3>AIがいま理解している生活背景</h3>
-          </div>
-          <button className="secondary-button" onClick={goRequests} type="button">
-            <MessageSquare size={16} />
-            Requests
-          </button>
-        </div>
-        {backgroundFacts.length === 0 ? (
-          <div className="onboarding-card" role="region" aria-label="初回ガイド">
-            <p className="eyebrow">Getting started</p>
-            <h3>まずは3ステップで始めましょう</h3>
-            <ol className="onboarding-steps">
-              <li>
-                <strong>1. 生活背景を少し書く</strong>
-                <span>ガイド入力またはデモデータで、AIに覚えておいてほしい背景を追加します。保存前にMemory Inboxで確認します。</span>
-                <button className="primary-button" onClick={seedDemo} type="button">
-                  <Sparkles size={16} />
-                  デモ投入
-                </button>
-              </li>
-              <li>
-                <strong>2. Memory Inbox で承認</strong>
-                <span>生成された候補を確認します。承認したものだけがAIの確定文脈になります。</span>
-                <button className="secondary-button" onClick={goInbox} type="button">
-                  <Inbox size={16} />
-                  Inboxを開く
-                </button>
-              </li>
-              <li>
-                <strong>3. 暗号化バックアップを作る</strong>
-                <span>機種変・故障に備え、左の Settings から暗号化バックアップを書き出します（パスフレーズは紛失しないよう管理してください）。</span>
-              </li>
-            </ol>
-          </div>
-        ) : (
-          <div className="domain-list">
-            {Object.entries(grouped).map(([domain, items]) => (
-              <section className="domain-section" key={domain}>
-                <h4>{domainLabel(domain as LifeContextDomain)}</h4>
-                {items.map((fact) => (
-                  <FactRow fact={fact} key={fact.id} sources={sources} />
-                ))}
-              </section>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Review queue</p>
-            <h3>Memory Inbox</h3>
-          </div>
-          <button className="secondary-button" onClick={goInbox} type="button">
-            <Inbox size={16} />
-            Open
-          </button>
-        </div>
-        <p className="large-number">{candidates.length}</p>
-        <p className="muted">承認待ちの候補があります。承認されるまでAIの確定文脈には使われません。</p>
-      </div>
-    </section>
-  );
-}
-
-function SetupForm({
-  setup,
-  setSetup,
-  submitBackground,
-  compact = false
-}: {
-  setup: BackgroundSetupInput;
-  setSetup: (input: BackgroundSetupInput) => void;
-  submitBackground: () => void;
-  compact?: boolean;
-}) {
-  return (
-    <div className={compact ? "form-stack setup-form compact" : "form-stack setup-form"}>
-      <Input label="呼び名" value={setup.displayName} onChange={(displayName) => setSetup({ ...setup, displayName })} placeholder="例: Kota" />
-      <Input label="好みの口調" value={setup.tonePreference} onChange={(tonePreference) => setSetup({ ...setup, tonePreference })} placeholder="例: 落ち着いて具体的に" />
-      <Textarea label="いま動いている生活領域" value={setup.activeLifeAreas} onChange={(activeLifeAreas) => setSetup({ ...setup, activeLifeAreas })} placeholder="仕事、家族、引っ越し、学習、健康管理など" />
-      <Textarea label="繰り返し考慮してほしい制約" value={setup.recurringConstraints} onChange={(recurringConstraints) => setSetup({ ...setup, recurringConstraints })} placeholder="時間、予算、体力、移動、コミュニケーション上の制約" />
-      <Textarea label="毎回確認してほしい話題" value={setup.confirmationTopics} onChange={(confirmationTopics) => setSetup({ ...setup, confirmationTopics })} placeholder="健康、給付、金融、家族など" />
-      <button className="primary-button" onClick={submitBackground} type="button">
-        <Sparkles size={16} />
-        候補を作成
-      </button>
-    </div>
-  );
-}
-
-export function InboxView({
-  candidates,
-  facts,
-  edits,
-  supersedes,
-  setEdit,
-  toggleSupersede,
-  approve,
-  reject,
-  archive,
-  markSensitive,
-  goHome,
-  goSources,
-  goConnections
-}: {
-  candidates: MemoryCandidate[];
-  facts: ApprovedFact[];
-  edits: Record<string, string>;
-  supersedes: Record<string, string[]>;
-  setEdit: (id: string, value: string) => void;
-  toggleSupersede: (candidateId: string, factId: string) => void;
-  approve: (candidate: MemoryCandidate) => void;
-  reject: (candidate: MemoryCandidate) => void;
-  archive: (candidate: MemoryCandidate) => void;
-  markSensitive: (candidate: MemoryCandidate) => void;
-  goHome: () => void;
-  goSources: () => void;
-  goConnections: () => void;
-}) {
-  if (candidates.length === 0) {
-    return (
-      <EmptyState
-        title="Inboxは空です"
-        body="まずは生活背景、文書・メモ、AI会話Captureのどれかから候補を作れます。"
-        action={
-          <div className="inbox-empty-actions" aria-label="Memory Inbox start actions" role="group">
-            <div className="inbox-empty-action-grid">
-              <button className="primary-button" onClick={goHome} type="button">
-                <Sparkles size={16} />
-                背景情報を追加
-              </button>
-              <button className="secondary-button" onClick={goSources} type="button">
-                <FileText size={16} />
-                文書・メモを追加
-              </button>
-              <button className="secondary-button" onClick={goConnections} type="button">
-                <Plug size={16} />
-                AI会話Captureを設定
-              </button>
-            </div>
-            <div className="trust-note compact-note inbox-empty-note">
-              <ShieldCheck size={16} />
-              <span>候補は承認するとFactになり、Context Pack確認後だけAIに渡ります。</span>
-            </div>
-          </div>
-        }
-      />
-    );
-  }
-
-  return (
-    <section className="candidate-list">
-      {candidates.map((candidate) => {
-        const conflictFactIds = candidate.conflictWithFactIds ?? [];
-        const conflictOptions = facts.filter((fact) => conflictFactIds.includes(fact.id));
-        const replacementOptions = [
-          ...conflictOptions,
-          ...facts.filter(
-            (fact) =>
-              fact.domain === candidate.domain &&
-              fact.status === "active" &&
-              !conflictFactIds.includes(fact.id)
-          )
-        ].slice(0, 4);
-        const selectedSupersedes = supersedes[candidate.id] ?? [];
-        return (
-          <article className="candidate-card" key={candidate.id}>
-            <div className="candidate-meta">
-              <Badge>{domainLabel(candidate.domain)}</Badge>
-              <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
-              <Badge>{candidate.confidence}</Badge>
-              {conflictFactIds.length > 0 && <Badge>衝突候補</Badge>}
-            </div>
-            <textarea
-              aria-label="Candidate text"
-              value={edits[candidate.id] ?? candidate.proposedFactText}
-              onChange={(event) => setEdit(candidate.id, event.target.value)}
-            />
-            <p>{candidate.reasonToRemember}</p>
-            {conflictFactIds.length > 0 && (
-              <div className="warning-line conflict-line">
-                <ShieldAlert size={16} />
-                {candidate.conflictReason ?? "既存のFactと異なる可能性があります。保存前に置き換えるか確認してください。"}
-              </div>
-            )}
-            {replacementOptions.length > 0 && (
-              <div className="supersede-panel">
-                <div className="trust-note compact-note">
-                  <RefreshCw size={16} />
-                  <span>この候補で古いFactを置き換える場合だけ選択します。置き換えたFactはContext Pack候補から外れ、履歴に残ります。</span>
-                </div>
-                <div className="supersede-options">
-                  {replacementOptions.map((fact) => (
-                    <label className="supersede-option" key={fact.id}>
-                      <input
-                        checked={selectedSupersedes.includes(fact.id)}
-                        onChange={() => toggleSupersede(candidate.id, fact.id)}
-                        type="checkbox"
-                      />
-                      <span>{fact.factText}</span>
-                      {conflictFactIds.includes(fact.id) && <Badge>衝突</Badge>}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-            {candidate.status === "blocked_sensitive" && (
-              <div className="warning-line">
-                <ShieldAlert size={16} />
-                センシティブ候補です。保存すると、この情報はContext Pack使用時にも確認対象になります。
-              </div>
-            )}
-            <div className="action-row">
-              <button className="primary-button" onClick={() => approve(candidate)} type="button">
-                <Check size={16} />
-                {selectedSupersedes.length > 0 ? "置き換えて保存" : "保存"}
-              </button>
-              <button className="secondary-button" onClick={() => markSensitive(candidate)} type="button">
-                <ShieldAlert size={16} />
-                Sensitive
-              </button>
-              <button className="secondary-button" onClick={() => archive(candidate)} type="button">
-                <Archive size={16} />
-                Later
-              </button>
-              <button className="danger-button" onClick={() => reject(candidate)} type="button">
-                <X size={16} />
-                却下
-              </button>
-            </div>
-          </article>
-        );
-      })}
-    </section>
-  );
-}
-
-function SourcesView({
-  sources,
-  candidates,
-  facts,
-  contextPacks,
-  manualTitle,
-  manualBody,
-  setManualTitle,
-  setManualBody,
-  addManualSource,
-  handleFileUpload,
-  ocrExtractionAvailable,
-  ocrProviderLabel,
-  legacyOfficeConversionAvailable,
-  legacyOfficeProviderLabel,
-  sourceAccept,
-  sourceLabel,
-  uploadFeedback,
-  changeSourceLifecycle,
-  editSourceMetadata,
-  editSourceBody,
-  goInbox
-}: {
-  sources: VaultState["sources"];
-  candidates: VaultState["candidates"];
-  facts: VaultState["facts"];
-  contextPacks: VaultState["contextPacks"];
-  manualTitle: string;
-  manualBody: string;
-  setManualTitle: (value: string) => void;
-  setManualBody: (value: string) => void;
-  addManualSource: () => void;
-  handleFileUpload: (file: File) => void;
-  ocrExtractionAvailable: boolean;
-  ocrProviderLabel: string | null;
-  legacyOfficeConversionAvailable: boolean;
-  legacyOfficeProviderLabel: string | null;
-  sourceAccept: string;
-  sourceLabel: string;
-  uploadFeedback: UploadFeedback | null;
-  changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
-  editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
-  editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
-  goInbox: () => void;
-}) {
-  const [isDragActive, setIsDragActive] = useState(false);
-  const pendingSourceCandidates = sourceReviewCandidates(candidates);
-  const documentReadiness = documentIngestionReadiness(
-    ocrExtractionAvailable,
-    ocrProviderLabel,
-    legacyOfficeConversionAvailable,
-    legacyOfficeProviderLabel
-  );
-  function handleDropZoneDrag(event: React.DragEvent<HTMLLabelElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-    setIsDragActive(true);
-  }
-
-  function handleDropZoneLeave(event: React.DragEvent<HTMLLabelElement>) {
-    const relatedTarget = event.relatedTarget;
-    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) return;
-    setIsDragActive(false);
-  }
-
-  function handleDropZoneDrop(event: React.DragEvent<HTMLLabelElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDragActive(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) void handleFileUpload(file);
-  }
-
-  return (
-    <section className="view-grid">
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Manual source</p>
-            <h3>会話・メモから追加</h3>
-          </div>
-        </div>
-        <div className="form-stack">
-          <div className="trust-note">
-            <ShieldCheck size={16} />
-            <span>ここで保存されるのはSourceと未承認候補です。AIへ渡るのはInboxで承認したFactから作るContext Packだけです。</span>
-          </div>
-          <Input label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
-          <Textarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
-          <button className="primary-button" onClick={addManualSource} type="button">
-            <Sparkles size={16} />
-            候補を生成
-          </button>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Upload</p>
-            <h3>文書を追加</h3>
-          </div>
-        </div>
-        <label
-          aria-label={`文書を追加: ${sourceLabel}`}
-          className={isDragActive ? "drop-zone drag-active" : "drop-zone"}
-          onDragEnter={handleDropZoneDrag}
-          onDragLeave={handleDropZoneLeave}
-          onDragOver={handleDropZoneDrag}
-          onDrop={handleDropZoneDrop}
-        >
-          <Upload size={24} />
-          <strong>{isDragActive ? "ここにドロップ" : "ファイルを選択 / ドロップ"}</strong>
-          <span>{sourceLabel}</span>
-          <small>1ファイルずつ追加します</small>
-          <input
-            aria-label="文書ファイルを選択"
-            accept={sourceAccept}
-            type="file"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void handleFileUpload(file);
-              event.currentTarget.value = "";
-            }}
-          />
-        </label>
-        {uploadFeedback && (
-          <div className={`upload-feedback ${uploadFeedback.tone}`}>
-            {uploadFeedback.tone === "ready" ? <CheckCircle2 size={16} /> : <ShieldAlert size={16} />}
-            <div>
-              <strong>{uploadFeedback.title}</strong>
-              <span>{uploadFeedback.body}</span>
-            </div>
-          </div>
-        )}
-        <div className="trust-note">
-          <ShieldCheck size={16} />
-          <span>
-            PDF/OfficeはDesktopでローカル抽出します。
-            {ocrExtractionAvailable
-              ? ` 画像は ${ocrProviderLabel ?? "OCR Provider"} をローカル実行して抽出し、Inbox候補として確認します。`
-              : " 画像OCRは、誤記憶を避けるためProvider接続までSource化しません。"}
-            {legacyOfficeConversionAvailable
-              ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Legacy Office Provider"} でローカル変換してから抽出します。`
-              : " 旧Office形式は、誤記憶を避けるため変換Provider接続までSource化しません。"}
-          </span>
-        </div>
-        <div className="document-readiness-grid" aria-label="Document ingestion readiness">
-          {documentReadiness.map((item) => (
-            <div className={`document-readiness-card ${item.state}`} key={item.label}>
-              {item.state === "ready" ? <CheckCircle2 size={16} /> : <ShieldAlert size={16} />}
-              <div>
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-                <small>{item.detail}</small>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {pendingSourceCandidates.length > 0 && (
-        <div className="panel wide source-review-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Review queue</p>
-              <h3>Sourceから作られた承認待ち候補</h3>
-            </div>
-            <Badge>{pendingSourceCandidates.length}件</Badge>
-          </div>
-          <div className="trust-note">
-            <ShieldCheck size={16} />
-            <span>ここにある候補はまだFactではありません。Inboxで保存するまでContext Pack候補にもAI送信対象にもなりません。</span>
-          </div>
-          <div className="source-review-list">
-            {pendingSourceCandidates.slice(0, 3).map((candidate) => (
-              <div className="source-review-row" key={candidate.id}>
-                <div>
-                  <strong>{candidate.proposedFactText}</strong>
-                  <span>{domainLabel(candidate.domain)} / {candidate.reasonToRemember}</span>
-                </div>
-                <div className="source-review-meta">
-                  <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
-                  <Badge>{candidate.confidence}</Badge>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="action-row">
-            <button className="primary-button" onClick={goInbox} type="button">
-              <Inbox size={16} />
-              Inboxで承認
-            </button>
-            {pendingSourceCandidates.length > 3 && <span className="muted">ほか {pendingSourceCandidates.length - 3}件</span>}
-          </div>
-        </div>
-      )}
-
-      <div className="panel wide">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Source history</p>
-            <h3>追加済みSource</h3>
-          </div>
-        </div>
-        <div className="trust-note">
-          <Archive size={16} />
-          <span>Sourceを停止または本文消去すると、未承認候補はLaterへ移り、関連Factは再確認待ちになります。再確認待ちFactはContext Packから外れます。</span>
-        </div>
-        <div className="table-list">
-          {sources.map((source) => {
-            const linkedCandidateCount = candidates.filter((candidate) => candidate.sourceIds.includes(source.id)).length;
-            const linkedFacts = facts.filter((fact) => fact.sourceIds.includes(source.id));
-            const linkedFactCountValue = linkedFacts.length;
-            const linkedPackCount = contextPacks.filter((pack) =>
-              pack.items.some((item) => linkedFacts.some((fact) => fact.id === item.factId))
-            ).length;
-            return (
-              <SourceRow
-                changeSourceLifecycle={changeSourceLifecycle}
-                editSourceMetadata={editSourceMetadata}
-                editSourceBody={editSourceBody}
-                key={source.id}
-                linkedCandidateCount={linkedCandidateCount}
-                linkedFactCount={linkedFactCountValue}
-                linkedPackCount={linkedPackCount}
-                source={source}
-              />
-            );
-          })}
-          {sources.length === 0 && <p className="muted">まだSourceがありません。</p>}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SourceRow({
-  source,
-  linkedCandidateCount,
-  linkedFactCount,
-  linkedPackCount,
-  changeSourceLifecycle,
-  editSourceMetadata,
-  editSourceBody
-}: {
-  source: VaultState["sources"][number];
-  linkedCandidateCount: number;
-  linkedFactCount: number;
-  linkedPackCount: number;
-  changeSourceLifecycle: (sourceId: string, action: SourceLifecycleAction) => void;
-  editSourceMetadata: (sourceId: string, input: SourceMetadataUpdate) => Promise<boolean>;
-  editSourceBody: (sourceId: string, input: SourceBodyUpdate) => Promise<boolean>;
-}) {
-  const [draft, setDraft] = useState<SourceMetadataUpdate | null>(null);
-  const [bodyDraft, setBodyDraft] = useState<string | null>(null);
-  const [confirmBodyPurge, setConfirmBodyPurge] = useState(false);
-  const retentionLabel = sourceRetentionLabel(source);
-  const canPromote = Boolean(source.retentionUntil);
-
-  useEffect(() => {
-    if (source.deletionState === "purged") setConfirmBodyPurge(false);
-  }, [source.deletionState]);
-
-  return (
-    <div className="table-row source-row">
-      <div className="source-main">
-        {bodyDraft !== null ? (
-          <div className="source-edit-form source-body-edit-form">
-            <Textarea
-              label="Source本文"
-              value={bodyDraft}
-              onChange={setBodyDraft}
-              placeholder="再抽出したい本文"
-            />
-            <div className="trust-note">
-              <RefreshCw size={16} />
-              <span>保存すると未承認候補を再生成します。既存のApprovedFactは再確認待ちになり、関連Context Packは無効化されます。</span>
-            </div>
-          </div>
-        ) : draft ? (
-          <div className="source-edit-form">
-            <Input
-              label="Sourceタイトル"
-              value={draft.title}
-              onChange={(value) => setDraft({ ...draft, title: value })}
-              placeholder="根拠として見分けやすい名前"
-            />
-            <div className="source-edit-grid">
-              <label className="field">
-                <span>Source感度</span>
-                <select
-                  value={draft.defaultSensitivity}
-                  onChange={(event) =>
-                    setDraft({ ...draft, defaultSensitivity: event.target.value as SensitivityTier })
-                  }
-                >
-                  {sensitivityOptions.filter((sensitivity) => sensitivity !== "all").map((sensitivity) => (
-                    <option key={sensitivity} value={sensitivity}>
-                      {sensitivityLabel(sensitivity as SensitivityTier)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {canPromote && (
-                <label className="toggle-row compact-toggle">
-                  <input
-                    checked={Boolean(draft.promotedToLongTerm)}
-                    onChange={(event) =>
-                      setDraft({ ...draft, promotedToLongTerm: event.target.checked })
-                    }
-                    type="checkbox"
-                  />
-                  <div>
-                    <strong>長期保持</strong>
-                    <span>{source.retentionUntil ? new Date(source.retentionUntil).toLocaleDateString() : ""}</span>
-                  </div>
-                </label>
-              )}
-            </div>
-          </div>
-        ) : (
-          <>
-            <strong>{source.title}</strong>
-            <span>{source.kind} / {new Date(source.createdAt).toLocaleString()}</span>
-            <div className="source-meta">
-              <Badge>{sourceLifecycleLabel(source.deletionState)}</Badge>
-              <Badge>{source.body ? "本文あり" : "本文なし"}</Badge>
-              {retentionLabel && <Badge>{retentionLabel}</Badge>}
-              <Badge>候補 {linkedCandidateCount}</Badge>
-              <Badge>Fact {linkedFactCount}</Badge>
-              <Badge>Pack {linkedPackCount}</Badge>
-            </div>
-            {confirmBodyPurge && (
-              <div className="danger-confirm-card inline-confirm" role="status">
-                <strong>このSource本文を消去します</strong>
-                <span>
-                  本文は戻せません。未承認候補 {linkedCandidateCount}件、関連Fact {linkedFactCount}件、関連Context Pack {linkedPackCount}件に影響します。
-                </span>
-                <button className="secondary-button" onClick={() => setConfirmBodyPurge(false)} type="button">
-                  <X size={16} />
-                  取消
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-      <div className="source-actions">
-        <SensitivityBadge sensitivity={source.defaultSensitivity} />
-        {bodyDraft !== null ? (
-          <>
-            <button
-              className="primary-button"
-              onClick={async () => {
-                const saved = await editSourceBody(source.id, { body: bodyDraft });
-                if (saved) setBodyDraft(null);
-              }}
-              type="button"
-            >
-              <RefreshCw size={16} />
-              保存して再抽出
-            </button>
-            <button className="secondary-button" onClick={() => setBodyDraft(null)} type="button">
-              <X size={16} />
-              取消
-            </button>
-          </>
-        ) : draft ? (
-          <>
-            <button
-              className="primary-button"
-              onClick={async () => {
-                const saved = await editSourceMetadata(source.id, draft);
-                if (saved) setDraft(null);
-              }}
-              type="button"
-            >
-              <Check size={16} />
-              保存
-            </button>
-            <button className="secondary-button" onClick={() => setDraft(null)} type="button">
-              <X size={16} />
-              取消
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              className="secondary-button"
-              onClick={() =>
-                setDraft({
-                  title: source.title,
-                  defaultSensitivity: source.defaultSensitivity,
-                  promotedToLongTerm: source.promotedToLongTerm ?? false
-                })
-              }
-              type="button"
-            >
-              <Settings size={16} />
-              編集
-            </button>
-            {source.deletionState === "active" && source.body && (
-              <button
-                className="secondary-button"
-                onClick={() => setBodyDraft(source.body)}
-                type="button"
-              >
-                <RefreshCw size={16} />
-                本文編集
-              </button>
-            )}
-          </>
-        )}
-        {source.deletionState === "active" && (
-          <button
-            className="secondary-button"
-            onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
-            type="button"
-          >
-            <Archive size={16} />
-            使用停止
-          </button>
-        )}
-        {source.deletionState === "soft_deleted" && (
-          <button
-            className="secondary-button"
-            onClick={() => changeSourceLifecycle(source.id, "restore")}
-            type="button"
-          >
-            <RefreshCw size={16} />
-            復元
-          </button>
-        )}
-        {source.deletionState !== "purged" && (
-          <button
-            className="danger-button"
-            onClick={() => {
-              if (!confirmBodyPurge) {
-                setConfirmBodyPurge(true);
-                return;
-              }
-              setConfirmBodyPurge(false);
-              changeSourceLifecycle(source.id, "purge_body");
-            }}
-            type="button"
-          >
-            <X size={16} />
-            {confirmBodyPurge ? "確認して本文消去" : "本文消去"}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ContextRequestsView({
   question,
   setQuestion,
@@ -4337,31 +3366,6 @@ export function shouldShowCopyFallbackStarter(
 ): boolean {
   return !currentPack;
 }
-
-export function homeNextActionKind({
-  candidateCount,
-  backgroundStarted,
-  approvedFactCount,
-  pendingRequestCount,
-  deliverablePackCount,
-  aiAccessReady
-}: {
-  candidateCount: number;
-  backgroundStarted: boolean;
-  approvedFactCount: number;
-  pendingRequestCount: number;
-  deliverablePackCount: number;
-  aiAccessReady: boolean;
-}): HomeNextActionKind {
-  if (candidateCount > 0) return "review_candidates";
-  if (!backgroundStarted) return "add_background";
-  if (pendingRequestCount > 0) return "review_pending_request";
-  if (approvedFactCount === 0) return "add_background";
-  if (approvedFactCount > 0 && deliverablePackCount === 0) return "try_context_pack";
-  if (!aiAccessReady) return "connect_ai";
-  return "try_context_pack";
-}
-
 export function homeAiBoundarySections({
   facts,
   candidates,
@@ -5508,7 +4512,6 @@ function makeCaptureSetupCommand(extensionId: string): string {
 function titleForView(view: View): string {
   return {
     home: "Life Context Home",
-    inbox: "Memory Inbox",
     sources: "Sources",
     connections: "AI Connections",
     requests: "Context Requests",

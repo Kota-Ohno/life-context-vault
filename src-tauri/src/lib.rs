@@ -7780,7 +7780,7 @@ pub fn run() {
       let window = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, url)
         .title("Life Context Vault")
         .inner_size(1200.0, 820.0)
-        .min_inner_size(390.0, 680.0)
+        .min_inner_size(960.0, 640.0)
         .resizable(true)
         .visible(true)
         .build()?;

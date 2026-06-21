@@ -6,3 +6,6 @@ browser-extension/native-host.dev.json
 src-tauri/binaries/
 deploy/relay/relay.env
 deploy/relay/compose.env
+
+# SDD subagent scratch (briefs, reports, diffs, progress ledger)
+.superpowers/

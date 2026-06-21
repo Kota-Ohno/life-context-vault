@@ -1,11 +1,10 @@
-import { KeyRound, Clock, PlusCircle, ArrowLeftRight, Inbox, MessageSquare, Search } from "lucide-react";
+import { KeyRound, Clock, PlusCircle, ArrowLeftRight, MessageSquare, Search, Settings } from "lucide-react";
 import { VaultStatus } from "./VaultStatus";
 import { ThemeToggle } from "./ThemeToggle";
 import { SearchField } from "./SearchField";
 
 export type RailView =
   | "home"
-  | "inbox"
   | "sources"
   | "connections"
   | "requests"
@@ -79,14 +78,7 @@ export function Rail({
 
       {/* Secondary group */}
       <div className="qv-rail__secondary" role="navigation" aria-label="その他">
-        <div className="qv-rail__secondary-label">その他（再編予定）</div>
-        <RailSecondary
-          icon={<Inbox size={14} />}
-          label="受信"
-          active={view === "inbox"}
-          badge={candidateCount || undefined}
-          onClick={() => setView("inbox")}
-        />
+        <div className="qv-rail__secondary-label">その他</div>
         <RailSecondary
           icon={<MessageSquare size={14} />}
           label="依頼"
@@ -114,7 +106,7 @@ export function Rail({
             aria-current={view === "settings" ? "page" : undefined}
             onClick={() => setView("settings")}
           >
-            ⚙ 設定
+            <Settings size={14} aria-hidden="true" /> 設定
           </button>
           <button
             className="qv-rail__lang-btn"
