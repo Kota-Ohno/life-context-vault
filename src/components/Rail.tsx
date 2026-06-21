@@ -1,4 +1,4 @@
-import { KeyRound, Clock, PlusCircle, ArrowLeftRight, MessageSquare, Search } from "lucide-react";
+import { KeyRound, Clock, PlusCircle, ArrowLeftRight, MessageSquare, Search, Settings } from "lucide-react";
 import { VaultStatus } from "./VaultStatus";
 import { ThemeToggle } from "./ThemeToggle";
 import { SearchField } from "./SearchField";
@@ -106,7 +106,7 @@ export function Rail({
             aria-current={view === "settings" ? "page" : undefined}
             onClick={() => setView("settings")}
           >
-            ⚙ 設定
+            <Settings size={14} aria-hidden="true" /> 設定
           </button>
           <button
             className="qv-rail__lang-btn"
