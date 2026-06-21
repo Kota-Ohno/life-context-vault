@@ -185,9 +185,9 @@ function DaySection({
 }) {
   return (
     <section className="qv-tl-day">
-      <div className="qv-tl-day-head" aria-hidden="true">
+      <div className="qv-tl-day-head">
         <h2 className="qv-tl-day-label">{day.label}</h2>
-        <div className="qv-tl-day-rule" />
+        <div className="qv-tl-day-rule" aria-hidden="true" />
       </div>
       {day.entries.map((entry) => (
         <EntryCard

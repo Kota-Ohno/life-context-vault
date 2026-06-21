@@ -1771,10 +1771,12 @@ export function App() {
 
       <main className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">User-owned life context</p>
-            <h2>{titleForView(view)}</h2>
-          </div>
+          {view !== "home" && (
+            <div>
+              <p className="eyebrow">User-owned life context</p>
+              <h2>{titleForView(view)}</h2>
+            </div>
+          )}
           <div className="topbar-actions">
             {nativePath && (
               <button className="secondary-button" onClick={refreshFromNative} type="button">

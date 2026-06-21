@@ -182,6 +182,7 @@ button {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+  margin-left: auto;
 }
 
 .topbar h2 {
