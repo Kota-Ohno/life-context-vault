@@ -23,7 +23,6 @@ export function Toggle({ id, checked, onChange, disabled = false, label }: Toggl
         checked={checked}
         disabled={disabled}
         onChange={handleChange}
-        aria-checked={checked}
       />
       <span className="qv-toggle__track" aria-hidden="true">
         <span className="qv-toggle__thumb" />

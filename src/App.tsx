@@ -407,6 +407,17 @@ const SHOW_QV_GALLERY = false;
 /** Views that render their own Quiet Vault PageHeader — suppress the legacy topbar title for these. */
 const VIEWS_WITH_OWN_HEADER = new Set(["home", "connections"]);
 
+/** Human-readable labels for connector kinds. */
+const CLIENT_LABELS: Record<string, string> = {
+  claude_desktop: "Claude Desktop",
+  chatgpt: "ChatGPT",
+  claude_remote: "Claude (リモート)",
+  gemini: "Gemini",
+  codex: "Codex",
+  generic_mcp: "MCP クライアント",
+  copy_fallback: "コピー経由",
+};
+
 export function App() {
   const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
   const [state, setState] = useState<VaultState>(() => loadVault());
@@ -1902,21 +1913,13 @@ export function App() {
                 <SectionDivider label="自動配信 Standing Delivery" />
                 <Card>
                   {state.accessPolicies.map((policy) => {
+                    const clientKind = policy.clientId.replace(/^conn_/, "");
                     const session = state.connectorSessions.find(
-                      (s) => s.clientKind === policy.clientId
+                      (s) => s.clientKind === clientKind
                     );
-                    const clientLabels: Record<string, string> = {
-                      claude_desktop: "Claude Desktop",
-                      chatgpt: "ChatGPT",
-                      claude_remote: "Claude (リモート)",
-                      gemini: "Gemini",
-                      codex: "Codex",
-                      generic_mcp: "MCP クライアント",
-                      copy_fallback: "コピー経由",
-                    };
                     const displayName =
                       session?.clientName ??
-                      clientLabels[policy.clientId] ??
+                      CLIENT_LABELS[clientKind] ??
                       policy.clientId;
                     const thresholdLabel = (() => {
                       switch (policy.requiresApprovalAbove) {
