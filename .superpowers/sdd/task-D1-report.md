@@ -77,3 +77,45 @@ Test Files  6 passed (6)
 - No `cargo fmt` run
 - No i18n keys added (inline JP matched existing style)
 - Both "最初の文脈を追加" and "承認待ち N 件" CTAs route via `goSources`
+
+---
+
+## Fix pass (Phase D1 spec-gap review)
+
+### Changes made
+
+**`src/components/HomeTimeline.tsx`**
+
+1. Added `seedDemo: () => void` to `HomeTimelineProps`.
+2. Hoisted `PENDING_STATUSES` to module scope (was recreated on every render inside `TimelineEmpty`).
+3. `TimelineEmpty` now receives `factCount`, `pendingCandidateCount`, `seedDemo` as props instead of `state: VaultState` — counts are no longer recomputed inside `TimelineEmpty`.
+4. `factCount` counts only `status === "active"` facts (was `state.facts.length` — raw array, which included superseded/deleted/etc.).
+5. `pendingCandidateCount` computed via `useMemo` in `HomeTimeline`; `factCount` also via `useMemo`.
+6. First-run branch now renders:
+   - A trust line `<p className="qv-tl-empty__trust">承認した文脈だけがAIに渡ります。保存前にMemory Inboxで確認できます。</p>`
+   - "デモで試す" quiet secondary button → `seedDemo` (alongside "最初の文脈を追加" primary)
+7. Pending branch label changed from `"承認待ち {N} 件"` to `"承認待ち {N} 件を取り込みで確認"` (spec exact wording).
+
+**`src/App.tsx`**
+
+- Added `seedDemo={seedDemo}` to the `<HomeTimeline>` mount (~line 1821).
+
+**`src/components/HomeTimeline.test.tsx`**
+
+- Updated test (a): now asserts "デモで試す" present, "最初の文脈を追加" present, trust line present, scope-heading absent.
+- Added test (c): vault with 1 active fact, no timeline entries → scope-empty message present; "最初の文脈を追加" and "デモで試す" absent.
+- Added bonus test: vault with only superseded facts → first-run onboarding still shows (active-fact count is 0).
+
+### Test result
+
+```
+Test Files  6 passed (6)
+      Tests  73 passed (73)
+```
+
+### Build result
+
+```
+✓ tsc --noEmit clean
+✓ vite build — 373 kB JS bundle, no errors
+```

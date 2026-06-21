@@ -1822,6 +1822,7 @@ export function App() {
             state={state}
             goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
+            seedDemo={seedDemo}
             onApprovePending={(packId) => {
               const pack = state.contextPacks.find((p) => p.id === packId);
               if (pack) void approvePackForAi(pack);

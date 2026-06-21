@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   buildActivityTimeline,
   type TimelineEntry,
@@ -21,6 +21,7 @@ export interface HomeTimelineProps {
   state: VaultState;
   goSources: () => void;
   goConnections: () => void;
+  seedDemo: () => void;
   onApprovePending?: (packId: string) => void;
   onApproveStanding?: (packId: string, clientId: string) => void;
   onRevoke?: (packId: string) => void;
@@ -212,24 +213,25 @@ function DaySection({
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
+const PENDING_STATUSES = new Set<string>(["new", "needs_user_detail", "blocked_sensitive"]);
+
 function TimelineEmpty({
   scope,
-  state,
+  factCount,
+  pendingCandidateCount,
   goSources,
   goConnections,
+  seedDemo,
 }: {
   scope: Scope;
-  state: VaultState;
+  factCount: number;
+  pendingCandidateCount: number;
   goSources: () => void;
   goConnections: () => void;
+  seedDemo: () => void;
 }) {
-  // Zero-facts onboarding branch: vault has never had an approved fact yet.
-  if (state.facts.length === 0) {
-    const PENDING_STATUSES = new Set<string>(["new", "needs_user_detail", "blocked_sensitive"]);
-    const pendingCount = state.candidates.filter((c) =>
-      PENDING_STATUSES.has(c.status),
-    ).length;
-
+  // Zero-facts onboarding branch: vault has no active facts yet.
+  if (factCount === 0) {
     return (
       <div className="qv-tl-empty">
         <p className="qv-tl-empty__kana" aria-hidden="true">◇</p>
@@ -239,22 +241,30 @@ function TimelineEmpty({
         <p className="qv-tl-empty__body">
           情報を追加して承認すると、AIに渡せる文脈パックが作られます。
         </p>
+        <p className="qv-tl-empty__trust">
+          承認した文脈だけがAIに渡ります。保存前にMemory Inboxで確認できます。
+        </p>
         <div className="qv-tl-empty__actions">
-          {pendingCount > 0 ? (
+          {pendingCandidateCount > 0 ? (
             <Button variant="primary" size="sm" onClick={goSources}>
-              承認待ち {pendingCount} 件
+              承認待ち {pendingCandidateCount} 件を取り込みで確認
             </Button>
           ) : (
-            <Button variant="primary" size="sm" onClick={goSources}>
-              最初の文脈を追加
-            </Button>
+            <>
+              <Button variant="primary" size="sm" onClick={goSources}>
+                最初の文脈を追加
+              </Button>
+              <Button variant="quiet" size="sm" onClick={seedDemo}>
+                デモで試す
+              </Button>
+            </>
           )}
         </div>
       </div>
     );
   }
 
-  // Scope-filtered branch: vault has facts but none fall in the selected scope.
+  // Scope-filtered branch: vault has active facts but none fall in the selected scope.
   const scopeNote = scope === "week" ? "今週" : scope === "month" ? "今月" : "";
   return (
     <div className="qv-tl-empty">
@@ -303,6 +313,7 @@ export function HomeTimeline({
   state,
   goSources,
   goConnections,
+  seedDemo,
   onApprovePending,
   onApproveStanding,
   onRevoke,
@@ -310,6 +321,15 @@ export function HomeTimeline({
   const [scope, setScope] = useState<Scope>("week");
   const days = buildActivityTimeline(state, { scope });
   const { total, pending } = summarize(days);
+
+  const factCount = useMemo(
+    () => state.facts.filter((f) => f.status === "active").length,
+    [state.facts],
+  );
+  const pendingCandidateCount = useMemo(
+    () => state.candidates.filter((c) => PENDING_STATUSES.has(c.status)).length,
+    [state.candidates],
+  );
 
   return (
     <div className="qv-tl">
@@ -342,7 +362,14 @@ export function HomeTimeline({
 
       {/* Timeline body */}
       {days.length === 0 ? (
-        <TimelineEmpty scope={scope} state={state} goSources={goSources} goConnections={goConnections} />
+        <TimelineEmpty
+          scope={scope}
+          factCount={factCount}
+          pendingCandidateCount={pendingCandidateCount}
+          goSources={goSources}
+          goConnections={goConnections}
+          seedDemo={seedDemo}
+        />
       ) : (
         <div className="qv-tl-body">
           {days.map((day) => (
