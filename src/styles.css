@@ -2995,9 +2995,9 @@ button:focus-visible {
   display: grid;
   gap: 7px;
   padding: 10px;
-  border: 1px solid #e2e8df;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .source-snippet.empty {
