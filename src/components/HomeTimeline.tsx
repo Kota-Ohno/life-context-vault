@@ -79,11 +79,19 @@ function EntryCard({
   onRevoke?: (packId: string) => void;
 }) {
   const isPending = entry.disclosure === "pending";
+  const isCancelled = entry.disclosure === "cancelled";
+  const isConfirmed = entry.disclosure === "confirmed";
   const glyph = clientGlyph(entry.clientId, entry.clientName);
 
+  // I1: cancelled packs must never look like a successful disclosure.
+  // M2: confirmed (user pressed 今回だけ) gets a distinct label from auto.
   const boundaryLabel = isPending ? "承認すると渡る内容" : "AIに渡った内容";
   const sealVariant = isPending ? "pending" : "auto";
-  const sealLabel = isPending ? "あなたの承認待ち" : "自動で渡しました";
+  const sealLabel = isPending
+    ? "あなたの承認待ち"
+    : isConfirmed
+    ? "確認して渡しました"
+    : "自動で渡しました";
   const sealDetail = `${sensitivityShort(entry.maxSensitivity)} · ${isPending ? "閾値より上" : "即時"}`;
 
   return (
@@ -127,35 +135,43 @@ function EntryCard({
         </div>
       )}
 
-      {/* Entry footer */}
+      {/* Entry footer — I1: cancelled shows muted note, no Seal, no action buttons */}
       <div className="qv-tl-entry-foot">
-        <Seal variant={sealVariant} label={sealLabel} detail={sealDetail} />
-
-        {isPending ? (
-          <span className="qv-tl-approve">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onApprovePending?.(entry.packId)}
-            >
-              今回だけ
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => onApproveStanding?.(entry.packId, entry.clientId)}
-            >
-              今後このAIに自動
-            </Button>
+        {isCancelled ? (
+          <span className="qv-tl-cancelled-note" aria-label="取り消し済み">
+            取り消し済み — このAIには渡していません
           </span>
         ) : (
-          <button
-            type="button"
-            className="qv-tl-revoke"
-            onClick={() => onRevoke?.(entry.packId)}
-          >
-            取り消す
-          </button>
+          <>
+            <Seal variant={sealVariant} label={sealLabel} detail={sealDetail} />
+
+            {isPending ? (
+              <span className="qv-tl-approve">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onApprovePending?.(entry.packId)}
+                >
+                  今回だけ
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => onApproveStanding?.(entry.packId, entry.clientId)}
+                >
+                  今後このAIに自動
+                </Button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="qv-tl-revoke"
+                onClick={() => onRevoke?.(entry.packId)}
+              >
+                取り消す
+              </button>
+            )}
+          </>
         )}
       </div>
     </Card>

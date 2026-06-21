@@ -1569,7 +1569,11 @@ export function App() {
         return;
       }
     }
-    apply(updateAccessPolicy(state, clientId, { standingDeliveryEnabled: enabled }), enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+    // M1: use functional updater so this state write is not clobbered if
+    // approvePackForAi (called synchronously right after setStandingDelivery)
+    // also applies a state update from the same stale closure on this path.
+    setState((prev) => updateAccessPolicy(prev, clientId, { standingDeliveryEnabled: enabled }));
+    setNotice(enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
   }
 
   function setStandingDelivery(clientId: string, enabled: boolean) {

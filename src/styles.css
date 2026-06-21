@@ -4430,6 +4430,15 @@ button:focus-visible {
   border-radius: 2px;
 }
 
+/* --- Cancelled (revoked) note — I1 --------------------------------- */
+/* A cancelled pack was NOT delivered; render as muted historical note */
+.qv-tl-cancelled-note {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  font-style: italic;
+  letter-spacing: 0.01em;
+}
+
 /* --- Empty state ------------------------------------------- */
 .qv-tl-empty {
   display: flex;
