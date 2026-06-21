@@ -549,6 +549,63 @@ describe("vault flow", () => {
     expect(built.pack?.items.some((item) => item.factId === "fact_health")).toBe(false);
   });
 
+  it("delivers an approved fact within the client ceiling even when its source default sensitivity is higher", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const normalized = normalizeVaultState({
+      ...base,
+      sources: [
+        {
+          id: "src_cautious",
+          kind: "background_onboarding",
+          title: "Guided background setup",
+          origin: "guided_onboarding",
+          body: "Recurring constraints, with an incidental mention of health.",
+          createdAt: now,
+          capturedAt: now,
+          defaultSensitivity: "sensitive",
+          processingStatus: "ready",
+          deletionState: "active"
+        }
+      ],
+      facts: [
+        {
+          id: "fact_constraint",
+          factText: "Recurring constraints: weekday time is limited.",
+          domain: "constraints_and_accessibility",
+          factType: "constraint",
+          sourceIds: ["src_cautious"],
+          sensitivity: "personal",
+          confidence: "source_backed",
+          status: "active",
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: []
+        }
+      ]
+    });
+    const requested = createContextPackRequest(normalized, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me plan my week",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    // The approved fact's own sensitivity (personal) is within the ChatGPT ceiling
+    // (private_consequential), so the build must include it.
+    expect(built.pack?.items.some((item) => item.factId === "fact_constraint")).toBe(true);
+
+    // Confirming must succeed and the pack must stay deliverable: the source's cautious
+    // default sensitivity must NOT override the user's explicit fact-level approval at
+    // delivery time. Regression guard for the "承認ができない" pack-approval bug.
+    const confirmed = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmed.contextPacks.find((pack) => pack.id === built.pack!.id)!;
+    expect(confirmedPack.confirmationStatus).toBe("confirmed");
+    expect(canSendContextPackToAi(confirmed, confirmedPack)).toBe(true);
+  });
+
   it("confirms a context pack for external AI without generating a local answer", () => {
     let state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",
@@ -874,6 +931,72 @@ describe("vault flow", () => {
 
     expect(restored.sources[0].title).toBe("Legacy backup note");
     expect(restored.sources[0].body).toContain("Legacy backup import");
+  });
+
+  it("standing-delivery opt-in governs whether a personal-tier pack auto-delivers", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-12T00:00:00.000Z";
+    const withFact = normalizeVaultState({
+      ...base,
+      facts: [{
+        id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
+        factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+      }]
+    });
+    const enabled = {
+      ...withFact,
+      accessPolicies: withFact.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt" ? { ...p, standingDeliveryEnabled: true } : p)
+    };
+    const r1 = createContextPackRequest(enabled, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const b1 = buildContextPackForRequest(r1.state, r1.request.id);
+    expect(b1.pack?.confirmationStatus).toBe("not_required");
+
+    const disabled = {
+      ...withFact,
+      accessPolicies: withFact.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt" ? { ...p, standingDeliveryEnabled: false } : p)
+    };
+    const r2 = createContextPackRequest(disabled, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const b2 = buildContextPackForRequest(r2.state, r2.request.id);
+    expect(b2.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  it("loading an existing vault whose policy lacks standingDeliveryEnabled stays strict (no silent opt-in)", () => {
+    // Simulate an existing vault stored before standingDeliveryEnabled existed:
+    // the persisted accessPolicy for conn_chatgpt has NO standingDeliveryEnabled key.
+    const now = "2026-06-12T00:00:00.000Z";
+    const storedState = {
+      ...createEmptyVault(),
+      facts: [{
+        id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
+        factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+      }],
+      accessPolicies: [{
+        clientId: "conn_chatgpt",
+        clientName: "ChatGPT",
+        sensitivityCeiling: "personal" as const,
+        requiresApprovalAbove: "professional_sensitive" as const,
+        domainAllowlist: [],
+        approvalMode: "always_review" as const,
+        createdAt: now,
+        updatedAt: now
+        // standingDeliveryEnabled intentionally OMITTED — simulates pre-upgrade vault
+      }]
+    };
+
+    // normalizeVaultState is the load path used when reading a persisted vault
+    const loaded = normalizeVaultState(storedState as unknown as Parameters<typeof normalizeVaultState>[0]);
+    const chatgptPolicy = loaded.accessPolicies.find((p) => p.clientId === "conn_chatgpt");
+    // The flag must remain absent/undefined — not silently coerced to true
+    expect(chatgptPolicy?.standingDeliveryEnabled).toBeUndefined();
+
+    // Confirm the pack stays strict: personal-tier fact must require user confirmation
+    const req = createContextPackRequest(loaded, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
+    const built = buildContextPackForRequest(req.state, req.request.id);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
   });
 });
 

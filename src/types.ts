@@ -343,6 +343,7 @@ export type AccessPolicy = {
   sensitivityCeiling: SensitivityTier;
   requiresApprovalAbove: SensitivityTier;
   passiveCaptureAllowed: boolean;
+  standingDeliveryEnabled?: boolean;
   expiresAt?: string;
   createdAt: string;
   updatedAt: string;

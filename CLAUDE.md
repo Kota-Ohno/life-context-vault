@@ -163,10 +163,11 @@ Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_v
    `src-tauri/binaries/<host-triple>/` with a triple suffix (Tauri `externalBin` requirement).
    That dir is gitignored and always regenerated — a manual `cargo build` without staging will
    bundle stale/missing sidecars.
-3. **`lcv-mcp` always uses `approval_mode = "always_review"`.** Every MCP-initiated Context Pack
-   is queued `pending_user_confirmation` and is NOT returned to the AI even if low-sensitivity;
-   the client must poll `get_request_status` after the user confirms in Control Center. This is
-   intentionally stricter than the in-app path — do not "fix" it.
+3. **`lcv-mcp` defers approval mode to the Vault Core per-connection policy.** The core resolves
+   `None` → `"always_review"` unless the connection has `standingDeliveryEnabled = true`, in which
+   case it uses `"explicit_sensitive"`. Connections that have not opted in remain strictly reviewed
+   (unchanged). Above-threshold items still queue `pending_user_confirmation` for Control Center
+   confirmation before being returned to the AI.
 4. **Projection tables are derived.** The canonical data is the `vault_state` JSON blob; the
    normalized tables + FTS5 rebuild from it. Don't write to them directly.
 5. **Agent readiness is explicit.** A running `lcv-agent` process is NOT "connected" until the

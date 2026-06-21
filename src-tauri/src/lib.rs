@@ -1186,7 +1186,19 @@ fn create_native_context_pack_request_in_connection(
     .unwrap_or(policy_ceiling);
   let requires_approval_above = policy_requires_approval_above_for_client(vault, client_id);
   let domain_allowlist = policy_domain_allowlist_for_client(vault, client_id);
-  let approval_mode = approval_mode.unwrap_or("explicit_sensitive");
+  let resolved_mode = match approval_mode {
+    Some(mode) => mode.to_string(),
+    // Caller (e.g. lcv-mcp) defers to the connection's standing-delivery opt-in.
+    // Single enforcement point: the core decides, not the sidecar.
+    None => {
+      if connection_standing_delivery_enabled(vault, client_id) {
+        "explicit_sensitive".to_string()
+      } else {
+        "always_review".to_string()
+      }
+    }
+  };
+  let approval_mode = resolved_mode.as_str();
   let facts = rank_context_facts_in_connection(connection, task_text, &ceiling, 24)?;
   let mut items = Vec::new();
   let mut excluded_items = Vec::new();
@@ -2451,6 +2463,36 @@ pub fn update_access_policy_at_path(
   Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
 }
 
+pub fn set_connection_standing_delivery_at_path(
+  path: &Path,
+  client_id: &str,
+  enabled: bool,
+) -> Result<(), String> {
+  let client_id = client_id.trim();
+  if client_id.is_empty() {
+    return Err("clientId is required.".to_string());
+  }
+  let mut connection = open_vault_db_at_path(path)?;
+  let mut vault = load_vault_json_from_connection(&connection)?;
+  ensure_access_policy_for_client(&mut vault, client_id);
+  let now = now_iso();
+  {
+    let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+      return Err("Vault has no accessPolicies array.".to_string());
+    };
+    let Some(policy) = policies
+      .iter_mut()
+      .find(|policy| str_field(policy, "clientId") == client_id)
+    else {
+      return Err(format!("AccessPolicy was not found for client: {client_id}"));
+    };
+    policy["standingDeliveryEnabled"] = Value::Bool(enabled);
+    policy["updatedAt"] = Value::String(now);
+  }
+  save_vault_json_with_projection(&mut connection, &vault)?;
+  Ok(())
+}
+
 pub fn update_source_lifecycle_at_path(
   path: &Path,
   source_id: &str,
@@ -3403,8 +3445,12 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
         let Ok(source_sensitivity) = sensitivity_tier(&source_sensitivity) else {
           return false;
         };
+        // The fact's own sensitivity is already gated against the ceiling above; the
+        // source's cautious default sensitivity is only a pre-approval heuristic and
+        // must not override the user's explicit fact-level approval here — otherwise a
+        // pack containing any fact from a cautiously-classified source could never be
+        // approved for AI.
         source_sensitivity != "secret_never_send"
-          && sensitivity_rank(source_sensitivity) <= sensitivity_rank(&ceiling)
       });
       if !has_ai_eligible_source {
         return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
@@ -4482,6 +4528,7 @@ fn default_access_policy_for_client(client_id: &str, now: &str) -> Value {
     "sensitivityCeiling": default_policy_ceiling(client_id),
     "requiresApprovalAbove": "personal",
     "passiveCaptureAllowed": default_policy_passive_capture_allowed(client_id),
+    "standingDeliveryEnabled": true,
     "createdAt": now,
     "updatedAt": now
   })
@@ -6404,6 +6451,14 @@ fn is_expired(value: &str) -> bool {
   false
 }
 
+fn connection_standing_delivery_enabled(vault: &Value, client_id: &str) -> bool {
+  value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .and_then(|policy| policy.get("standingDeliveryEnabled").and_then(Value::as_bool))
+    .unwrap_or(false) // absent = legacy/strict; opt-in is explicit
+}
+
 fn policy_ceiling_for_client(vault: &Value, client_id: &str) -> String {
   let value = value_array(vault, "accessPolicies")
     .into_iter()
@@ -7511,6 +7566,28 @@ fn update_native_access_policy(
 }
 
 #[tauri::command]
+fn set_connection_standing_delivery(
+  app: AppHandle,
+  client_id: String,
+  enabled: bool,
+) -> Result<NativeVaultSettingsUpdateResult, String> {
+  let path = vault_db_path(&app)?;
+  set_connection_standing_delivery_at_path(&path, &client_id, enabled)?;
+  let connection = open_vault_db_at_path(&path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let payload = serde_json::to_string(&vault).map_err(|e| e.to_string())?;
+  let updated_at = vault
+    .get("updatedAt")
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+  Ok(NativeVaultSettingsUpdateResult {
+    payload,
+    updated_at,
+    generated_by: "native_vault_core".to_string(),
+  })
+}
+
+#[tauri::command]
 fn update_native_source_lifecycle(
   app: AppHandle,
   source_id: String,
@@ -7667,6 +7744,7 @@ pub fn run() {
       approve_native_candidate,
       update_native_candidate_status,
       update_native_access_policy,
+      set_connection_standing_delivery,
       update_native_source_lifecycle,
       update_native_source_metadata,
       update_native_source_body,
@@ -10720,6 +10798,69 @@ mod tests {
   }
 
   #[test]
+  fn confirmed_context_pack_delivers_fact_within_ceiling_despite_cautious_source_sensitivity() {
+    use_test_vault_key();
+    let path = temp_vault_path("pack-cautious-source-sensitivity");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Weekly routine",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    let approved = approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    approved.fact_id.expect("approved fact id");
+
+    // Reproduce the in-app "承認ができない" pack-approval bug: the approved fact's own
+    // sensitivity stays within the client ceiling, but its source carries a higher,
+    // cautious *default* sensitivity. Delivery must honor the fact, not the source.
+    {
+      let mut connection = open_vault_db_at_path(&path).expect("open vault");
+      let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+      for source in vault
+        .get_mut("sources")
+        .and_then(Value::as_array_mut)
+        .expect("sources")
+      {
+        source["defaultSensitivity"] = Value::String("sensitive".to_string());
+      }
+      for fact in vault
+        .get_mut("facts")
+        .and_then(Value::as_array_mut)
+        .expect("facts")
+      {
+        fact["sensitivity"] = Value::String("personal".to_string());
+      }
+      save_vault_json_with_projection(&mut connection, &vault).expect("save vault");
+    }
+
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("private_consequential"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status");
+    assert_eq!(status.status, "fulfilled");
+    assert!(status.context_pack.is_some());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
   fn native_context_pack_excludes_facts_above_policy_ceiling() {
     let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
     initialize_test_vault_connection(&connection);
@@ -11370,5 +11511,111 @@ mod tests {
       window_lifecycle_decision(WindowLifecycleEventKind::Other),
       WindowLifecycleDecision::Ignore
     );
+  }
+
+  #[test]
+  fn standing_delivery_flag_governs_mcp_auto_delivery() {
+    use_test_vault_key();
+    let path = temp_vault_path("standing-delivery-flag");
+    let source = add_source_with_candidates_at_path(
+      &path, "manual_note", "manual_entry",
+      "Passport reminder", "Passport expires on 2028-05-01.",
+    ).expect("source");
+    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+
+    // Connection opted into standing delivery, request approval mode = None (core decides).
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable");
+    let auto = create_context_pack_request_at_path(
+      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+    ).expect("auto pack");
+    assert_eq!(auto.confirmation_status, "not_required");
+    assert!(auto.context_pack.is_some(), "<=threshold must auto-deliver");
+
+    // Same connection with standing delivery OFF must pend.
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
+    let pend = create_context_pack_request_at_path(
+      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+    ).expect("pending pack");
+    assert_eq!(pend.confirmation_status, "pending_user_confirmation");
+    assert!(pend.context_pack.is_none(), "strict connection must not auto-deliver");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn new_policy_created_by_ensure_defaults_standing_delivery_on() {
+    use_test_vault_key();
+    let path = temp_vault_path("new-policy-standing-default");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // No policy exists yet for conn_chatgpt
+    ensure_access_policy_for_client(&mut vault, "conn_chatgpt");
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    assert!(
+      connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+      "brand-new policy must default standingDeliveryEnabled to true"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn legacy_policy_without_flag_stays_strict() {
+    use_test_vault_key();
+    let path = temp_vault_path("legacy-policy-strict");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // Simulate a legacy/upgraded vault: policy persisted WITHOUT standingDeliveryEnabled
+    push_json_array(&mut vault, "accessPolicies", json!({
+      "id": "policy_chatgpt",
+      "clientId": "conn_chatgpt",
+      "scopes": [],
+      "domainAllowlist": [],
+      "sensitivityCeiling": "private_consequential",
+      "requiresApprovalAbove": "personal",
+      "passiveCaptureAllowed": false,
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+      // standingDeliveryEnabled deliberately absent
+    }));
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    assert!(
+      !connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+      "legacy policy without flag must stay strict (no backfill)"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn fresh_default_vault_connections_have_standing_delivery_on() {
+    use_test_vault_key();
+    let path = temp_vault_path("fresh-vault-standing");
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = empty_vault_json();
+    // Simulate fresh install: ensure policies for the canonical connection IDs
+    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+      ensure_access_policy_for_client(&mut vault, client_id);
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection = open_vault_db_at_path(&path).expect("reopen vault");
+    let vault = load_vault_json_from_connection(&connection).expect("load vault");
+    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+      assert!(
+        connection_standing_delivery_enabled(&vault, client_id),
+        "fresh install connection {client_id} must have standingDeliveryEnabled=true"
+      );
+    }
+    remove_temp_vault(&path);
   }
 }
