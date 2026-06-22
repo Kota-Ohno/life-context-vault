@@ -174,16 +174,23 @@ const SIGNALS: Signal[] = [
     confidence: "high",
     reason: "matches email pattern",
   },
-  // personal: phone number with separators/parens structure (high — requires format, not bare digits)
+  // personal: phone number — tightened to phone-specific structures only to avoid matching
+  // dates (4-2-2 / 2-2-4), IP addresses (d.d.d.d), and version strings (n.n.n).
+  // Matches:
+  //   (a) international prefix  +\d{1,3} followed by 7-14 digits with separators, OR
+  //   (b) parenthesized area code  \(\d{3}\) followed by \d{3}[-.\s]?\d{4}, OR
+  //   (c) North-American 3-3-4  \b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b
   {
-    test: /(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{2,4}[\s.-]\d{2,4}(?!\d)/,
+    test: /(?:\+\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4,}|\(\d{3}\)[\s.-]?\d{3}[\s.-]?\d{4}|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)/,
     tier: "personal",
     confidence: "high",
     reason: "matches formatted phone number",
   },
-  // personal: postal address — house number + street-suffix word (high — structured)
+  // personal: postal address — house number + Capitalized street name + Capitalized suffix word.
+  // The suffix must be Capitalized (Street/Ave/Road/etc.) to avoid matching prose like
+  // "exit 23 way out", "2 court decisions", "Section 12 Road safety guide".
   {
-    test: /\b\d{1,5}\s+(?:[A-Za-z]+\s+){0,3}(?:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr|way|court|ct)\b/i,
+    test: /\b\d{1,5}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct)\b/,
     tier: "personal",
     confidence: "high",
     reason: "matches postal address pattern",

@@ -46,9 +46,38 @@ describe("structured entity detectors", () => {
     expect(r.tier).toBe("personal");
     expect(r.confidence).toBe("high");
   });
+  it("phone: 3-3-4 NA format ⇒ personal/high", () => {
+    const r = classifySensitivity("call me at 415-555-0132 anytime");
+    expect(r.tier).toBe("personal");
+    expect(r.confidence).toBe("high");
+  });
   it("phone FP: bare 8-digit sales figure ⇒ NOT phone (tier != personal via high)", () => {
     const r = classifySensitivity("in 2024 we sold 12345678 units");
     // must not be classified as personal/high via phone detector
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: ISO date 2024-01-01 ⇒ NOT phone", () => {
+    const r = classifySensitivity("deadline is 2024-01-01");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: dot-separated date 2024.01.01 ⇒ NOT phone", () => {
+    const r = classifySensitivity("report dated 2024.01.01");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: reversed date 01-01-2024 ⇒ NOT phone", () => {
+    const r = classifySensitivity("signed 01-01-2024");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: version string 12.34.56 ⇒ NOT phone", () => {
+    const r = classifySensitivity("version 12.34.56 released");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: IP address 10.20.30.40 ⇒ NOT phone", () => {
+    const r = classifySensitivity("server at 10.20.30.40");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("phone FP: error code 404.123.789 ⇒ NOT phone", () => {
+    const r = classifySensitivity("error code 404.123.789 occurred");
     expect(r.confidence === "high" && r.tier === "personal").toBe(false);
   });
 
@@ -103,6 +132,51 @@ describe("structured entity detectors", () => {
   it("address FP: chapter heading ⇒ NOT address", () => {
     const r = classifySensitivity("Chapter 123 main idea");
     expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: 'exit 23 way out' ⇒ NOT address", () => {
+    const r = classifySensitivity("take exit 23 way out of the city");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: '2 court decisions' ⇒ NOT address", () => {
+    const r = classifySensitivity("there were 2 court decisions last week");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: '5 lane highway' ⇒ NOT address", () => {
+    const r = classifySensitivity("it is a 5 lane highway");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: 'Section 12 Road safety guide' ⇒ NOT address", () => {
+    const r = classifySensitivity("Section 12 Road safety guide");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: 'page 5 of the road map' ⇒ NOT address", () => {
+    const r = classifySensitivity("see page 5 of the road map");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: 'Floor 3 Court Room B' ⇒ NOT address", () => {
+    const r = classifySensitivity("Floor 3 Court Room B");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+  it("address FP: '1 drive to school' ⇒ NOT address", () => {
+    const r = classifySensitivity("it is just 1 drive to school");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+
+  // ── Japanese postal code (〒) ──
+  it("〒: Japanese postal code ⇒ personal/high", () => {
+    const r = classifySensitivity("住所：〒150-0001 渋谷区");
+    expect(r.tier).toBe("personal");
+    expect(r.confidence).toBe("high");
+  });
+  it("〒 FP: 〒 symbol without valid number ⇒ NOT personal/high via postal detector", () => {
+    const r = classifySensitivity("〒マークについて調べる");
+    expect(r.confidence === "high" && r.tier === "personal").toBe(false);
+  });
+
+  // ── マイナンバー ──
+  it("マイナンバー FP: keyword alone without number ⇒ NOT secret/high", () => {
+    const r = classifySensitivity("マイナンバー制度の概要");
+    expect(r.confidence === "high" && r.tier === "secret_never_send").toBe(false);
   });
 });
 
