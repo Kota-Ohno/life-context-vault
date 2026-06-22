@@ -32,10 +32,40 @@ export function sensitivityRank(t: SensitivityTier): number {
 }
 
 interface Signal {
-  test: RegExp;
+  test: RegExp | ((s: string) => boolean);
   tier: SensitivityTier;
   confidence: SensitivityConfidence;
   reason: string;
+}
+
+/**
+ * Luhn algorithm check for credit card numbers.
+ * Accepts a string of digits only (no separators).
+ */
+export function luhnValid(digits: string): boolean {
+  let sum = 0;
+  let alternate = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let n = parseInt(digits[i], 10);
+    if (alternate) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+    sum += n;
+    alternate = !alternate;
+  }
+  return sum % 10 === 0;
+}
+
+/** Extract candidate card digits from text: 13–19 digit groups separated by spaces or hyphens. */
+function containsLuhnCard(text: string): boolean {
+  // Match 13-19 digit sequences optionally separated by spaces/hyphens
+  const candidates = text.match(/\b\d{4}(?:[ -]\d{4}){2,4}\b|\b\d{13,19}\b/g);
+  if (!candidates) return false;
+  return candidates.some((raw) => {
+    const digits = raw.replace(/[ -]/g, "");
+    return digits.length >= 13 && digits.length <= 19 && luhnValid(digits);
+  });
 }
 
 // Signals ordered secret-first.
@@ -63,6 +93,34 @@ const SIGNALS: Signal[] = [
     tier: "secret_never_send",
     confidence: "low",
     reason: "matches Japanese identity/account keyword",
+  },
+  // secret_never_send: マイナンバー 12-digit number near keyword (high — structured)
+  {
+    test: /マイナンバー[^\d]{0,10}\d{4}[ -]?\d{4}[ -]?\d{4}/,
+    tier: "secret_never_send",
+    confidence: "high",
+    reason: "matches マイナンバー keyword with 12-digit number",
+  },
+  // secret_never_send: US SSN (high — structured NNN-NN-NNNN)
+  {
+    test: /\b\d{3}-\d{2}-\d{4}\b(?!-)/,
+    tier: "secret_never_send",
+    confidence: "high",
+    reason: "matches US SSN pattern (NNN-NN-NNNN)",
+  },
+  // secret_never_send: credit card via Luhn check (high — structured + algorithm)
+  {
+    test: containsLuhnCard,
+    tier: "secret_never_send",
+    confidence: "high",
+    reason: "matches Luhn-valid card number",
+  },
+  // secret_never_send: IBAN (high — structured country-code + check digits)
+  {
+    test: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{1,3}\b/,
+    tier: "secret_never_send",
+    confidence: "high",
+    reason: "matches IBAN pattern",
   },
   // secret_never_send: bare credential keywords (low — keyword only, no value context)
   {
@@ -116,6 +174,27 @@ const SIGNALS: Signal[] = [
     confidence: "high",
     reason: "matches email pattern",
   },
+  // personal: phone number with separators/parens structure (high — requires format, not bare digits)
+  {
+    test: /(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]\d{2,4}[\s.-]\d{2,4}(?!\d)/,
+    tier: "personal",
+    confidence: "high",
+    reason: "matches formatted phone number",
+  },
+  // personal: postal address — house number + street-suffix word (high — structured)
+  {
+    test: /\b\d{1,5}\s+(?:[A-Za-z]+\s+){0,3}(?:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr|way|court|ct)\b/i,
+    tier: "personal",
+    confidence: "high",
+    reason: "matches postal address pattern",
+  },
+  // personal: Japanese postal code (high — structured 〒NNN-NNNN)
+  {
+    test: /〒\d{3}-\d{4}/,
+    tier: "personal",
+    confidence: "high",
+    reason: "matches Japanese postal code",
+  },
   // personal: bare contact/family keywords (low)
   {
     test: /\b(name|address|phone|email|family)\b/i,
@@ -155,7 +234,9 @@ export function zeroTouchEligible(
 }
 
 export function classifySensitivity(text: string): SensitivityResult {
-  const matched = SIGNALS.filter((s) => s.test.test(text));
+  const matched = SIGNALS.filter((s) =>
+    typeof s.test === "function" ? s.test(text) : s.test.test(text)
+  );
   if (matched.length === 0) {
     return { tier: "public", confidence: "low", classified: false, reasons: [] };
   }
