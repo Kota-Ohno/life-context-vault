@@ -415,6 +415,7 @@ fn open_vault_db_at_path(path: &Path) -> Result<Connection, String> {
   ensure_vault_state_updated_at_column(&connection)?;
   initialize_vault_schema(&connection)?;
   sync_normalized_tables_if_stale(&mut connection)?;
+  migrate_classification_if_needed(&mut connection)?;
   Ok(connection)
 }
 
@@ -1318,8 +1319,9 @@ fn create_native_context_pack_request_in_connection(
     .unwrap_or("public")
     .to_string();
   let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
+  let bar = policy_zero_touch_confidence_bar_for_client(vault, client_id);
   let requires_confirmation = approval_mode == "always_review"
-    || sensitivity_rank(&max_sensitivity_included) > sensitivity_rank(&requires_approval_above);
+    || !items.iter().all(|it| zero_touch_eligible(it, &requires_approval_above, &bar));
   let confirmation_status = if requires_confirmation {
     "pending_user_confirmation"
   } else {
@@ -2965,13 +2967,24 @@ pub fn update_fact_metadata_at_path(
     else {
       return Err(format!("ApprovedFact was not found: {fact_id}"));
     };
-    fact["factText"] = Value::String(fact_text);
+    let old_fact_text = str_field(fact, "factText");
+    let old_sensitivity = str_field(fact, "sensitivity");
+    fact["factText"] = Value::String(fact_text.clone());
     fact["domain"] = Value::String(domain.to_string());
     fact["sensitivity"] = Value::String(sensitivity.to_string());
     fact["updatedAt"] = Value::String(now);
     set_optional_fact_string(fact, "validFrom", valid_from);
     set_optional_fact_string(fact, "validUntil", valid_until);
     set_optional_fact_string(fact, "dueDate", due_date);
+    // Task 7: re-run classifier when factText changes; clear classification on manual
+    // sensitivity override so the gate knows the item has not been auto-classified.
+    if fact_text != old_fact_text {
+      let classification = classify_sensitivity(&fact_text);
+      fact["sensitivityClassified"] = Value::Bool(classification.classified);
+      fact["sensitivityConfidence"] = Value::String(classification.confidence.to_string());
+    } else if sensitivity != old_sensitivity {
+      fact["sensitivityClassified"] = Value::Bool(false);
+    }
   }
   let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
     &mut vault,
@@ -3071,6 +3084,9 @@ pub fn approve_candidate_with_options_at_path(
     .as_array()
     .map(|ids| !ids.is_empty())
     .unwrap_or(false);
+  // Task 7: classify the fact text at approval time so the zero-touch gate
+  // can evaluate it immediately, before any migration pass would have run.
+  let classification = classify_sensitivity(&fact_text);
   let mut fact = json!({
     "id": fact_id.clone(),
     "factText": fact_text,
@@ -3083,7 +3099,9 @@ pub fn approve_candidate_with_options_at_path(
     "createdAt": now.clone(),
     "approvedAt": now.clone(),
     "updatedAt": now.clone(),
-    "supersedesFactIds": superseded_fact_ids.clone()
+    "supersedesFactIds": superseded_fact_ids.clone(),
+    "sensitivityClassified": classification.classified,
+    "sensitivityConfidence": classification.confidence.to_string()
   });
   copy_optional_candidate_field(&candidate, &mut fact, "validFrom");
   copy_optional_candidate_field(&candidate, &mut fact, "validUntil");
@@ -3491,6 +3509,20 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
       });
       if !has_ai_eligible_source {
         return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
+      }
+    }
+    // Task 7: if the pack was delivered without user confirmation (zero-touch), every item
+    // must still be eligible at retrieval time.  An item that became unclassified or dropped
+    // below the confidence bar after pack creation must cause re-validation to fail.
+    // Packs that went through user confirmation ("confirmed") are exempt — a human reviewed them.
+    let pack_confirmation_status = str_field(pack, "confirmationStatus");
+    if pack_confirmation_status == "not_required" {
+      let bar = policy_zero_touch_confidence_bar_for_client(vault, &client_id);
+      let requires_approval_above = policy_requires_approval_above_for_client(vault, &client_id);
+      if !zero_touch_eligible(&item, &requires_approval_above, &bar) {
+        return Err(
+          "ContextPack item is no longer eligible for zero-touch delivery.".to_string(),
+        );
       }
     }
   }
@@ -8189,6 +8221,86 @@ pub fn run() {
     .expect("error while running tauri application");
 }
 
+// ── Task 7: Zero-touch gate helpers ──────────────────────────────────────────
+
+/// Returns true when a pack item is eligible for zero-touch delivery:
+/// - it has been classified (`sensitivityClassified = true`)
+/// - its confidence meets or exceeds `bar`
+/// - its sensitivity tier is at or below `threshold`
+fn zero_touch_eligible(item: &Value, threshold: &str, bar: &str) -> bool {
+  let classified = item
+    .get("sensitivityClassified")
+    .and_then(Value::as_bool)
+    .unwrap_or(false);
+  let conf = item
+    .get("sensitivityConfidence")
+    .and_then(Value::as_str)
+    .unwrap_or("low");
+  let tier = item
+    .get("sensitivity")
+    .and_then(Value::as_str)
+    .unwrap_or("secret_never_send");
+  classified
+    && confidence_rank(conf) >= confidence_rank(bar)
+    && sensitivity_rank(tier) <= sensitivity_rank(threshold)
+}
+
+/// Returns the `zeroTouchConfidenceBar` for a given client's access policy,
+/// defaulting to `"medium"` when absent or unrecognised.
+fn policy_zero_touch_confidence_bar_for_client(vault: &Value, client_id: &str) -> String {
+  let value = value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .map(|policy| str_field(policy, "zeroTouchConfidenceBar"))
+    .unwrap_or_default();
+  let trimmed = value.trim();
+  match trimmed {
+    "low" | "medium" | "high" => trimmed.to_string(),
+    _ => "medium".to_string(),
+  }
+}
+
+// ── Task 7: Durable classifier migration ─────────────────────────────────────
+
+const CLASSIFIER_MIGRATION_VERSION: u32 = 1;
+
+/// On first vault open after the classifier is deployed, back-fills
+/// `sensitivityClassified` and `sensitivityConfidence` on any Fact that was
+/// approved before the classifier existed.  Sets `classifierMigrationVersion`
+/// in the vault JSON so subsequent opens are no-ops.
+fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), String> {
+  let mut vault = load_vault_json_from_connection(connection)?;
+  let current_version = vault
+    .get("classifierMigrationVersion")
+    .and_then(Value::as_u64)
+    .unwrap_or(0) as u32;
+  if current_version >= CLASSIFIER_MIGRATION_VERSION {
+    return Ok(());
+  }
+  // Back-fill classification fields on unclassified facts.
+  if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+    for fact in facts.iter_mut() {
+      let fact_text = str_field(fact, "factText");
+      if fact_text.is_empty() {
+        continue;
+      }
+      let already_classified = fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+      if !already_classified {
+        let result = classify_sensitivity(&fact_text);
+        fact["sensitivityClassified"] = Value::Bool(result.classified);
+        fact["sensitivityConfidence"] = Value::String(result.confidence.to_string());
+        // Preserve the user-reviewed sensitivity tier — only fill classification metadata.
+      }
+    }
+  }
+  vault["classifierMigrationVersion"] = json!(CLASSIFIER_MIGRATION_VERSION);
+  save_vault_json_with_projection(connection, &vault)?;
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -11904,21 +12016,24 @@ mod tests {
   fn standing_delivery_flag_governs_mcp_auto_delivery() {
     use_test_vault_key();
     let path = temp_vault_path("standing-delivery-flag");
+    // Use an email address so the classifier marks the fact as classified=true,
+    // confidence="high" — required for zero-touch delivery under Task 7's new gate.
     let source = add_source_with_candidates_at_path(
       &path, "manual_note", "manual_entry",
-      "Passport reminder", "Passport expires on 2028-05-01.",
+      "Contact reminder", "Contact alice@example.com for schedule details.",
     ).expect("source");
     approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
       .expect("approve candidate");
 
     // Connection opted into standing delivery, request approval mode = None (core decides).
+    // Item is classified=true, confidence="high" → zero-touch eligible → not_required.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable");
     let auto = create_context_pack_request_at_path(
-      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
-      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+      &path, "conn_chatgpt", "ChatGPT", "How do I contact alice about the schedule?",
+      Some("普段使うAIへの回答文脈"), Some("personal"), None,
     ).expect("auto pack");
     assert_eq!(auto.confirmation_status, "not_required");
-    assert!(auto.context_pack.is_some(), "<=threshold must auto-deliver");
+    assert!(auto.context_pack.is_some(), "classified item with standing delivery must auto-deliver");
 
     // Same connection with standing delivery OFF must pend.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
@@ -12457,5 +12572,384 @@ mod tests {
       result.sensitivity_confidence, "low",
       "NULL sensitivity_confidence must map to 'low' (fail-closed)"
     );
+  }
+
+  // ── Task 7: Gate + retrieval + migration + edit-reclassify ───────────────
+
+  #[test]
+  fn gate_unclassified_item_requires_confirmation() {
+    // When all items are unclassified (sensitivityClassified=false),
+    // requires_confirmation should be true even with explicit_sensitive mode.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-unclassified");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Plain note",
+      "I enjoy hiking on weekends.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result.candidate_ids.first().cloned().expect("cand");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve");
+
+    // Manually clear sensitivityClassified to simulate a legacy fact.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
+        fact["sensitivityConfidence"] = Value::String("low".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What are my hobbies?",
+      None,
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "unclassified items must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_always_review_still_requires_confirmation_even_if_all_eligible() {
+    // always_review overrides all eligibility: still requires confirmation.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-always-review");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact me at alice@example.com for more details.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result.candidate_ids.first().cloned().expect("cand");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve");
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How should I contact Alice?",
+      None,
+      Some("personal"),
+      Some("always_review"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "always_review must always require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_mixed_pack_one_unclassified_requires_confirmation() {
+    // A pack where one item is unclassified → requires confirmation.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-mixed");
+    let r1 = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact me at bob@example.com",
+    )
+    .expect("src1");
+    approve_candidate_at_path(&path, r1.candidate_ids.first().expect("c1"), None).expect("a1");
+
+    let r2 = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Generic note",
+      "I enjoy cooking pasta.",
+    )
+    .expect("src2");
+    approve_candidate_at_path(&path, r2.candidate_ids.first().expect("c2"), None).expect("a2");
+
+    // Clear classification on the second (last) fact only.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      if let Some(fact) = facts.last_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Tell me about Bob and cooking.",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "mixed pack with one unclassified item must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_per_client_bar_high_forces_high_confidence() {
+    // When zeroTouchConfidenceBar = "high" on a connection's policy,
+    // an item that is classified=true but with confidence="low" is not eligible.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-bar-high");
+    // Use an email so the fact is classified=true, confidence="high" by the
+    // classifier — but we then manually lower the confidence to "low" to simulate
+    // a fact that was classified below the bar.
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact note",
+      "Contact bob@example.com about the project.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    // Lower the sensitivity confidence to "low" and set bar="high" in the policy.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        // Keep classified=true but drop confidence so it falls below bar=high.
+        fact["sensitivityClassified"] = Value::Bool(true);
+        fact["sensitivityConfidence"] = Value::String("low".to_string());
+      }
+    }
+    if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+      for policy in policies.iter_mut() {
+        if str_field(policy, "clientId") == "conn_chatgpt" {
+          policy["zeroTouchConfidenceBar"] = Value::String("high".to_string());
+        }
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact bob about the project?",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    // With bar=high but item confidence=low, the item is below bar → must require confirmation.
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "per-client bar=high: item with low confidence must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn retrieval_revalidation_rejects_pack_when_item_becomes_unclassified() {
+    // After a pack is built, if a pack item's classification is cleared,
+    // ensure_context_pack_allowed_by_current_policy must reject it.
+    use_test_vault_key();
+    let path = temp_vault_path("retrieval-revalidate");
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact alice@example.com for details.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact Alice?",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    let pack_id = pack_result.pack_id;
+
+    // Simulate classification clearing on the pack item and mark pack as not_required.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) {
+      for pack in packs.iter_mut() {
+        if str_field(pack, "id") == pack_id {
+          if let Some(items) = pack.get_mut("items").and_then(Value::as_array_mut) {
+            for item in items.iter_mut() {
+              item["sensitivityClassified"] = Value::Bool(false);
+            }
+          }
+          pack["confirmationStatus"] = Value::String("not_required".to_string());
+        }
+      }
+    }
+    if let Some(requests) =
+      vault.get_mut("contextPackRequests").and_then(Value::as_array_mut)
+    {
+      for request in requests.iter_mut() {
+        request["status"] = Value::String("fulfilled".to_string());
+        request["approvalMode"] = Value::String("explicit_sensitive".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open for retrieval");
+    let vault = load_vault_json_from_connection(&connection).expect("load for retrieval");
+    let pack =
+      find_vault_item_by_id(&vault, "contextPacks", &pack_id).expect("pack exists");
+    let validation_result = ensure_context_pack_allowed_by_current_policy(&vault, &pack);
+    assert!(
+      validation_result.is_err(),
+      "retrieval re-validation must reject pack with unclassified items"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn migration_durability_second_open_is_no_op() {
+    // After first open, classifierMigrationVersion must be 1 in vault_state.
+    // Second open must not re-write (updated_at unchanged).
+    use_test_vault_key();
+    let path = temp_vault_path("migration-durability");
+    {
+      let _connection = open_vault_db_at_path(&path).expect("first open");
+    }
+    let version: u64 = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open");
+      let vault = load_vault_json_from_connection(&connection).expect("load vault");
+      vault
+        .get("classifierMigrationVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+    };
+    assert_eq!(version, 1, "classifierMigrationVersion must be 1 after first open");
+
+    let first_updated_at: String = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open2");
+      connection
+        .query_row(
+          "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
+          [],
+          |row| row.get(0),
+        )
+        .expect("get updated_at")
+    };
+    {
+      let _connection = open_vault_db_at_path(&path).expect("second open");
+    }
+    let second_updated_at: String = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open3");
+      connection
+        .query_row(
+          "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
+          [],
+          |row| row.get(0),
+        )
+        .expect("get updated_at2")
+    };
+    assert_eq!(
+      first_updated_at, second_updated_at,
+      "second open must not churn updated_at (migration was already applied)"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn edit_fact_reclassifies_when_text_changes() {
+    // Editing a fact's text must re-run classify_sensitivity and update fields.
+    use_test_vault_key();
+    let path = temp_vault_path("edit-reclassify");
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Generic note",
+      "I enjoy hiking on weekends.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let vault = load_vault_json_from_connection(&connection).expect("load");
+    let fact_id = vault
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .map(|fact| str_field(fact, "id"))
+      .expect("fact id");
+    drop(connection);
+
+    // Edit the fact text to include an email address (triggers high-confidence classification).
+    let result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Contact alice@example.com for hiking group details.",
+      "relationships_and_household",
+      "personal",
+      None,
+      None,
+      None,
+    )
+    .expect("edit fact");
+
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|f| str_field(f, "id") == fact_id))
+      .expect("fact in vault");
+
+    assert!(
+      fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false),
+      "editing fact text with email should re-classify as classified=true"
+    );
+    assert_eq!(
+      fact.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("high"),
+      "email pattern should produce high confidence"
+    );
+    remove_temp_vault(&path);
   }
 }
