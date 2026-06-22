@@ -1,13 +1,13 @@
+use life_context_vault_lib::{
+  create_context_pack_request_at_path, get_context_request_status_for_client_at_path,
+  propose_memory_at_path,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
   env,
   io::{self, BufRead, Write},
   path::{Path, PathBuf},
-};
-use life_context_vault_lib::{
-  create_context_pack_request_at_path, get_context_request_status_for_client_at_path,
-  propose_memory_at_path,
 };
 
 #[path = "../vault_crypto.rs"]
@@ -51,7 +51,10 @@ fn main() {
 
 fn handle_message(message: &Value) -> Option<Value> {
   let id = message.get("id").cloned();
-  let method = message.get("method").and_then(Value::as_str).unwrap_or_default();
+  let method = message
+    .get("method")
+    .and_then(Value::as_str)
+    .unwrap_or_default();
 
   if id.is_none() {
     return None;
@@ -75,8 +78,14 @@ fn handle_message(message: &Value) -> Option<Value> {
     "tools/list" => Ok(json!({ "tools": tools() })),
     "tools/call" => {
       let params = message.get("params").unwrap_or(&Value::Null);
-      let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-      let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+      let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+      let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
       call_tool(name, &arguments)
     }
     _ => Err((-32601, format!("Method not found: {method}"))),
@@ -382,9 +391,11 @@ fn load_vault() -> Result<Value, String> {
     )
     .optional()
     .map_err(|error| format!("failed to load vault state: {error}"))?;
-  Ok(payload
-    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-    .unwrap_or_else(empty_vault))
+  Ok(
+    payload
+      .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+      .unwrap_or_else(empty_vault),
+  )
 }
 
 fn ensure_vault_state_table(connection: &Connection) -> Result<(), String> {
@@ -435,19 +446,23 @@ fn vault_db_path() -> Result<PathBuf, String> {
   #[cfg(target_os = "macos")]
   {
     let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    return Ok(PathBuf::from(home)
-      .join("Library")
-      .join("Application Support")
-      .join("dev.life-context-vault.poc")
-      .join("vault.sqlite3"));
+    return Ok(
+      PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("dev.life-context-vault.poc")
+        .join("vault.sqlite3"),
+    );
   }
 
   #[cfg(target_os = "windows")]
   {
     let appdata = env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
-    return Ok(PathBuf::from(appdata)
-      .join("dev.life-context-vault.poc")
-      .join("vault.sqlite3"));
+    return Ok(
+      PathBuf::from(appdata)
+        .join("dev.life-context-vault.poc")
+        .join("vault.sqlite3"),
+    );
   }
 
   #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -456,7 +471,11 @@ fn vault_db_path() -> Result<PathBuf, String> {
       .map(PathBuf::from)
       .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".local").join("share")))
       .map_err(|_| "Neither XDG_DATA_HOME nor HOME is set".to_string())?;
-    Ok(base.join("dev.life-context-vault.poc").join("vault.sqlite3"))
+    Ok(
+      base
+        .join("dev.life-context-vault.poc")
+        .join("vault.sqlite3"),
+    )
   }
 }
 
@@ -489,7 +508,10 @@ fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, (i64, String
 }
 
 fn optional_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-  value.get(key).and_then(Value::as_str).filter(|text| !text.trim().is_empty())
+  value
+    .get(key)
+    .and_then(Value::as_str)
+    .filter(|text| !text.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -528,7 +550,8 @@ mod tests {
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent).expect("test vault directory");
     }
-    let connection = vault_crypto::open_encrypted_vault_connection(path).expect("encrypted test vault");
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(path).expect("encrypted test vault");
     ensure_vault_state_table(&connection).expect("vault_state table");
     connection
       .execute(
@@ -588,7 +611,10 @@ mod tests {
     )
     .expect("request context pack");
 
-    assert_eq!(result.get("status").and_then(Value::as_str), Some("pending_user_confirmation"));
+    assert_eq!(
+      result.get("status").and_then(Value::as_str),
+      Some("pending_user_confirmation")
+    );
     assert!(result.get("contextPack").is_none());
     let saved = read_test_vault(&path);
     assert_eq!(array(&saved, "contextPackRequests").len(), 1);
@@ -663,13 +689,11 @@ mod tests {
       snippets[0].get("text").and_then(Value::as_str),
       Some("Tone preference is concise and calm.")
     );
-    assert!(
-      !snippets[0]
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .contains("RAW_SOURCE_BODY")
-    );
+    assert!(!snippets[0]
+      .get("text")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .contains("RAW_SOURCE_BODY"));
     let _ = std::fs::remove_file(path);
   }
 
@@ -688,12 +712,17 @@ mod tests {
     )
     .expect("propose memory");
 
-    assert_eq!(result.get("status").and_then(Value::as_str), Some("candidate_created"));
+    assert_eq!(
+      result.get("status").and_then(Value::as_str),
+      Some("candidate_created")
+    );
     let saved = read_test_vault(&path);
     assert_eq!(array(&saved, "candidates").len(), 1);
     assert_eq!(array(&saved, "facts").len(), 0);
     assert_eq!(
-      array(&saved, "candidates")[0].get("status").and_then(Value::as_str),
+      array(&saved, "candidates")[0]
+        .get("status")
+        .and_then(Value::as_str),
       Some("new")
     );
     let _ = std::fs::remove_file(path);
@@ -752,7 +781,10 @@ mod tests {
     )
     .expect("request status");
 
-    assert_eq!(result.get("status").and_then(Value::as_str), Some("fulfilled"));
+    assert_eq!(
+      result.get("status").and_then(Value::as_str),
+      Some("fulfilled")
+    );
     let pack = result.get("contextPack").expect("context pack");
     assert_eq!(
       pack.get("trustBoundary").and_then(Value::as_str),
@@ -814,7 +846,10 @@ mod tests {
     )
     .expect("request status");
 
-    assert_eq!(result.get("status").and_then(Value::as_str), Some("not_found"));
+    assert_eq!(
+      result.get("status").and_then(Value::as_str),
+      Some("not_found")
+    );
     assert!(result.get("contextPack").is_none());
     let _ = std::fs::remove_file(path);
   }

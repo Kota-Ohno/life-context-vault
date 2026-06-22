@@ -66,11 +66,14 @@ pub fn export_encrypted_backup(payload: &str, passphrase: &str) -> Result<String
   validate_backup_passphrase(passphrase)?;
   let mut salt = [0u8; BACKUP_SALT_LEN];
   let mut iv = [0u8; BACKUP_IV_LEN];
-  getrandom::getrandom(&mut salt).map_err(|error| format!("failed to generate backup salt: {error}"))?;
-  getrandom::getrandom(&mut iv).map_err(|error| format!("failed to generate backup iv: {error}"))?;
+  getrandom::getrandom(&mut salt)
+    .map_err(|error| format!("failed to generate backup salt: {error}"))?;
+  getrandom::getrandom(&mut iv)
+    .map_err(|error| format!("failed to generate backup iv: {error}"))?;
 
   let key = derive_backup_key(passphrase, &salt, BACKUP_KDF_ITERATIONS)?;
-  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
   let ciphertext = cipher
     .encrypt(Nonce::from_slice(&iv), payload.as_bytes())
     .map_err(|error| format!("failed to encrypt backup: {error}"))?;
@@ -83,7 +86,8 @@ pub fn export_encrypted_backup(payload: &str, passphrase: &str) -> Result<String
     iv: STANDARD.encode(iv),
     cipher_text: STANDARD.encode(&ciphertext),
   };
-  serde_json::to_string_pretty(&envelope).map_err(|error| format!("failed to encode backup envelope: {error}"))
+  serde_json::to_string_pretty(&envelope)
+    .map_err(|error| format!("failed to encode backup envelope: {error}"))
 }
 
 /// Decrypt an envelope produced by `export_encrypted_backup` back into the
@@ -109,7 +113,8 @@ pub fn import_encrypted_backup(backup_text: &str, passphrase: &str) -> Result<St
   let ciphertext = decode_required_field(&value, "cipherText")?;
 
   let key = derive_backup_key(passphrase, &salt, iterations)?;
-  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
   let plaintext = cipher
     .decrypt(Nonce::from_slice(&iv), ciphertext.as_slice())
     .map_err(|_| "backup passphrase is incorrect or the backup is corrupted".to_string())?;
@@ -135,8 +140,10 @@ const LOCAL_BACKUP_KDF_NAME: &str = "VAULT_KEY_SHA256";
 pub fn export_local_backup(payload: &str, vault_key_hex: &str) -> Result<String, String> {
   let key = derive_local_backup_key(vault_key_hex);
   let mut iv = [0u8; BACKUP_IV_LEN];
-  getrandom::getrandom(&mut iv).map_err(|error| format!("failed to generate local backup iv: {error}"))?;
-  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  getrandom::getrandom(&mut iv)
+    .map_err(|error| format!("failed to generate local backup iv: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
   let ciphertext = cipher
     .encrypt(Nonce::from_slice(&iv), payload.as_bytes())
     .map_err(|error| format!("failed to encrypt local backup: {error}"))?;
@@ -146,7 +153,8 @@ pub fn export_local_backup(payload: &str, vault_key_hex: &str) -> Result<String,
     iv: STANDARD.encode(iv),
     cipher_text: STANDARD.encode(&ciphertext),
   };
-  serde_json::to_string_pretty(&envelope).map_err(|error| format!("failed to encode local backup envelope: {error}"))
+  serde_json::to_string_pretty(&envelope)
+    .map_err(|error| format!("failed to encode local backup envelope: {error}"))
 }
 
 pub fn import_local_backup(backup_text: &str, vault_key_hex: &str) -> Result<String, String> {
@@ -159,7 +167,10 @@ pub fn import_local_backup(backup_text: &str, vault_key_hex: &str) -> Result<Str
   if version != BACKUP_ENVELOPE_VERSION {
     return Err(format!("unsupported local backup version: {version}"));
   }
-  let kdf = value.get("kdf").and_then(serde_json::Value::as_str).unwrap_or("");
+  let kdf = value
+    .get("kdf")
+    .and_then(serde_json::Value::as_str)
+    .unwrap_or("");
   if kdf != LOCAL_BACKUP_KDF_NAME {
     return Err(format!("unsupported local backup kdf: {kdf}"));
   }
@@ -171,12 +182,15 @@ pub fn import_local_backup(backup_text: &str, vault_key_hex: &str) -> Result<Str
     .get("cipherText")
     .and_then(serde_json::Value::as_str)
     .ok_or_else(|| "local backup is missing cipherText".to_string())?;
-  let iv = STANDARD.decode(iv_encoded).map_err(|error| format!("failed to decode iv: {error}"))?;
+  let iv = STANDARD
+    .decode(iv_encoded)
+    .map_err(|error| format!("failed to decode iv: {error}"))?;
   let ciphertext = STANDARD
     .decode(ciphertext_encoded)
     .map_err(|error| format!("failed to decode cipherText: {error}"))?;
   let key = derive_local_backup_key(vault_key_hex);
-  let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&key).map_err(|error| format!("failed to build cipher: {error}"))?;
   let plaintext = cipher
     .decrypt(Nonce::from_slice(&iv), ciphertext.as_slice())
     .map_err(|_| "local backup vault key is incorrect or the backup is corrupted".to_string())?;
@@ -193,7 +207,11 @@ fn derive_local_backup_key(vault_key_hex: &str) -> [u8; BACKUP_KEY_LEN] {
   hasher.finalize().into()
 }
 
-fn derive_backup_key(passphrase: &str, salt: &[u8], iterations: u32) -> Result<[u8; BACKUP_KEY_LEN], String> {
+fn derive_backup_key(
+  passphrase: &str,
+  salt: &[u8],
+  iterations: u32,
+) -> Result<[u8; BACKUP_KEY_LEN], String> {
   let mut key = [0u8; BACKUP_KEY_LEN];
   pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, iterations, &mut key);
   Ok(key)
@@ -204,7 +222,9 @@ fn decode_required_field(value: &serde_json::Value, key: &str) -> Result<Vec<u8>
     .get(key)
     .and_then(serde_json::Value::as_str)
     .ok_or_else(|| format!("backup is missing {key}"))?;
-  STANDARD.decode(encoded).map_err(|error| format!("failed to decode backup {key}: {error}"))
+  STANDARD
+    .decode(encoded)
+    .map_err(|error| format!("failed to decode backup {key}: {error}"))
 }
 
 #[cfg(test)]
@@ -232,20 +252,24 @@ mod tests {
   #[test]
   fn backup_round_trips_canonical_payload() {
     let payload = r#"{"version":2,"sources":[],"facts":[]}"#;
-    let envelope = export_encrypted_backup(payload, STRONG_PASSPHRASE).expect("export should succeed");
-    let restored = import_encrypted_backup(&envelope, STRONG_PASSPHRASE).expect("import should succeed");
+    let envelope =
+      export_encrypted_backup(payload, STRONG_PASSPHRASE).expect("export should succeed");
+    let restored =
+      import_encrypted_backup(&envelope, STRONG_PASSPHRASE).expect("import should succeed");
     assert_eq!(restored, payload);
   }
 
   #[test]
   fn backup_rejects_wrong_passphrase_on_import() {
-    let envelope = export_encrypted_backup("payload", STRONG_PASSPHRASE).expect("export should succeed");
+    let envelope =
+      export_encrypted_backup("payload", STRONG_PASSPHRASE).expect("export should succeed");
     assert!(import_encrypted_backup(&envelope, "Wrong-Pass-99?").is_err());
   }
 
   #[test]
   fn backup_envelope_has_versioned_pbkdf2_shape() {
-    let envelope = export_encrypted_backup("payload", STRONG_PASSPHRASE).expect("export should succeed");
+    let envelope =
+      export_encrypted_backup("payload", STRONG_PASSPHRASE).expect("export should succeed");
     let value: serde_json::Value = serde_json::from_str(&envelope).expect("envelope must be JSON");
     assert_eq!(value["version"], 1);
     assert_eq!(value["kdf"], "PBKDF2-SHA256");
@@ -283,8 +307,7 @@ mod tests {
   #[test]
   fn local_backup_rejects_wrong_vault_key() {
     let envelope = export_local_backup("payload", LOCAL_VAULT_KEY_HEX).expect("export");
-    let other =
-      "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    let other = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
     assert!(import_local_backup(&envelope, other).is_err());
   }
 

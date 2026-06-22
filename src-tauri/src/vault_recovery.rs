@@ -54,13 +54,18 @@ pub fn parse_recovery_key(formatted: &str) -> Result<[u8; RECOVERY_KEY_BYTES], S
       RECOVERY_KEY_BYTES * 2
     ));
   }
-  if !stripped.chars().all(|character| character.is_ascii_hexdigit()) {
+  if !stripped
+    .chars()
+    .all(|character| character.is_ascii_hexdigit())
+  {
     return Err("recovery key must contain only hex characters".to_string());
   }
   let mut bytes = [0u8; RECOVERY_KEY_BYTES];
   for (byte, chunk) in bytes.iter_mut().zip(stripped.as_bytes().chunks(2)) {
-    let pair = std::str::from_utf8(chunk).map_err(|error| format!("invalid recovery key: {error}"))?;
-    *byte = u8::from_str_radix(pair, 16).map_err(|error| format!("invalid recovery key: {error}"))?;
+    let pair =
+      std::str::from_utf8(chunk).map_err(|error| format!("invalid recovery key: {error}"))?;
+    *byte =
+      u8::from_str_radix(pair, 16).map_err(|error| format!("invalid recovery key: {error}"))?;
   }
   Ok(bytes)
 }
@@ -71,11 +76,14 @@ pub fn wrap_vault_key(vault_key_hex: &str, recovery_key_formatted: &str) -> Resu
   let recovery_bytes = parse_recovery_key(recovery_key_formatted)?;
   let mut salt = [0u8; RECOVERY_SALT_LEN];
   let mut iv = [0u8; RECOVERY_IV_LEN];
-  getrandom::getrandom(&mut salt).map_err(|error| format!("failed to generate recovery salt: {error}"))?;
-  getrandom::getrandom(&mut iv).map_err(|error| format!("failed to generate recovery iv: {error}"))?;
+  getrandom::getrandom(&mut salt)
+    .map_err(|error| format!("failed to generate recovery salt: {error}"))?;
+  getrandom::getrandom(&mut iv)
+    .map_err(|error| format!("failed to generate recovery iv: {error}"))?;
 
   let kek = derive_recovery_kek(&recovery_bytes, &salt);
-  let cipher = Aes256Gcm::new_from_slice(&kek).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&kek).map_err(|error| format!("failed to build cipher: {error}"))?;
   let wrapped = cipher
     .encrypt(Nonce::from_slice(&iv), vault_key_hex.as_bytes())
     .map_err(|error| format!("failed to wrap vault key: {error}"))?;
@@ -89,12 +97,16 @@ pub fn wrap_vault_key(vault_key_hex: &str, recovery_key_formatted: &str) -> Resu
     iv: STANDARD.encode(iv),
     wrapped_key: STANDARD.encode(&wrapped),
   };
-  serde_json::to_string_pretty(&envelope).map_err(|error| format!("failed to encode recovery envelope: {error}"))
+  serde_json::to_string_pretty(&envelope)
+    .map_err(|error| format!("failed to encode recovery envelope: {error}"))
 }
 
 /// Unwrap the SQLCipher key hex from a sidecar envelope using the recovery key.
 /// Fails if the recovery key is wrong (AES-GCM tag mismatch).
-pub fn unwrap_vault_key(envelope_text: &str, recovery_key_formatted: &str) -> Result<String, String> {
+pub fn unwrap_vault_key(
+  envelope_text: &str,
+  recovery_key_formatted: &str,
+) -> Result<String, String> {
   let value: serde_json::Value = serde_json::from_str(envelope_text)
     .map_err(|error| format!("recovery envelope is not valid JSON: {error}"))?;
   let version = value
@@ -110,7 +122,8 @@ pub fn unwrap_vault_key(envelope_text: &str, recovery_key_formatted: &str) -> Re
 
   let recovery_bytes = parse_recovery_key(recovery_key_formatted)?;
   let kek = derive_recovery_kek(&recovery_bytes, &salt);
-  let cipher = Aes256Gcm::new_from_slice(&kek).map_err(|error| format!("failed to build cipher: {error}"))?;
+  let cipher =
+    Aes256Gcm::new_from_slice(&kek).map_err(|error| format!("failed to build cipher: {error}"))?;
   let plaintext = cipher
     .decrypt(Nonce::from_slice(&iv), wrapped.as_slice())
     .map_err(|_| "recovery key is incorrect or the envelope is corrupted".to_string())?;
@@ -145,7 +158,10 @@ mod tests {
     let plain = TEST_RECOVERY_KEY.replace('-', "");
     assert!(parse_recovery_key(TEST_RECOVERY_KEY).is_ok());
     assert!(parse_recovery_key(&plain).is_ok());
-    assert_eq!(parse_recovery_key(TEST_RECOVERY_KEY).unwrap(), parse_recovery_key(&plain).unwrap());
+    assert_eq!(
+      parse_recovery_key(TEST_RECOVERY_KEY).unwrap(),
+      parse_recovery_key(&plain).unwrap()
+    );
   }
 
   #[test]

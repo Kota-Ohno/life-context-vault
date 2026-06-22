@@ -61,7 +61,9 @@ fn apply_sqlcipher_key(connection: &Connection, key: &str) -> Result<(), String>
 
 fn validate_connection(connection: &Connection) -> Result<(), String> {
   connection
-    .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
+    .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+      row.get::<_, i64>(0)
+    })
     .map(|_| ())
     .map_err(|error| format!("failed to validate encrypted vault database: {error}"))
 }
@@ -165,9 +167,11 @@ pub(crate) fn vault_key() -> Result<String, String> {
 
   #[cfg(not(target_os = "macos"))]
   {
-    let key_file = std::env::var("LCV_VAULT_KEY_FILE").map(PathBuf::from).map_err(|_| {
-      "LCV_VAULT_DB_KEY or LCV_VAULT_KEY_FILE is required on this platform".to_string()
-    })?;
+    let key_file = std::env::var("LCV_VAULT_KEY_FILE")
+      .map(PathBuf::from)
+      .map_err(|_| {
+        "LCV_VAULT_DB_KEY or LCV_VAULT_KEY_FILE is required on this platform".to_string()
+      })?;
     if key_file.exists() {
       return fs::read_to_string(&key_file)
         .map(|value| value.trim().to_string())
@@ -296,8 +300,9 @@ mod tests {
     }
 
     let plain = Connection::open(&path).expect("plain connection handle");
-    let plain_result =
-      plain.query_row("SELECT payload FROM vault_state", [], |row| row.get::<_, String>(0));
+    let plain_result = plain.query_row("SELECT payload FROM vault_state", [], |row| {
+      row.get::<_, String>(0)
+    });
     assert!(plain_result.is_err());
     let _ = fs::remove_file(path);
   }
@@ -347,8 +352,9 @@ mod tests {
     assert_eq!(encrypted_payload, payload);
 
     let plain = Connection::open(&path).expect("plain connection handle");
-    let plain_result =
-      plain.query_row("SELECT payload FROM vault_state", [], |row| row.get::<_, String>(0));
+    let plain_result = plain.query_row("SELECT payload FROM vault_state", [], |row| {
+      row.get::<_, String>(0)
+    });
     assert!(plain_result.is_err());
     let plaintext_backups = fs::read_dir(&dir)
       .expect("read migration dir")
