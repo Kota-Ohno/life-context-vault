@@ -71,6 +71,7 @@ import {
   saveNativeRuntimePreferences
 } from "./nativeStorage";
 import { detectLang, Lang, t } from "./i18n";
+import { formatVaultError } from "./lib/formatVaultError";
 import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
@@ -540,7 +541,7 @@ export function App() {
             current
               ? {
                   ...current,
-                  lastError: error instanceof Error ? error.message : "Login item status failed"
+                  lastError: formatVaultError(error, "Login item status failed")
                 }
               : current
           );
@@ -674,7 +675,7 @@ export function App() {
         setSearchMode("native_fts");
       } catch (error) {
         if (cancelled) return;
-        setSearchError(error instanceof Error ? error.message : "Native search failed");
+        setSearchError(formatVaultError(error, "Native search failed"));
         setSearchMode("browser_fallback");
         setNativeSearchResults([]);
       }
@@ -827,7 +828,7 @@ export function App() {
             return;
           }
         } catch (error) {
-          setNotice(error instanceof Error ? error.message : "保留中Sourceの保存に失敗しました。");
+          setNotice(formatVaultError(error, "保留中Sourceの保存に失敗しました。"));
         }
       }
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
@@ -932,7 +933,7 @@ export function App() {
       setView("sources");
       return "saved";
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
+      setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
       return "failed";
     }
   }
@@ -954,7 +955,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを更新できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでSourceを更新できませんでした。"));
         return;
       }
     }
@@ -1013,7 +1014,7 @@ export function App() {
         setConfirmAllCapturePurge(false);
         return;
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでCapture本文を消去できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでCapture本文を消去できませんでした。"));
         return;
       }
     }
@@ -1047,7 +1048,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでSourceを保存できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
         return false;
       }
     }
@@ -1087,7 +1088,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでSource本文を保存できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでSource本文を保存できませんでした。"));
         return false;
       }
     }
@@ -1118,7 +1119,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでFactを更新できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでFactを更新できませんでした。"));
         return;
       }
     }
@@ -1153,7 +1154,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでFactを保存できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでFactを保存できませんでした。"));
         return false;
       }
     }
@@ -1192,7 +1193,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault Coreで候補を承認できませんでした。");
+        setNotice(formatVaultError(error, "Vault Coreで候補を承認できませんでした。"));
         return;
       }
     }
@@ -1229,7 +1230,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault Coreで候補を更新できませんでした。");
+        setNotice(formatVaultError(error, "Vault Coreで候補を更新できませんでした。"));
         return;
       }
     }
@@ -1261,7 +1262,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを生成できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでContext Packを生成できませんでした。"));
         return;
       }
     }
@@ -1312,7 +1313,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを更新できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでContext Packを更新できませんでした。"));
         return;
       }
     }
@@ -1344,7 +1345,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを承認できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
         return;
       }
     }
@@ -1389,7 +1390,7 @@ export function App() {
             }
           }
         } catch (error) {
-          setNotice(error instanceof Error ? error.message : "Vault CoreでContext Packを承認できませんでした。");
+          setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
           return;
         }
       } else {
@@ -1479,7 +1480,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでContext Requestを拒否できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでContext Requestを拒否できませんでした。"));
         return;
       }
     }
@@ -1511,7 +1512,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Vault CoreでAI接続ポリシーを保存できませんでした。");
+        setNotice(formatVaultError(error, "Vault CoreでAI接続ポリシーを保存できませんでした。"));
         return;
       }
     }
@@ -1530,7 +1531,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Standing delivery設定を保存できませんでした。");
+        setNotice(formatVaultError(error, "Standing delivery設定を保存できませんでした。"));
         return;
       }
     }
@@ -1572,7 +1573,7 @@ export function App() {
       setBackupText(payload);
       setNotice("暗号化バックアップを書き出しました。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "バックアップに失敗しました。");
+      setNotice(formatVaultError(error, "バックアップに失敗しました。"));
     }
   }
 
@@ -1588,7 +1589,7 @@ export function App() {
     } catch (error) {
       setRestorePreview(null);
       setRestoreConfirmText("");
-      setNotice(error instanceof Error ? error.message : "バックアップの読み取りに失敗しました。");
+      setNotice(formatVaultError(error, "バックアップの読み取りに失敗しました。"));
     }
   }
 
@@ -1612,7 +1613,7 @@ export function App() {
       setRestorePreview(null);
       setRestoreConfirmText("");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "復元に失敗しました。");
+      setNotice(formatVaultError(error, "復元に失敗しました。"));
     }
   }
 
@@ -1628,7 +1629,7 @@ export function App() {
       setNativeRevision(nativeSnapshot.updatedAt);
       setNotice("Native Vaultから最新状態を読み込みました。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Native Vaultの再読み込みに失敗しました。");
+      setNotice(formatVaultError(error, "Native Vaultの再読み込みに失敗しました。"));
     }
   }
 
@@ -1649,7 +1650,7 @@ export function App() {
       setLoginItemStatus(status);
       setNotice(status ? "Login Itemの状態を更新しました。" : "Desktop appでのみLogin Itemを管理できます。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Login Itemの状態確認に失敗しました。");
+      setNotice(formatVaultError(error, "Login Itemの状態確認に失敗しました。"));
     }
   }
 
@@ -1664,7 +1665,7 @@ export function App() {
           : "Login Itemを有効にできませんでした。"
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Login Itemの有効化に失敗しました。");
+      setNotice(formatVaultError(error, "Login Itemの有効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -1678,7 +1679,7 @@ export function App() {
       setLoginItemStatus(status);
       setNotice("Login Itemを無効にしました。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Login Itemの無効化に失敗しました。");
+      setNotice(formatVaultError(error, "Login Itemの無効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -1699,7 +1700,7 @@ export function App() {
         setNotice("Claude Desktop設定へLife Context Vaultを追加しました。Claude Desktopを再起動してください。");
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Claude Desktop設定のインストールに失敗しました。");
+      setNotice(formatVaultError(error, "Claude Desktop設定のインストールに失敗しました。"));
     } finally {
       setClaudeInstallBusy(false);
     }
