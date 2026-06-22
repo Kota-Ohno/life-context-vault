@@ -1480,7 +1480,7 @@ describe("vault flow", () => {
     const updated = state.facts.find((f) => f.id === fact.id)!;
     expect(updated.sensitivityClassified).toBe(beforeClassified);
     expect(updated.sensitivityConfidence).toBe(beforeConfidence);
-    expect(updated.domain).toBe("work_and_career");
+    expect(updated.domain).toBe("work_and_education");
   });
 
   it("reclassifyLegacyFacts does NOT overwrite explicit sensitivityClassified=false (deliberate override)", () => {

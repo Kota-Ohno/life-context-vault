@@ -119,3 +119,39 @@ On a manual `sensitivity` override (text unchanged), sets `sensitivityClassified
 ### Test results
 - TS: 45 passed, 0 failed (`npx vitest run src/vault.test.ts`)
 - Rust: 129 passed, 0 failed, 1 ignored (`cargo test --manifest-path src-tauri/Cargo.toml`)
+
+---
+
+## Final fix-subagent pass — C1 trust-boundary leak + I1 stale assertion
+
+**Status:** DONE
+**Branch:** `feat/p0-failsafe-classification`
+
+### I1 — Stale domain assertion (vault.test.ts:1483)
+Changed `expect(updated.domain).toBe("work_and_career")` → `"work_and_education"` to match the
+test input at line 1477.
+
+### C1 — Approve-with-edited-text sensitivity tier derivation (lib.rs ~3092)
+**The leak:** `approve_candidate_with_options_at_path` computed `classify_sensitivity(&fact_text)`
+but used `detected_sensitivity` (the CANDIDATE'S original tier) as the fact's `sensitivity` field.
+A user who edited a benign (`public`) candidate to inject `AWS_SECRET_ACCESS_KEY=abc123` would
+get a fact with `sensitivity="public"` that passes the zero-touch gate and auto-delivers.
+
+**The fix:** Determine whether the user actually changed the text (`text_was_edited`). If so:
+1. Block if `classification.tier == "secret_never_send"` (mirrors TS/extract path).
+2. Use `classification.tier` (edited-text tier) as the fact's `sensitivity`.
+
+Non-edited path retains `detected_sensitivity` from the candidate (no behavior change).
+Both paths always run `classify_sensitivity(&fact_text)` so `sensitivityClassified` /
+`sensitivityConfidence` remain fresh on the new fact (preserving Task 7 zero-touch gate behavior).
+
+### Tests added (TDD — written before fix, verified failing first)
+- `approve_with_edited_text_injecting_secret_is_blocked` — editing a benign candidate to inject
+  `AWS_SECRET_ACCESS_KEY=abc123secret` must be rejected with an error; 0 facts created.
+- `approve_with_edited_text_uses_edited_text_sensitivity_tier` — editing a `public` candidate to
+  include an email must produce a fact with `sensitivity == "personal"`, not `"public"`.
+
+### Test results
+- TS: 45 passed, 0 failed (`npx vitest run src/vault.test.ts`)
+- Rust: 132 passed, 0 failed, 1 ignored (`cargo test --manifest-path src-tauri/Cargo.toml`)
+- `npm run build`: clean (tsc + vite, EXIT:0)

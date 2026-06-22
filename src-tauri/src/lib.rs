@@ -3089,16 +3089,37 @@ pub fn approve_candidate_with_options_at_path(
     .as_array()
     .map(|ids| !ids.is_empty())
     .unwrap_or(false);
-  // Task 7: classify the fact text at approval time so the zero-touch gate
-  // can evaluate it immediately, before any migration pass would have run.
+  // Determine whether the user actually changed the text.
+  let text_was_edited = edited_text
+    .map(str::trim)
+    .filter(|t| *t != proposed_text.trim())
+    .is_some();
+  // Always classify the fact text so sensitivityClassified / sensitivityConfidence
+  // are fresh on the new fact (Task 7: zero-touch gate evaluates these fields).
   let classification = classify_sensitivity(&fact_text);
+  // When edited text was provided, derive sensitivity TIER from the NEW text so
+  // that injecting a credential into an otherwise-benign candidate cannot
+  // produce a low-sensitivity fact that auto-delivers (trust-boundary leak).
+  // Mirrors TS vault.ts approveCandidate (line ~607: sensitivity: classifiedForFact.tier).
+  let fact_sensitivity = if text_was_edited {
+    // Mirror the TS/extract path: secret_never_send must never become a fact.
+    if classification.tier == "secret_never_send" {
+      return Err(
+        "The edited text contains secret material and cannot be approved as a Fact.".to_string(),
+      );
+    }
+    classification.tier.clone()
+  } else {
+    // Non-edited path: use the candidate's original detected sensitivity tier.
+    detected_sensitivity.clone()
+  };
   let mut fact = json!({
     "id": fact_id.clone(),
     "factText": fact_text,
     "domain": str_field(&candidate, "domain"),
     "factType": candidate_type_to_fact_type(&str_field(&candidate, "candidateType")),
     "sourceIds": source_ids,
-    "sensitivity": detected_sensitivity.clone(),
+    "sensitivity": fact_sensitivity,
     "confidence": if source_backed { "source_backed" } else { "inferred_and_confirmed" },
     "status": "active",
     "createdAt": now.clone(),
@@ -10926,6 +10947,121 @@ mod tests {
 
     assert!(error.contains("secret_never_send"));
     assert_eq!(fact_count, 0);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn approve_with_edited_text_injecting_secret_is_blocked() {
+    // C1 trust-boundary fix: editing a benign candidate to inject a credential
+    // must be REJECTED — the edited text's classification governs, not the
+    // candidate's original detectedSensitivity.
+    use_test_vault_key();
+    let path = temp_vault_path("edited-text-secret-inject");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Hobby",
+      "I enjoy hiking on weekends",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    // Sanity: the candidate itself is NOT secret_never_send (it's benign).
+    let conn = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault");
+    let vault = load_vault_json_from_connection(&conn).expect("load vault json");
+    let cand = find_vault_item_by_id(&vault, "candidates", &candidate_id).expect("candidate");
+    let original_tier = str_field(&cand, "detectedSensitivity");
+    assert_ne!(
+      original_tier, "secret_never_send",
+      "Precondition: candidate must start as non-secret"
+    );
+    drop(conn);
+
+    // Now approve with edited text that injects a credential.
+    let secret_text = "AWS_SECRET_ACCESS_KEY=abc123secret";
+    let err = approve_candidate_with_options_at_path(
+      &path,
+      &candidate_id,
+      Some(secret_text),
+      &[],
+    )
+    .err()
+    .expect("approval of edited-secret text must be rejected");
+
+    // Must be blocked and no fact created.
+    let conn2 = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault 2");
+    let fact_count: i64 = conn2
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("fact count");
+    assert!(
+      err.contains("secret") || err.contains("cannot be approved"),
+      "error should mention secret rejection, got: {err}"
+    );
+    assert_eq!(fact_count, 0, "no fact must be created when edited text is secret");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn approve_with_edited_text_uses_edited_text_sensitivity_tier() {
+    // C1 trust-boundary fix: editing a candidate to include an email address
+    // must produce a fact with sensitivity == "personal" (the tier derived from
+    // the EDITED text), not the original candidate's lower tier.
+    use_test_vault_key();
+    let path = temp_vault_path("edited-text-tier-promotion");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Note",
+      "generic public note with no signals",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    // Sanity: original candidate tier should be "public".
+    let conn = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault");
+    let vault_val = load_vault_json_from_connection(&conn).expect("load vault json");
+    let cand = find_vault_item_by_id(&vault_val, "candidates", &candidate_id).expect("candidate");
+    let original_tier = str_field(&cand, "detectedSensitivity");
+    assert_eq!(
+      original_tier, "public",
+      "Precondition: candidate must start as public"
+    );
+    drop(conn);
+
+    // Approve with edited text that contains an email — should classify as "personal".
+    let edited = "Contact me at alice@example.com for questions";
+    let result = approve_candidate_with_options_at_path(
+      &path,
+      &candidate_id,
+      Some(edited),
+      &[],
+    )
+    .expect("approval of email-edited text must succeed");
+
+    let fact_id = result.fact_id.expect("fact id");
+    let saved: Value = serde_json::from_str(&result.payload).expect("parse payload");
+    let fact = find_vault_item_by_id(&saved, "facts", &fact_id).expect("new fact");
+    let fact_sensitivity = str_field(&fact, "sensitivity");
+
+    assert_eq!(
+      fact_sensitivity, "personal",
+      "Fact sensitivity must be derived from edited text (email => personal), not candidate's original tier (public)"
+    );
+    // Must NOT be eligible for zero-touch delivery (personal is above zero-touch threshold).
+    assert_ne!(
+      fact_sensitivity, "public",
+      "Edited fact must not retain low original tier after email injection"
+    );
     remove_temp_vault(&path);
   }
 
