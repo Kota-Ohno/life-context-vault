@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifySensitivity } from "./sensitivity";
+import { classifySensitivity, zeroTouchEligible } from "./sensitivity";
 
 describe("classifySensitivity", () => {
   it("no signal ⇒ unclassified, public, low (never default-public-classified)", () => {
@@ -27,5 +27,50 @@ describe("classifySensitivity", () => {
     // a plain keyword like "contract" with no structured pattern
     const r = classifySensitivity("we discussed the contract yesterday");
     expect(r.confidence).toBe("low"); // tier may be set, but low ⇒ zero-touch ineligible at medium bar
+  });
+});
+
+describe("zeroTouchEligible", () => {
+  it("unclassified item ⇒ false (even if nominal tier is public)", () => {
+    expect(
+      zeroTouchEligible(
+        { sensitivity: "public", sensitivityConfidence: "high", sensitivityClassified: false },
+        {}
+      )
+    ).toBe(false);
+  });
+
+  it("classified + confidence below bar ⇒ false", () => {
+    expect(
+      zeroTouchEligible(
+        { sensitivity: "personal", sensitivityConfidence: "low", sensitivityClassified: true },
+        { zeroTouchConfidenceBar: "medium" }
+      )
+    ).toBe(false);
+  });
+
+  it("classified + confidence >= bar + rank <= threshold ⇒ true", () => {
+    expect(
+      zeroTouchEligible(
+        { sensitivity: "personal", sensitivityConfidence: "high", sensitivityClassified: true },
+        { requiresApprovalAbove: "personal", zeroTouchConfidenceBar: "medium" }
+      )
+    ).toBe(true);
+  });
+
+  it("classified + rank > threshold ⇒ false", () => {
+    expect(
+      zeroTouchEligible(
+        { sensitivity: "private_consequential", sensitivityConfidence: "high", sensitivityClassified: true },
+        { requiresApprovalAbove: "personal", zeroTouchConfidenceBar: "medium" }
+      )
+    ).toBe(false);
+  });
+
+  it("missing fields (undefined) ⇒ false (no throw)", () => {
+    expect(() =>
+      zeroTouchEligible({}, {})
+    ).not.toThrow();
+    expect(zeroTouchEligible({}, {})).toBe(false);
   });
 });

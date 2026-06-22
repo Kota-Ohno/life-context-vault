@@ -132,6 +132,28 @@ const SIGNALS: Signal[] = [
   },
 ];
 
+export function zeroTouchEligible(
+  item: {
+    sensitivity?: SensitivityTier;
+    sensitivityConfidence?: SensitivityConfidence;
+    sensitivityClassified?: boolean;
+  },
+  policy: {
+    requiresApprovalAbove?: SensitivityTier;
+    zeroTouchConfidenceBar?: SensitivityConfidence;
+  }
+): boolean {
+  const threshold = policy.requiresApprovalAbove ?? "personal";
+  const bar = policy.zeroTouchConfidenceBar ?? "medium";
+  return (
+    !!item.sensitivityClassified &&
+    sensitivityConfidenceRank(item.sensitivityConfidence as SensitivityConfidence) >=
+      sensitivityConfidenceRank(bar) &&
+    sensitivityRank(item.sensitivity as SensitivityTier) <=
+      sensitivityRank(threshold)
+  );
+}
+
 export function classifySensitivity(text: string): SensitivityResult {
   const matched = SIGNALS.filter((s) => s.test.test(text));
   if (matched.length === 0) {
