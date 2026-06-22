@@ -24,6 +24,7 @@ import {
   SourceKind,
   VaultState
 } from "./types";
+import { classifySensitivity, zeroTouchEligible, SensitivityConfidence } from "./sensitivity";
 
 export const STORAGE_KEY = "life-context-vault-poc";
 const BACKUP_KDF_ITERATIONS = 600000;
@@ -121,7 +122,8 @@ export function createEmptyVault(): VaultState {
     connectorSessions: defaultConnectorSessions(createdAt),
     contextPackRequests: [],
     contextPacks: [],
-    auditEvents: []
+    auditEvents: [],
+    classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION
   };
 }
 
@@ -151,10 +153,29 @@ export function loadVault(): VaultState {
   }
 }
 
+const CLASSIFIER_MIGRATION_VERSION = 1;
+
+export function normalizeFactForLoad(fact: ApprovedFact): ApprovedFact {
+  return {
+    ...fact,
+    sensitivityClassified: fact.sensitivityClassified ?? false,
+    sensitivityConfidence: fact.sensitivityConfidence ?? "low"
+  };
+}
+
+export function reclassifyLegacyFacts(state: VaultState): VaultState {
+  if ((state.classifierMigrationVersion ?? 0) >= CLASSIFIER_MIGRATION_VERSION) return state;
+  const facts = state.facts.map((fact) => {
+    const r = classifySensitivity(fact.factText);
+    return { ...fact, sensitivityClassified: r.classified, sensitivityConfidence: r.confidence };
+  });
+  return { ...state, facts, classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION };
+}
+
 export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
   const empty = createEmptyVault();
   if (!parsed || typeof parsed !== "object") return empty;
-  return {
+  const normalized: VaultState = {
     ...empty,
     ...parsed,
     version: 2,
@@ -163,10 +184,12 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
       ...candidate,
       conflictWithFactIds: candidate.conflictWithFactIds ?? []
     })),
-    facts: (parsed.facts ?? []).map((fact) => ({
-      ...fact,
-      supersedesFactIds: fact.supersedesFactIds ?? []
-    })),
+    facts: (parsed.facts ?? []).map((fact) =>
+      normalizeFactForLoad({
+        ...fact,
+        supersedesFactIds: fact.supersedesFactIds ?? []
+      })
+    ),
     accessPolicies: normalizeAccessPolicies(parsed.accessPolicies, empty.accessPolicies),
     passiveCaptureSettings: {
       ...empty.passiveCaptureSettings,
@@ -181,6 +204,7 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     contextPacks: parsed.contextPacks ?? [],
     auditEvents: parsed.auditEvents ?? []
   };
+  return reclassifyLegacyFacts(normalized);
 }
 
 function normalizeAccessPolicies(
@@ -259,7 +283,7 @@ export function addSourceWithCandidates(
     capturedAt: nowIso(),
     defaultSensitivity: sanitized.secretFound
       ? "secret_never_send"
-      : detectSensitivity(input.body),
+      : classifySensitivity(input.body).tier,
     processingStatus: "ready",
     deletionState: "active"
   };
@@ -325,7 +349,14 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
   const candidates: MemoryCandidate[] = [];
 
   for (const line of lines) {
-    const sensitivity = detectSensitivity(line);
+    const r = classifySensitivity(line);
+    // Secret indicators (api key/token/password/…) are caught by the legacy
+    // detector and must always pin to secret_never_send; they are never
+    // zero-touch eligible, so mark them unclassified.
+    const secretTier = detectSensitivity(line) === "secret_never_send";
+    const sensitivity = secretTier ? "secret_never_send" : r.tier;
+    const classified = secretTier ? false : r.classified;
+    const confidence = secretTier ? "low" : r.confidence;
     const status: MemoryCandidate["status"] =
       sensitivity === "sensitive" || sensitivity === "secret_never_send"
         ? "blocked_sensitive"
@@ -334,6 +365,8 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
       id: newId("cand"),
       sourceIds: [source.id],
       detectedSensitivity: sensitivity,
+      sensitivityClassified: classified,
+      sensitivityConfidence: confidence,
       confidence: "medium" as const,
       createdAt: nowIso(),
       status,
@@ -438,7 +471,9 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
   }
 
   if (candidates.length === 0 && source.body.trim()) {
-    const sensitivity = detectSensitivity(source.body);
+    const r = classifySensitivity(source.body);
+    const secretTier = detectSensitivity(source.body) === "secret_never_send";
+    const sensitivity = secretTier ? "secret_never_send" : r.tier;
     candidates.push({
       id: newId("cand"),
       sourceIds: [source.id],
@@ -446,6 +481,8 @@ export function extractCandidates(source: RawSource): MemoryCandidate[] {
       domain: classifyDomain(source.body),
       candidateType: "note",
       detectedSensitivity: sensitivity,
+      sensitivityClassified: secretTier ? false : r.classified,
+      sensitivityConfidence: secretTier ? "low" : r.confidence,
       confidence: "low",
       reasonToRemember: "この情報は後で背景文脈として役立つ可能性があります。",
       status:
@@ -543,13 +580,14 @@ export function approveCandidate(
     state.facts.some((fact) => fact.id === factId && fact.status === "active")
   );
 
+  const classifiedForFact = editedText ? classifySensitivity(text) : null;
   const fact: ApprovedFact = {
     id: newId("fact"),
     factText: text,
     domain: candidate.domain,
     factType: candidateTypeToFactType(candidate.candidateType),
     sourceIds: candidate.sourceIds,
-    sensitivity: candidate.detectedSensitivity,
+    sensitivity: classifiedForFact ? classifiedForFact.tier : candidate.detectedSensitivity,
     confidence:
       candidate.sourceIds.length > 0 ? "source_backed" : "inferred_and_confirmed",
     status: "active",
@@ -559,7 +597,9 @@ export function approveCandidate(
     createdAt: now,
     approvedAt: now,
     updatedAt: now,
-    supersedesFactIds: supersededIds
+    supersedesFactIds: supersededIds,
+    sensitivityClassified: classifiedForFact ? classifiedForFact.classified : (candidate.sensitivityClassified ?? false),
+    sensitivityConfidence: classifiedForFact ? classifiedForFact.confidence : (candidate.sensitivityConfidence ?? "low")
   };
   const affectedFactIds = new Set(supersededIds);
   const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
@@ -811,7 +851,7 @@ export function updateSourceBody(
 
   const now = nowIso();
   const sanitized = sanitizeSecretMaterial(body);
-  const nextSensitivity = sanitized.secretFound ? "secret_never_send" : detectSensitivity(body);
+  const nextSensitivity = sanitized.secretFound ? "secret_never_send" : classifySensitivity(body).tier;
   const updatedSource: RawSource = {
     ...source,
     body: sanitized.text,
@@ -979,6 +1019,7 @@ export function updateFactMetadata(
             factText,
             domain: input.domain,
             sensitivity: input.sensitivity,
+            sensitivityClassified: false,
             validFrom: blankToUndefined(input.validFrom),
             validUntil: blankToUndefined(input.validUntil),
             dueDate: blankToUndefined(input.dueDate),
@@ -1193,7 +1234,8 @@ export function buildContextPackForRequest(
     clientId: request.clientId,
     approvalMode: request.approvalMode,
     domainAllowlist: policyDomainAllowlistForClient(state, request.clientId),
-    requiresApprovalAbove: policyRequiresApprovalAboveForClient(state, request.clientId)
+    requiresApprovalAbove: policyRequiresApprovalAboveForClient(state, request.clientId),
+    zeroTouchConfidenceBar: policyZeroTouchConfidenceBarForClient(state, request.clientId)
   });
   const auditEvent = audit(
     "context_pack_generated",
@@ -1240,6 +1282,7 @@ function buildContextPackWithOptions(
     requiresApprovalAbove?: SensitivityTier;
     clientId?: string;
     approvalMode?: ContextPackRequest["approvalMode"];
+    zeroTouchConfidenceBar?: SensitivityConfidence;
   }
 ): ContextPack {
   const sensitivityCeiling = policySensitivityValue(options.sensitivityCeiling, "public");
@@ -1292,6 +1335,8 @@ function buildContextPackWithOptions(
           ? "質問の領域と一致しています。"
           : "本人の背景情報として回答を調整できます。",
       sensitivity: fact.sensitivity,
+      sensitivityClassified: fact.sensitivityClassified,
+      sensitivityConfidence: fact.sensitivityConfidence,
       sourceTitles: sourceTitlesForFact(state, fact, sensitivityCeiling),
       validFrom: fact.validFrom,
       validUntil: fact.validUntil,
@@ -1319,7 +1364,12 @@ function buildContextPackWithOptions(
     warnings,
     confirmationStatus:
       options.approvalMode === "always_review" ||
-      sensitivityRank[maxSensitivityIncluded] > sensitivityRank[requiresApprovalAbove]
+      !items.every((item) =>
+        zeroTouchEligible(item, {
+          requiresApprovalAbove,
+          zeroTouchConfidenceBar: options.zeroTouchConfidenceBar
+        })
+      )
         ? "pending_user_confirmation"
         : "not_required"
   };
@@ -1399,6 +1449,8 @@ function contextPackItemForFact(
         ? "質問の領域と一致しています。"
         : "本人の背景情報として回答を調整できます。",
     sensitivity: fact.sensitivity,
+    sensitivityClassified: fact.sensitivityClassified,
+    sensitivityConfidence: fact.sensitivityConfidence,
     sourceTitles: sourceTitlesForFact(state, fact, sensitivityCeiling),
     validFrom: fact.validFrom,
     validUntil: fact.validUntil,
@@ -1653,6 +1705,16 @@ function contextPackPolicyViolation(
       });
       if (!hasAiEligibleSource) return "deleted";
     }
+  }
+  // After all per-item checks pass, check zero-touch degradation.
+  // Only fail if an item was classified at build time but is now unclassified
+  // (a previously-verified fact silently becoming unverified is a fail-closed signal).
+  for (const item of pack.items) {
+    const fact = state.facts.find((candidate) => candidate.id === item.factId);
+    if (!fact) continue; // already caught above
+    const itemWasClassified = item.sensitivityClassified ?? false;
+    const factIsNowClassified = fact.sensitivityClassified ?? false;
+    if (itemWasClassified && !factIsNowClassified) return "sensitivity_policy";
   }
   return null;
 }
@@ -1928,7 +1990,7 @@ export function addPassiveCaptureEvent(
     promotedToLongTerm: false,
     defaultSensitivity: sanitized.secretFound
       ? "secret_never_send"
-      : detectSensitivity(input.text),
+      : classifySensitivity(input.text).tier,
     processingStatus: "ready",
     deletionState: "active"
   };
@@ -2025,7 +2087,7 @@ export function proposeMemoryFromConnector(
     body: sanitizeSecretMaterial(input.text).text,
     createdAt: nowIso(),
     capturedAt: nowIso(),
-    defaultSensitivity: detectSensitivity(input.text),
+    defaultSensitivity: classifySensitivity(input.text).tier,
     processingStatus: "ready",
     deletionState: "active"
   };
@@ -2684,6 +2746,13 @@ function policyRequiresApprovalAboveForClient(state: VaultState, clientId: strin
     state.accessPolicies.find((policy) => policy.clientId === clientId)?.requiresApprovalAbove,
     "personal"
   );
+}
+
+function policyZeroTouchConfidenceBarForClient(
+  state: VaultState,
+  clientId: string
+): SensitivityConfidence | undefined {
+  return state.accessPolicies.find((policy) => policy.clientId === clientId)?.zeroTouchConfidenceBar;
 }
 
 function connectionApprovalMode(state: VaultState, clientId: string): ContextPackRequest["approvalMode"] {
