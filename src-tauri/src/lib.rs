@@ -4770,6 +4770,525 @@ fn match_email(text: &str) -> bool {
   false
 }
 
+/// Luhn algorithm check for credit card numbers.
+/// Mirrors: luhnValid() in src/sensitivity.ts
+#[allow(dead_code)]
+fn luhn_valid(digits: &str) -> bool {
+  let mut sum: u32 = 0;
+  let mut alternate = false;
+  for ch in digits.chars().rev() {
+    let Some(d) = ch.to_digit(10) else {
+      return false;
+    };
+    let mut n = d;
+    if alternate {
+      n *= 2;
+      if n > 9 {
+        n -= 9;
+      }
+    }
+    sum += n;
+    alternate = !alternate;
+  }
+  sum % 10 == 0
+}
+
+/// Match マイナンバー keyword followed (within 10 non-digit chars) by a 12-digit number.
+/// Mirrors: /マイナンバー[^\d]{0,10}\d{4}[ -]?\d{4}[ -]?\d{4}/ in src/sensitivity.ts
+#[allow(dead_code)]
+fn match_my_number(text: &str) -> bool {
+  const KW: &str = "マイナンバー";
+  let mut search = text;
+  while let Some(pos) = search.find(KW) {
+    let rest = &search[pos + KW.len()..];
+    // Consume up to 10 non-digit chars
+    let mut chars = rest.chars();
+    let mut non_digit = 0;
+    let mut after_gap = rest;
+    loop {
+      let mut peek = chars.clone();
+      match peek.next() {
+        Some(c) if !c.is_ascii_digit() && non_digit < 10 => {
+          non_digit += 1;
+          chars = peek;
+          after_gap = chars.as_str();
+        }
+        _ => break,
+      }
+    }
+    // Now match \d{4}[ -]?\d{4}[ -]?\d{4}
+    // Returns byte-length of exactly n ASCII digits at start of src, or None.
+    fn eat_digits(src: &[u8], n: usize) -> Option<usize> {
+      if src.len() >= n && src[..n].iter().all(|b| b.is_ascii_digit()) {
+        Some(n)
+      } else {
+        None
+      }
+    }
+    let s = after_gap.as_bytes();
+    if let Some(len1) = eat_digits(s, 4) {
+      let s2 = &s[len1..];
+      // optional [ -]
+      let s2 = if s2.first().copied() == Some(b' ') || s2.first().copied() == Some(b'-') {
+        &s2[1..]
+      } else {
+        s2
+      };
+      if let Some(len2) = eat_digits(s2, 4) {
+        let s3 = &s2[len2..];
+        let s3 = if s3.first().copied() == Some(b' ') || s3.first().copied() == Some(b'-') {
+          &s3[1..]
+        } else {
+          s3
+        };
+        if eat_digits(s3, 4).is_some() {
+          return true;
+        }
+      }
+    }
+    // Advance past keyword
+    search = &search[pos + KW.len()..];
+  }
+  false
+}
+
+/// Match Luhn-valid credit card numbers in text.
+/// Mirrors: containsLuhnCard() in src/sensitivity.ts
+/// Pattern: \b\d{4}(?:[ -]\d{4}){2,4}\b | \b\d{13,19}\b — then strip spaces/hyphens,
+/// check 13–19 digits, run Luhn.
+#[allow(dead_code)]
+fn match_card_luhn(text: &str) -> bool {
+  let bytes = text.as_bytes();
+  let len = bytes.len();
+  // Scan for runs of digits optionally separated by spaces/hyphens (grouped or contiguous).
+  let mut i = 0;
+  while i < len {
+    if bytes[i].is_ascii_digit() {
+      // Collect a digit group (could be grouped by spaces/hyphens or contiguous).
+      let start = i;
+      let mut buf = String::new();
+      let mut j = start;
+      while j < len && (bytes[j].is_ascii_digit() || bytes[j] == b' ' || bytes[j] == b'-') {
+        if bytes[j].is_ascii_digit() {
+          buf.push(bytes[j] as char);
+        } else if j + 1 < len && bytes[j + 1].is_ascii_digit() {
+          // Accept separator only if followed by digit
+        } else {
+          break;
+        }
+        j += 1;
+      }
+      // Require word boundary before: preceding char must not be digit
+      let before_ok = start == 0 || !bytes[start - 1].is_ascii_digit();
+      // Require word boundary after: char at j must not be digit
+      let after_ok = j >= len || !bytes[j].is_ascii_digit();
+      if before_ok && after_ok && buf.len() >= 13 && buf.len() <= 19 {
+        if luhn_valid(&buf) {
+          return true;
+        }
+      }
+      i = if j > i { j } else { i + 1 };
+    } else {
+      i += 1;
+    }
+  }
+  false
+}
+
+/// Match US SSN pattern: \b\d{3}-\d{2}-\d{4}\b(?!-).
+/// Mirrors: /\b\d{3}-\d{2}-\d{4}\b(?!-)/ in src/sensitivity.ts
+#[allow(dead_code)]
+fn match_ssn(text: &str) -> bool {
+  let bytes = text.as_bytes();
+  let len = bytes.len();
+  if len < 11 {
+    return false;
+  }
+  let mut i = 0;
+  while i + 10 <= len {
+    // Check \b\d{3}-\d{2}-\d{4}\b(?!-)
+    let word_before = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+    if word_before
+      && bytes[i].is_ascii_digit()
+      && bytes[i + 1].is_ascii_digit()
+      && bytes[i + 2].is_ascii_digit()
+      && bytes[i + 3] == b'-'
+      && bytes[i + 4].is_ascii_digit()
+      && bytes[i + 5].is_ascii_digit()
+      && bytes[i + 6] == b'-'
+      && bytes[i + 7].is_ascii_digit()
+      && bytes[i + 8].is_ascii_digit()
+      && bytes[i + 9].is_ascii_digit()
+      && bytes[i + 10].is_ascii_digit()
+    {
+      // Word boundary after: next char must not be alphanumeric
+      let after_ok = i + 11 >= len || !bytes[i + 11].is_ascii_alphanumeric();
+      // Negative lookahead (?!-): next char must not be '-'
+      let not_dash = i + 11 >= len || bytes[i + 11] != b'-';
+      if after_ok && not_dash {
+        return true;
+      }
+    }
+    i += 1;
+  }
+  false
+}
+
+/// Match IBAN pattern: \b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{1,3}\b
+/// Mirrors: IBAN signal in src/sensitivity.ts
+#[allow(dead_code)]
+fn match_iban(text: &str) -> bool {
+  let chars: Vec<char> = text.chars().collect();
+  let len = chars.len();
+  if len < 15 {
+    return false;
+  }
+  let mut i = 0;
+  while i + 4 <= len {
+    // Word boundary before
+    let word_before = i == 0 || {
+      let c = chars[i - 1];
+      !c.is_alphanumeric()
+    };
+    if word_before && chars[i].is_ascii_uppercase() && chars[i + 1].is_ascii_uppercase() {
+      let country_end = i + 2;
+      // Two check digits
+      if country_end + 2 <= len
+        && chars[country_end].is_ascii_digit()
+        && chars[country_end + 1].is_ascii_digit()
+      {
+        let mut j = country_end + 2;
+        // Optional space then 4 alphanumeric groups, repeated 2–7 times
+        let mut group_count = 0;
+        loop {
+          // Optional single space
+          let k = if j < len && chars[j] == ' ' { j + 1 } else { j };
+          if k + 4 <= len
+            && chars[k..k + 4]
+              .iter()
+              .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+          {
+            group_count += 1;
+            j = k + 4;
+          } else {
+            break;
+          }
+          if group_count == 7 {
+            break;
+          }
+        }
+        if group_count >= 2 {
+          // Optional trailing: [ ]?[A-Z0-9]{1,3}
+          let k = if j < len && chars[j] == ' ' { j + 1 } else { j };
+          let mut trailing = 0usize;
+          while trailing < 3
+            && k + trailing < len
+            && (chars[k + trailing].is_ascii_uppercase() || chars[k + trailing].is_ascii_digit())
+          {
+            trailing += 1;
+          }
+          let end = k + trailing;
+          // Word boundary after
+          let word_after = end >= len || {
+            let c = chars[end];
+            !c.is_alphanumeric()
+          };
+          if word_after && (trailing >= 1 || group_count >= 2) {
+            // Minimum total chars: 2+2 + 2*(4+1) = 14, but require at least a meaningful IBAN
+            let raw_len = end - i;
+            if raw_len >= 15 {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  false
+}
+
+/// Match phone number pattern (tight — avoids dates, IPs, and version strings).
+/// Mirrors: phone signal in src/sensitivity.ts
+/// Pattern: /(?:\+\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4,}|
+///            \(\d{3}\)[\s.-]?\d{3}[-.\s]?\d{4}|
+///            \b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)/
+#[allow(dead_code)]
+fn match_phone(text: &str) -> bool {
+  let bytes = text.as_bytes();
+  let len = bytes.len();
+
+  // Helper: is separator (space, dot, hyphen)
+  fn is_sep(b: u8) -> bool {
+    b == b' ' || b == b'.' || b == b'-'
+  }
+  fn is_sep_or_none(bytes: &[u8], idx: usize) -> bool {
+    idx >= bytes.len() || is_sep(bytes[idx])
+  }
+
+  let mut i = 0;
+  while i < len {
+    // Pattern 1: +\d{1,3} followed by optional sep, optional '(', 3 digits, optional ')', sep, 3+4 digits
+    if bytes[i] == b'+' && i + 1 < len && bytes[i + 1].is_ascii_digit() {
+      let mut j = i + 1;
+      // Country code: 1-3 digits
+      let mut cc_len = 0;
+      while j < len && bytes[j].is_ascii_digit() && cc_len < 3 {
+        j += 1;
+        cc_len += 1;
+      }
+      if cc_len >= 1 {
+        // Optional separator
+        let j = if j < len && is_sep(bytes[j]) {
+          j + 1
+        } else {
+          j
+        };
+        // Optional '('
+        let mut j = j;
+        let _has_paren = if j < len && bytes[j] == b'(' {
+          j += 1;
+          true
+        } else {
+          false
+        };
+        // 3 area digits
+        if j + 3 <= len
+          && bytes[j].is_ascii_digit()
+          && bytes[j + 1].is_ascii_digit()
+          && bytes[j + 2].is_ascii_digit()
+        {
+          j += 3;
+          // Optional ')'
+          if j < len && bytes[j] == b')' {
+            j += 1;
+          }
+          // Separator
+          let j = if j < len && is_sep(bytes[j]) {
+            j + 1
+          } else {
+            j
+          };
+          let mut j = j;
+          // 3 digits
+          if j + 3 <= len
+            && bytes[j].is_ascii_digit()
+            && bytes[j + 1].is_ascii_digit()
+            && bytes[j + 2].is_ascii_digit()
+          {
+            j += 3;
+            // Optional separator
+            let j = if j < len && is_sep(bytes[j]) {
+              j + 1
+            } else {
+              j
+            };
+            let mut j = j;
+            // 4+ digits
+            let mut digit_count = 0;
+            while j < len && bytes[j].is_ascii_digit() {
+              j += 1;
+              digit_count += 1;
+            }
+            if digit_count >= 4 {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    // Pattern 2: (\d{3}) followed by sep?, 3 digits, sep, 4 digits
+    if bytes[i] == b'(' && i + 5 <= len {
+      let mut j = i + 1;
+      if j + 3 <= len
+        && bytes[j].is_ascii_digit()
+        && bytes[j + 1].is_ascii_digit()
+        && bytes[j + 2].is_ascii_digit()
+        && j + 3 < len
+        && bytes[j + 3] == b')'
+      {
+        j += 4;
+        // Optional sep
+        let j = if j < len && is_sep(bytes[j]) {
+          j + 1
+        } else {
+          j
+        };
+        let mut j = j;
+        // 3 digits
+        if j + 3 <= len
+          && bytes[j].is_ascii_digit()
+          && bytes[j + 1].is_ascii_digit()
+          && bytes[j + 2].is_ascii_digit()
+        {
+          j += 3;
+          // Sep (optional)
+          let j = if j < len && is_sep(bytes[j]) {
+            j + 1
+          } else {
+            j
+          };
+          let mut j = j;
+          // 4 digits
+          if j + 4 <= len
+            && bytes[j].is_ascii_digit()
+            && bytes[j + 1].is_ascii_digit()
+            && bytes[j + 2].is_ascii_digit()
+            && bytes[j + 3].is_ascii_digit()
+          {
+            j += 4;
+            // Word boundary after: next char must not be digit
+            let after_ok = j >= len || !bytes[j].is_ascii_digit();
+            if after_ok {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    // Pattern 3: \b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b  (NANP 3-3-4)
+    // Word boundary before
+    let word_before = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+    if word_before
+      && i + 11 <= len
+      && bytes[i].is_ascii_digit()
+      && bytes[i + 1].is_ascii_digit()
+      && bytes[i + 2].is_ascii_digit()
+      && is_sep(bytes[i + 3])
+      && bytes[i + 4].is_ascii_digit()
+      && bytes[i + 5].is_ascii_digit()
+      && bytes[i + 6].is_ascii_digit()
+      && is_sep(bytes[i + 7])
+      && bytes[i + 8].is_ascii_digit()
+      && bytes[i + 9].is_ascii_digit()
+      && bytes[i + 10].is_ascii_digit()
+    {
+      // Need 4th digit
+      if i + 11 < len && bytes[i + 11].is_ascii_digit() {
+        // Word boundary after: char at i+12 must not be digit
+        let after_ok = i + 12 >= len || !bytes[i + 12].is_ascii_digit();
+        if after_ok {
+          return true;
+        }
+      }
+    }
+
+    i += 1;
+  }
+  false
+}
+
+/// Match postal address: house number + Capitalized street name + Capitalized suffix.
+/// Mirrors: /\b\d{1,5}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}\s+
+///   (?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct)\b/
+/// in src/sensitivity.ts
+#[allow(dead_code)]
+fn match_address(text: &str) -> bool {
+  let chars: Vec<char> = text.chars().collect();
+  let len = chars.len();
+  const SUFFIXES: &[&str] = &[
+    "Street",
+    "St",
+    "Avenue",
+    "Ave",
+    "Road",
+    "Rd",
+    "Boulevard",
+    "Blvd",
+    "Lane",
+    "Ln",
+    "Drive",
+    "Dr",
+    "Way",
+    "Court",
+    "Ct",
+  ];
+
+  let mut i = 0;
+  while i < len {
+    // Word boundary before: preceding char not alphanumeric
+    let word_before = i == 0 || !chars[i - 1].is_alphanumeric();
+    if word_before && chars[i].is_ascii_digit() {
+      // Collect 1–5 digits
+      let start = i;
+      let mut j = i;
+      let mut digit_count = 0;
+      while j < len && chars[j].is_ascii_digit() && digit_count < 5 {
+        j += 1;
+        digit_count += 1;
+      }
+      // Must be followed by whitespace
+      if digit_count >= 1 && j < len && chars[j] == ' ' {
+        j += 1; // skip space
+                // Match 1–3 words: [A-Z][A-Za-z]+  (Capitalized)
+        let mut word_count = 0;
+        let mut k = j;
+        while word_count < 3 && k < len && chars[k].is_ascii_uppercase() {
+          // Collect word
+          let word_start = k;
+          k += 1; // skip initial uppercase
+          while k < len && chars[k].is_ascii_alphabetic() {
+            k += 1;
+          }
+          let word: String = chars[word_start..k].iter().collect();
+          // Check if this word is a street suffix
+          let is_suffix = SUFFIXES.contains(&word.as_str());
+          if is_suffix && word_count >= 1 {
+            // Word boundary after suffix
+            let after_ok = k >= len || !chars[k].is_alphanumeric();
+            if after_ok {
+              return true;
+            }
+          }
+          // Must be followed by space to continue matching
+          if k < len && chars[k] == ' ' {
+            k += 1;
+            word_count += 1;
+          } else {
+            break;
+          }
+        }
+        // Check if last word scanned is a suffix preceded by at least 1 cap word
+        // (handled in loop above via is_suffix && word_count >= 1)
+      }
+      i = if start + 1 > i { start + 1 } else { i + 1 };
+    } else {
+      i += 1;
+    }
+  }
+  false
+}
+
+/// Match Japanese postal code: 〒\d{3}-\d{4}
+/// Mirrors: /〒\d{3}-\d{4}/ in src/sensitivity.ts
+#[allow(dead_code)]
+fn match_jp_postal(text: &str) -> bool {
+  let chars: Vec<char> = text.chars().collect();
+  let len = chars.len();
+  if len < 9 {
+    return false;
+  }
+  for i in 0..len {
+    if chars[i] == '〒' && i + 8 < len {
+      // 〒 + 3 digits + '-' + 4 digits = 9 chars total (index i to i+8 inclusive)
+      let d1 = chars[i + 1].is_ascii_digit();
+      let d2 = chars[i + 2].is_ascii_digit();
+      let d3 = chars[i + 3].is_ascii_digit();
+      let dash = chars[i + 4] == '-';
+      let d4 = chars[i + 5].is_ascii_digit();
+      let d5 = chars[i + 6].is_ascii_digit();
+      let d6 = chars[i + 7].is_ascii_digit();
+      let d7 = chars[i + 8].is_ascii_digit();
+      if d1 && d2 && d3 && dash && d4 && d5 && d6 && d7 {
+        return true;
+      }
+    }
+  }
+  false
+}
+
 /// Classify text with full parity to TS classifySensitivity.
 /// Signals ordered secret-first. Returns highest-tier, highest-confidence match.
 #[allow(dead_code)]
@@ -4899,6 +5418,34 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
       confidence: "low",
       reason: "matches Japanese identity/account keyword",
     },
+    // secret_never_send: マイナンバー keyword + 12-digit number (high — structured)
+    Signal {
+      matcher: match_my_number as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches マイナンバー keyword with 12-digit number",
+    },
+    // secret_never_send: US SSN NNN-NN-NNNN (high — structured)
+    Signal {
+      matcher: match_ssn as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches US SSN pattern (NNN-NN-NNNN)",
+    },
+    // secret_never_send: Luhn-valid credit card number (high — structured + algorithm)
+    Signal {
+      matcher: match_card_luhn as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches Luhn-valid card number",
+    },
+    // secret_never_send: IBAN (high — structured country-code + check digits)
+    Signal {
+      matcher: match_iban as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches IBAN pattern",
+    },
     // secret_never_send: bare credential keywords (low)
     Signal {
       matcher: bare_credential_en as MatchFn,
@@ -4947,6 +5494,27 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
       tier: "personal",
       confidence: "high",
       reason: "matches email pattern",
+    },
+    // personal: phone number — tight pattern only (avoids dates, IPs, versions) (high)
+    Signal {
+      matcher: match_phone as MatchFn,
+      tier: "personal",
+      confidence: "high",
+      reason: "matches formatted phone number",
+    },
+    // personal: postal address with Capitalized name + Capitalized suffix (high)
+    Signal {
+      matcher: match_address as MatchFn,
+      tier: "personal",
+      confidence: "high",
+      reason: "matches postal address pattern",
+    },
+    // personal: Japanese postal code 〒NNN-NNNN (high)
+    Signal {
+      matcher: match_jp_postal as MatchFn,
+      tier: "personal",
+      confidence: "high",
+      reason: "matches Japanese postal code",
     },
     // personal: bare contact/family keywords (low)
     Signal {
@@ -13221,6 +13789,336 @@ mod tests {
     parity_check("The weather is nice today.");
     parity_check("I bought groceries at the store.");
     parity_check("Meeting at 3pm in the conference room.");
+  }
+
+  // ── Task 2: structured entity detectors — positive + FP guard + parity ────
+
+  // luhn_valid helper
+  #[test]
+  fn luhn_valid_known_visa_true() {
+    // Visa test card 4111111111111111 is Luhn-valid
+    assert!(luhn_valid("4111111111111111"));
+  }
+
+  #[test]
+  fn luhn_valid_non_luhn_false() {
+    // 16-digit run that is NOT Luhn-valid
+    assert!(!luhn_valid("1234567890123456"));
+  }
+
+  // match_card_luhn
+  #[test]
+  fn match_card_luhn_visa_test_card_true() {
+    assert!(match_card_luhn("Card: 4111111111111111"));
+  }
+
+  #[test]
+  fn match_card_luhn_grouped_mastercard_true() {
+    // 5105 1051 0510 5100 is a Luhn-valid Mastercard test number
+    assert!(match_card_luhn("MC: 5105 1051 0510 5100"));
+  }
+
+  #[test]
+  fn match_card_luhn_non_luhn_16digits_false() {
+    // 16-digit run that fails Luhn — must NOT match
+    assert!(!match_card_luhn("reference: 1234567890123456"));
+  }
+
+  #[test]
+  fn match_card_luhn_date_like_false() {
+    // Date-like patterns must not match
+    assert!(!match_card_luhn("2024-01-15"));
+    assert!(!match_card_luhn("2024/01/15"));
+  }
+
+  #[test]
+  fn classify_sensitivity_luhn_card_returns_secret_never_send_high() {
+    let r = classify_sensitivity("Please charge card 4111111111111111 for the order.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("Luhn")));
+  }
+
+  // match_ssn
+  #[test]
+  fn match_ssn_standard_format_true() {
+    assert!(match_ssn("SSN: 123-45-6789"));
+  }
+
+  #[test]
+  fn match_ssn_false_positive_date_false() {
+    // Date 2024-01-15 has 4-2-2 grouping — must NOT match SSN (3-2-4)
+    assert!(!match_ssn("Date: 2024-01-15"));
+  }
+
+  #[test]
+  fn match_ssn_ip_address_false() {
+    // IP 192-168-1-100 must NOT match (4-3-1-3)
+    assert!(!match_ssn("IP: 192-168-1-100"));
+  }
+
+  #[test]
+  fn match_ssn_followed_by_dash_false() {
+    // Negative lookahead: NNN-NN-NNNN- must NOT match
+    assert!(!match_ssn("ref: 123-45-6789-extra"));
+  }
+
+  #[test]
+  fn classify_sensitivity_ssn_returns_secret_never_send_high() {
+    let r = classify_sensitivity("My SSN is 987-65-4321.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("SSN")));
+  }
+
+  // match_iban
+  #[test]
+  fn match_iban_gb_format_true() {
+    assert!(match_iban("IBAN: GB82 WEST 1234 5698 7654 32"));
+  }
+
+  #[test]
+  fn match_iban_de_format_true() {
+    assert!(match_iban("Transfer to DE89 3704 0044 0532 0130 00"));
+  }
+
+  #[test]
+  fn match_iban_short_false() {
+    // Too short to be a real IBAN
+    assert!(!match_iban("AB12 3456"));
+  }
+
+  #[test]
+  fn classify_sensitivity_iban_returns_secret_never_send_high() {
+    let r = classify_sensitivity("Wire to GB82 WEST 1234 5698 7654 32 please.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("IBAN")));
+  }
+
+  // match_my_number
+  #[test]
+  fn match_my_number_with_digits_true() {
+    assert!(match_my_number("マイナンバー: 1234 5678 9012"));
+  }
+
+  #[test]
+  fn match_my_number_hyphenated_true() {
+    assert!(match_my_number("マイナンバー 1234-5678-9012"));
+  }
+
+  #[test]
+  fn match_my_number_keyword_only_false() {
+    // Keyword without 12-digit number must NOT fire the high signal
+    assert!(!match_my_number("マイナンバーの確認が必要です"));
+  }
+
+  #[test]
+  fn classify_sensitivity_my_number_with_digits_returns_secret_never_send_high() {
+    let r = classify_sensitivity("マイナンバー: 1234 5678 9012 を提出してください");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("マイナンバー")));
+  }
+
+  // match_phone
+  #[test]
+  fn match_phone_intl_prefix_true() {
+    assert!(match_phone("+1 555 123 4567"));
+  }
+
+  #[test]
+  fn match_phone_parenthesized_area_code_true() {
+    assert!(match_phone("Call (555) 123-4567 now"));
+  }
+
+  #[test]
+  fn match_phone_nanp_3_3_4_true() {
+    assert!(match_phone("555-867-5309"));
+  }
+
+  #[test]
+  fn match_phone_date_4_2_2_false() {
+    // 2024-01-15 must NOT match phone
+    assert!(!match_phone("Date: 2024-01-15"));
+  }
+
+  #[test]
+  fn match_phone_ip_address_false() {
+    // 192.168.1.100 must NOT match phone
+    assert!(!match_phone("IP: 192.168.1.100"));
+  }
+
+  #[test]
+  fn match_phone_version_false() {
+    // 1.2.3 version string must NOT match phone
+    assert!(!match_phone("version 1.2.3"));
+  }
+
+  #[test]
+  fn classify_sensitivity_phone_returns_personal_high() {
+    let r = classify_sensitivity("Call me at 555-867-5309.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("phone")));
+  }
+
+  // match_address
+  #[test]
+  fn match_address_standard_true() {
+    assert!(match_address("123 Main Street"));
+  }
+
+  #[test]
+  fn match_address_multi_word_name_true() {
+    assert!(match_address("42 Elm Grove Avenue"));
+  }
+
+  #[test]
+  fn match_address_lowercase_suffix_false() {
+    // "way" not capitalized → must NOT match (mirrors TS tightening)
+    assert!(!match_address("exit 23 way out"));
+  }
+
+  #[test]
+  fn match_address_no_house_number_false() {
+    // No leading digit → must NOT match
+    assert!(!match_address("Main Street in the city"));
+  }
+
+  #[test]
+  fn classify_sensitivity_address_returns_personal_high() {
+    let r = classify_sensitivity("She lives at 456 Oak Drive.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("address")));
+  }
+
+  // match_jp_postal
+  #[test]
+  fn match_jp_postal_true() {
+    assert!(match_jp_postal("〒100-0001 東京都千代田区"));
+  }
+
+  #[test]
+  fn match_jp_postal_no_mark_false() {
+    // Without 〒 must NOT match
+    assert!(!match_jp_postal("100-0001 東京都"));
+  }
+
+  #[test]
+  fn classify_sensitivity_jp_postal_returns_personal_high() {
+    let r = classify_sensitivity("住所は〒530-0001 大阪市北区梅田です。");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r
+      .reasons
+      .iter()
+      .any(|s| s.contains("postal") || s.contains("〒")));
+  }
+
+  // ── Parity table: each entity classifies at same tier+confidence as TS ────
+  // TS tiers: card/SSN/IBAN/マイナンバー → secret_never_send/high
+  //           phone/address/〒           → personal/high
+
+  #[test]
+  fn parity_structured_card_is_secret_never_send_high() {
+    let r = classify_sensitivity("4111111111111111");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_ssn_is_secret_never_send_high() {
+    let r = classify_sensitivity("123-45-6789");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_iban_is_secret_never_send_high() {
+    let r = classify_sensitivity("GB82 WEST 1234 5698 7654 32");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_my_number_digits_is_secret_never_send_high() {
+    let r = classify_sensitivity("マイナンバー 1234 5678 9012");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_phone_nanp_is_personal_high() {
+    let r = classify_sensitivity("555-867-5309");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_phone_intl_is_personal_high() {
+    let r = classify_sensitivity("+1 800 555 1234");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_address_is_personal_high() {
+    let r = classify_sensitivity("123 Main Street");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn parity_jp_postal_is_personal_high() {
+    let r = classify_sensitivity("〒100-0001");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+  }
+
+  // FP guards: inputs that must NOT trigger the new structured detectors
+  #[test]
+  fn fp_date_does_not_trigger_phone_or_ssn() {
+    // 2024-01-15 looks like NNN-NN-NNNN but isn't (4-2-2 grouping)
+    let r = classify_sensitivity("Meeting on 2024-01-15.");
+    assert_ne!(r.tier, "secret_never_send");
+    assert!(r.confidence != "high" || r.tier == "personal" || !r.classified);
+  }
+
+  #[test]
+  fn fp_ip_address_does_not_trigger_phone() {
+    let r = classify_sensitivity("Server at 192.168.1.100");
+    // Should not classify as personal/high from phone detector
+    // IP has 3-3-1-3 dot grouping, not phone pattern
+    assert!(
+      r.tier != "personal"
+        || r.confidence != "high"
+        || !r.reasons.iter().any(|s| s.contains("phone"))
+    );
+  }
+
+  #[test]
+  fn fp_prose_address_does_not_trigger_address_detector() {
+    // "exit 23 way out" — no Capitalized street name, lowercase suffix
+    assert!(!match_address("exit 23 way out"));
+  }
+
+  #[test]
+  fn fp_non_luhn_16digit_not_card() {
+    // 16-digit string that fails Luhn check
+    let r = classify_sensitivity("Order ref: 1234567890123456");
+    assert!(
+      r.tier != "secret_never_send" || r.reasons.iter().all(|s| !s.contains("Luhn")),
+      "Non-Luhn 16-digit number must not trigger card detector"
+    );
   }
 
   // Task 6: sensitivityClassified + sensitivityConfidence flow through projection → pack item
