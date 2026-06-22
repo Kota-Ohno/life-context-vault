@@ -202,7 +202,8 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
         : empty.connectorSessions,
     contextPackRequests: parsed.contextPackRequests ?? [],
     contextPacks: parsed.contextPacks ?? [],
-    auditEvents: parsed.auditEvents ?? []
+    auditEvents: parsed.auditEvents ?? [],
+    classifierMigrationVersion: parsed.classifierMigrationVersion
   };
   return reclassifyLegacyFacts(normalized);
 }

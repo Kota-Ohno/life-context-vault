@@ -1231,6 +1231,35 @@ describe("vault flow", () => {
     expect(fact.sensitivityConfidence).toBe("low");
   });
 
+  it("reclassifyLegacyFacts upgrades legacy persisted facts (no migration version) on load", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    // Legacy persisted state: a fact with classifier-significant text, NO classifier fields, NO migration version.
+    const legacyFact = {
+      id: "fact_legacy_email",
+      factText: "Contact me at user@example.com",
+      domain: "identity_and_profile" as const,
+      factType: "background_profile" as const,
+      sourceIds: [],
+      sensitivity: "public" as const,
+      confidence: "source_backed" as const,
+      status: "active" as const,
+      createdAt: now,
+      approvedAt: now,
+      updatedAt: now,
+      supersedesFactIds: []
+    };
+    // Strip the migration version to simulate genuinely legacy persisted JSON.
+    const legacyState: any = { ...base, facts: [legacyFact as any] };
+    delete legacyState.classifierMigrationVersion;
+    const normalized = normalizeVaultState(legacyState);
+    const fact = normalized.facts[0];
+    // The email pattern → classified true, high confidence (proves migration ran, not just defaults).
+    expect(fact.sensitivityClassified).toBe(true);
+    expect(fact.sensitivityConfidence).toBe("high");
+    expect(normalized.classifierMigrationVersion).toBe(1);
+  });
+
   it("mixed pack: one eligible item + one unclassified → pending_user_confirmation", () => {
     const base = createEmptyVault();
     const now = "2026-06-21T00:00:00.000Z";
