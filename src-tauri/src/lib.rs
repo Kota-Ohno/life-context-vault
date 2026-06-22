@@ -122,6 +122,8 @@ struct NativeFactSearchResult {
   approved_at: String,
   updated_at: String,
   rank: f64,
+  sensitivity_classified: bool,
+  sensitivity_confidence: String,
 }
 
 #[derive(Serialize)]
@@ -520,7 +522,9 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL,
         supersedes_fact_ids TEXT,
-        superseded_by_fact_id TEXT
+        superseded_by_fact_id TEXT,
+        sensitivity_classified INTEGER,
+        sensitivity_confidence TEXT
       );
 
       CREATE TABLE IF NOT EXISTS entities (
@@ -626,6 +630,8 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
   ensure_column(connection, "facts", "approved_at", "TEXT")?;
   ensure_column(connection, "facts", "supersedes_fact_ids", "TEXT")?;
   ensure_column(connection, "facts", "superseded_by_fact_id", "TEXT")?;
+  ensure_column(connection, "facts", "sensitivity_classified", "INTEGER")?;
+  ensure_column(connection, "facts", "sensitivity_confidence", "TEXT")?;
   ensure_column(connection, "memory_candidates", "conflict_with_fact_ids", "TEXT")?;
   ensure_column(connection, "memory_candidates", "conflict_reason", "TEXT")?;
   connection
@@ -770,13 +776,25 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
     let fact_approved_at = optional_str_field(fact, "approvedAt")
       .filter(|value| !value.is_empty())
       .unwrap_or_else(|| fact_updated_at.clone());
+    let fact_sensitivity_classified: i64 = fact
+      .get("sensitivityClassified")
+      .and_then(|v| v.as_bool())
+      .map(|b| if b { 1 } else { 0 })
+      .unwrap_or(0);
+    let fact_sensitivity_confidence: String = fact
+      .get("sensitivityConfidence")
+      .and_then(|v| v.as_str())
+      .filter(|s| !s.is_empty())
+      .unwrap_or("low")
+      .to_string();
     transaction
       .execute(
         "INSERT INTO facts (
           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
           status, valid_from, valid_until, due_date, created_at, approved_at, updated_at,
-          supersedes_fact_ids, superseded_by_fact_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+          supersedes_fact_ids, superseded_by_fact_id,
+          sensitivity_classified, sensitivity_confidence
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
           fact_id,
           str_field(fact, "factText"),
@@ -793,7 +811,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
           fact_approved_at,
           fact_updated_at,
           json_field(fact, "supersedesFactIds"),
-          optional_str_field(fact, "supersededByFactId")
+          optional_str_field(fact, "supersededByFactId"),
+          fact_sensitivity_classified,
+          fact_sensitivity_confidence
         ],
       )
       .map_err(|error| format!("failed to sync fact {fact_id}: {error}"))?;
@@ -1057,6 +1077,15 @@ fn row_to_native_fact_search_result(
   row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<NativeFactSearchResult> {
   let source_ids_json: String = row.get("source_ids")?;
+  // NULL ⇒ fail-closed: classified=false, confidence="low"
+  let sensitivity_classified: bool = row
+    .get::<_, Option<i64>>("sensitivity_classified")?
+    .map(|v| v != 0)
+    .unwrap_or(false);
+  let sensitivity_confidence: String = row
+    .get::<_, Option<String>>("sensitivity_confidence")?
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "low".to_string());
   Ok(NativeFactSearchResult {
     id: row.get("id")?,
     fact_text: row.get("fact_text")?,
@@ -1073,6 +1102,8 @@ fn row_to_native_fact_search_result(
     approved_at: row.get("approved_at")?,
     updated_at: row.get("updated_at")?,
     rank: row.get("rank")?,
+    sensitivity_classified,
+    sensitivity_confidence,
   })
 }
 
@@ -1105,6 +1136,8 @@ fn search_facts_in_connection(
            f.created_at,
            f.approved_at,
            f.updated_at,
+           f.sensitivity_classified,
+           f.sensitivity_confidence,
            bm25(facts_fts) AS rank
          FROM facts_fts
          JOIN facts f ON f.id = facts_fts.fact_id
@@ -1141,6 +1174,8 @@ fn search_facts_in_connection(
          created_at,
          approved_at,
          updated_at,
+         sensitivity_classified,
+         sensitivity_confidence,
          0.0 AS rank
        FROM facts
        WHERE status = 'active'
@@ -1266,7 +1301,9 @@ fn create_native_context_pack_request_in_connection(
       "sourceTitles": source_titles,
       "validFrom": fact.valid_from.clone(),
       "validUntil": fact.valid_until.clone(),
-      "confidence": fact.confidence.clone()
+      "confidence": fact.confidence.clone(),
+      "sensitivityClassified": fact.sensitivity_classified,
+      "sensitivityConfidence": fact.sensitivity_confidence.clone()
     }));
 
     if let Some(snippet) = snippet {
@@ -3597,7 +3634,9 @@ fn context_pack_item_from_fact(
     "sourceTitles": source_titles_in_connection(connection, &fact.source_ids, ceiling)?,
     "validFrom": fact.valid_from,
     "validUntil": fact.valid_until,
-    "confidence": fact.confidence
+    "confidence": fact.confidence,
+    "sensitivityClassified": fact.sensitivity_classified,
+    "sensitivityConfidence": fact.sensitivity_confidence
   }))
 }
 
@@ -3672,6 +3711,8 @@ fn fact_by_id_in_connection(
          created_at,
          approved_at,
          updated_at,
+         sensitivity_classified,
+         sensitivity_confidence,
          0.0 AS rank
        FROM facts
        WHERE id = ?1",
@@ -3845,6 +3886,8 @@ fn context_candidate_facts_in_connection(
        created_at,
        approved_at,
        updated_at,
+       sensitivity_classified,
+       sensitivity_confidence,
        0.0 AS rank
      FROM facts
      WHERE domain IN ({domains_sql})
@@ -12264,5 +12307,155 @@ mod tests {
     parity_check("The weather is nice today.");
     parity_check("I bought groceries at the store.");
     parity_check("Meeting at 3pm in the conference room.");
+  }
+
+  // Task 6: sensitivityClassified + sensitivityConfidence flow through projection → pack item
+
+  #[test]
+  fn pack_item_carries_sensitivity_classified_and_confidence_from_fact_json() {
+    // A fact with sensitivityClassified:true, sensitivityConfidence:"high" in canonical JSON
+    // must surface both fields on the resulting pack item.
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    // Use contracts_and_policies domain (same as the existing pack test) so
+    // rank_context_facts_in_connection scores the fact > 0.
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [
+        {
+          "id": "src_contract",
+          "kind": "manual_note",
+          "title": "Contract note",
+          "origin": "manual_entry",
+          "body": "Insurance policy renews on 2026-09-01.",
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "capturedAt": "2026-06-01T00:00:00.000Z",
+          "defaultSensitivity": "private_consequential",
+          "processingStatus": "ready",
+          "deletionState": "active"
+        }
+      ],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_contract_classified",
+          "factText": "Insurance policy renews on 2026-09-01.",
+          "domain": "contracts_and_policies",
+          "factType": "deadline",
+          "sourceIds": ["src_contract"],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "sensitivityClassified": true,
+          "sensitivityConfidence": "high",
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "approvedAt": "2026-06-01T00:10:00.000Z",
+          "updatedAt": "2026-06-01T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_test",
+          "clientId": "conn_test",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["contracts_and_policies"],
+          "sensitivityCeiling": "private_consequential",
+          "requiresApprovalAbove": "personal",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "updatedAt": "2026-06-01T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    let (_request_id, _pack_id) = create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_test",
+      "TestClient",
+      "What should I check for insurance renewal?",
+      None,
+      Some("private_consequential"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack created");
+
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    assert_eq!(items.len(), 1, "expected one pack item");
+    let item = &items[0];
+    assert_eq!(
+      item.get("factId").and_then(Value::as_str),
+      Some("fact_contract_classified"),
+      "factId mismatch"
+    );
+    assert_eq!(
+      item.get("sensitivityClassified").and_then(Value::as_bool),
+      Some(true),
+      "sensitivityClassified must be true (from canonical JSON)"
+    );
+    assert_eq!(
+      item.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("high"),
+      "sensitivityConfidence must be 'high' (from canonical JSON)"
+    );
+  }
+
+  #[test]
+  fn pack_item_null_columns_map_to_fail_closed_defaults() {
+    // A fact row with NULL sensitivity_classified / sensitivity_confidence columns
+    // (legacy schema) must map to classified=false, confidence="low" (fail-closed).
+    let connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+
+    // Directly INSERT a fact row with NULLs for the new columns, simulating a
+    // pre-Task-6 vault that has never written sensitivityClassified.
+    connection
+      .execute(
+        "INSERT INTO facts (
+           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
+           status, created_at, approved_at, updated_at,
+           sensitivity_classified, sensitivity_confidence
+         ) VALUES (
+           'fact_legacy', 'Legacy fact text.', 'health', 'note', '[]',
+           'sensitive', 'source_backed', 'active',
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+           NULL, NULL
+         )",
+        [],
+      )
+      .expect("insert legacy fact");
+    connection
+      .execute(
+        "INSERT INTO facts_fts (fact_id, fact_text, domain) VALUES ('fact_legacy', 'Legacy fact text.', 'health')",
+        [],
+      )
+      .expect("insert legacy fts");
+
+    let result = fact_by_id_in_connection(&connection, "fact_legacy")
+      .expect("query ok")
+      .expect("fact exists");
+
+    assert!(
+      !result.sensitivity_classified,
+      "NULL sensitivity_classified must map to false (fail-closed)"
+    );
+    assert_eq!(
+      result.sensitivity_confidence, "low",
+      "NULL sensitivity_confidence must map to 'low' (fail-closed)"
+    );
   }
 }
