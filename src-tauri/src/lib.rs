@@ -9385,6 +9385,103 @@ fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), S
   Ok(())
 }
 
+// ─── Delivery notification selector (P2 OS notifications) ────────────────────
+
+/// Counts and client names only — NO fact/source/candidate text ever enters this struct.
+#[derive(Debug, PartialEq)]
+pub struct DeliveryNotice {
+  /// Per-client human-readable name + count of zero-touch deliveries.
+  pub per_client: Vec<(String, usize)>,
+  /// Total zero-touch deliveries across all clients.
+  pub total: usize,
+  /// The `id` of the newest qualifying audit event (used as the next `last_seen_id`).
+  pub newest_event_id: String,
+}
+
+/// Pure, content-free selector for zero-touch delivery notifications.
+///
+/// Scans `events` (an ordered slice of `auditEvents` JSON values, oldest-first) for
+/// `context_pack_delivered` events that:
+///   - have `metadata.zeroTouch == true` (zero-touch / confirmation-not-required deliveries), and
+///   - have an `id` that comes AFTER `last_seen_id` in the slice order.
+///
+/// Returns `None` when:
+///   - `opted_in` is `false`, OR
+///   - there are no qualifying events after `last_seen_id`.
+///
+/// `DeliveryNotice.per_client` is sorted by client name for determinism.
+///
+/// ASSUMPTION: A `context_pack_delivered` event does not yet exist in the codebase.
+/// Task 3 will add it with `metadata.zeroTouch` (bool) and `metadata.clientName` (string).
+/// This function is designed against that expected schema.  When current audit events
+/// (`context_pack_generated`, `context_pack_confirmed`, …) are scanned, all will simply
+/// produce zero matches because none carry `eventType == "context_pack_delivered"`.
+pub fn select_delivery_notification(
+  events: &[serde_json::Value],
+  last_seen_id: Option<&str>,
+  opted_in: bool,
+) -> Option<DeliveryNotice> {
+  if !opted_in {
+    return None;
+  }
+
+  // Skip events up-to-and-including last_seen_id.
+  let skip_before = last_seen_id.map(|seen| {
+    events
+      .iter()
+      .position(|e| e.get("id").and_then(Value::as_str) == Some(seen))
+      .map(|pos| pos + 1) // start AFTER the seen event
+      .unwrap_or(events.len()) // unknown id → treat all as already seen
+  });
+  let new_events = &events[skip_before.unwrap_or(0)..];
+
+  // Collect zero-touch deliveries by client name.
+  let mut per_client: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+  let mut newest_event_id = String::new();
+
+  for event in new_events {
+    let event_type = event.get("eventType").and_then(Value::as_str).unwrap_or("");
+    if event_type != "context_pack_delivered" {
+      continue;
+    }
+    let metadata = match event.get("metadata") {
+      Some(m) => m,
+      None => continue,
+    };
+    let zero_touch = metadata
+      .get("zeroTouch")
+      .and_then(Value::as_bool)
+      .unwrap_or(false);
+    if !zero_touch {
+      continue;
+    }
+    // Content-free: we only read the human display name, never any fact/source/candidate text.
+    let client_name = metadata
+      .get("clientName")
+      .and_then(Value::as_str)
+      .unwrap_or("Unknown client")
+      .to_string();
+    *per_client.entry(client_name).or_insert(0) += 1;
+    if let Some(id) = event.get("id").and_then(Value::as_str) {
+      newest_event_id = id.to_string();
+    }
+  }
+
+  if per_client.is_empty() {
+    return None;
+  }
+
+  let mut per_client_vec: Vec<(String, usize)> = per_client.into_iter().collect();
+  per_client_vec.sort_by(|a, b| a.0.cmp(&b.0));
+  let total = per_client_vec.iter().map(|(_, c)| c).sum();
+
+  Some(DeliveryNotice {
+    per_client: per_client_vec,
+    total,
+    newest_event_id,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -14826,5 +14923,194 @@ mod tests {
       "override sensitivity must be persisted"
     );
     remove_temp_vault(&path);
+  }
+
+  // ── select_delivery_notification tests ─────────────────────────────────────
+
+  fn make_delivery_event(id: &str, client_name: &str, zero_touch: bool) -> serde_json::Value {
+    json!({
+      "id": id,
+      "eventType": "context_pack_delivered",
+      "actor": "vault_core",
+      "subjectType": "context_pack",
+      "subjectId": format!("pack_{id}"),
+      "occurredAt": "2025-01-01T00:00:00.000Z",
+      "sensitivity": "low",
+      "metadata": {
+        "clientName": client_name,
+        "zeroTouch": zero_touch
+      }
+    })
+  }
+
+  fn make_other_event(id: &str, event_type: &str) -> serde_json::Value {
+    json!({
+      "id": id,
+      "eventType": event_type,
+      "actor": "vault_core",
+      "subjectType": "context_pack",
+      "subjectId": format!("pack_{id}"),
+      "occurredAt": "2025-01-01T00:00:00.000Z",
+      "sensitivity": "low",
+      "metadata": {
+        "clientName": "ChatGPT",
+        "generatedBy": "native_vault_core"
+      }
+    })
+  }
+
+  #[test]
+  fn select_delivery_opted_out_returns_none() {
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    assert_eq!(
+      select_delivery_notification(&events, None, false),
+      None,
+      "opted-out must return None regardless of events"
+    );
+  }
+
+  #[test]
+  fn select_delivery_no_events_returns_none() {
+    assert_eq!(
+      select_delivery_notification(&[], None, true),
+      None,
+      "empty event list must return None"
+    );
+  }
+
+  #[test]
+  fn select_delivery_coalesces_per_client() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+      make_delivery_event("audit_3", "ChatGPT", true),
+    ];
+    let notice =
+      select_delivery_notification(&events, None, true).expect("should produce a DeliveryNotice");
+    // Sorted by name: ChatGPT before Claude
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 2), ("Claude".to_string(), 1),],
+      "per_client must be coalesced and sorted by name"
+    );
+    assert_eq!(notice.total, 3, "total must sum across all clients");
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_confirmed_not_counted() {
+    // zero_touch=false means the user confirmed → must NOT be counted
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", false),
+      make_delivery_event("audit_2", "Claude", false),
+    ];
+    assert_eq!(
+      select_delivery_notification(&events, None, true),
+      None,
+      "user-confirmed deliveries (zeroTouch=false) must not produce a notice"
+    );
+  }
+
+  #[test]
+  fn select_delivery_mixed_zero_touch_and_confirmed() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", false), // confirmed — skip
+      make_delivery_event("audit_2", "Claude", true),   // zero-touch — count
+      make_delivery_event("audit_3", "ChatGPT", true),  // zero-touch — count
+    ];
+    let notice = select_delivery_notification(&events, None, true)
+      .expect("should notice the zero-touch deliveries");
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 1), ("Claude".to_string(), 1),]
+    );
+    assert_eq!(notice.total, 2);
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_last_seen_excludes_older_events() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+      make_delivery_event("audit_3", "ChatGPT", true),
+    ];
+    // last_seen_id = audit_2 → only audit_3 is new
+    let notice = select_delivery_notification(&events, Some("audit_2"), true)
+      .expect("audit_3 is new and should produce a notice");
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 1)],
+      "only events after last_seen_id must be included"
+    );
+    assert_eq!(notice.total, 1);
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_all_before_last_seen_returns_none() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+    ];
+    // All events are at/before last_seen_id
+    assert_eq!(
+      select_delivery_notification(&events, Some("audit_2"), true),
+      None,
+      "no new events after last_seen_id must return None"
+    );
+  }
+
+  #[test]
+  fn select_delivery_last_seen_is_first_excludes_it() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+    ];
+    // last_seen = audit_1 → audit_2 is new
+    let notice =
+      select_delivery_notification(&events, Some("audit_1"), true).expect("audit_2 is new");
+    assert_eq!(notice.per_client, vec![("Claude".to_string(), 1)]);
+    assert_eq!(notice.newest_event_id, "audit_2");
+  }
+
+  #[test]
+  fn select_delivery_unknown_last_seen_id_returns_none() {
+    // Unknown last_seen_id → treat all as already seen → no new events
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    assert_eq!(
+      select_delivery_notification(&events, Some("audit_unknown_xyz"), true),
+      None,
+      "unknown last_seen_id must treat all events as already seen"
+    );
+  }
+
+  #[test]
+  fn select_delivery_non_delivery_events_not_counted() {
+    // context_pack_generated and context_pack_confirmed do NOT count
+    let events = vec![
+      make_other_event("audit_1", "context_pack_generated"),
+      make_other_event("audit_2", "context_pack_confirmed"),
+      make_other_event("audit_3", "context_pack_requested"),
+    ];
+    assert_eq!(
+      select_delivery_notification(&events, None, true),
+      None,
+      "non-delivery event types must not produce a notice"
+    );
+  }
+
+  #[test]
+  fn select_delivery_notice_contains_no_fact_or_source_content() {
+    // The DeliveryNotice struct must only carry client name + count
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    let notice = select_delivery_notification(&events, None, true).unwrap();
+    // Verify fields: only per_client (name+count), total, newest_event_id
+    let (name, count) = &notice.per_client[0];
+    assert_eq!(name, "ChatGPT");
+    assert_eq!(*count, 1usize);
+    assert_eq!(notice.total, 1);
+    // If this compiled and runs, no fact/source/candidate data can exist in DeliveryNotice
+    // (the struct definition enforces it at the type level)
   }
 }
