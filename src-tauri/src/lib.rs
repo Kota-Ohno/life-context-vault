@@ -4878,10 +4878,12 @@ fn match_card_luhn(text: &str) -> bool {
         }
         j += 1;
       }
-      // Require word boundary before: preceding char must not be digit
-      let before_ok = start == 0 || !bytes[start - 1].is_ascii_digit();
-      // Require word boundary after: char at j must not be digit
-      let after_ok = j >= len || !bytes[j].is_ascii_digit();
+      // Require word boundary before: preceding char must not be alphanumeric or '_'
+      // (mirrors JS \b where _ is a word char, so "VISA4111..." is not a match)
+      let before_ok =
+        start == 0 || (!bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_');
+      // Require word boundary after: char at j must not be alphanumeric or '_'
+      let after_ok = j >= len || (!bytes[j].is_ascii_alphanumeric() && bytes[j] != b'_');
       if before_ok && after_ok && buf.len() >= 13 && buf.len() <= 19 {
         if luhn_valid(&buf) {
           return true;
@@ -4907,7 +4909,8 @@ fn match_ssn(text: &str) -> bool {
   let mut i = 0;
   while i + 10 <= len {
     // Check \b\d{3}-\d{2}-\d{4}\b(?!-)
-    let word_before = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+    // Mirror JS \b: treat '_' as a word char in addition to alphanumeric.
+    let word_before = i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
     if word_before
       && bytes[i].is_ascii_digit()
       && bytes[i + 1].is_ascii_digit()
@@ -4921,8 +4924,9 @@ fn match_ssn(text: &str) -> bool {
       && bytes[i + 9].is_ascii_digit()
       && bytes[i + 10].is_ascii_digit()
     {
-      // Word boundary after: next char must not be alphanumeric
-      let after_ok = i + 11 >= len || !bytes[i + 11].is_ascii_alphanumeric();
+      // Word boundary after: next char must not be alphanumeric or '_' (JS \b treats '_' as word char)
+      let after_ok =
+        i + 11 >= len || (!bytes[i + 11].is_ascii_alphanumeric() && bytes[i + 11] != b'_');
       // Negative lookahead (?!-): next char must not be '-'
       let not_dash = i + 11 >= len || bytes[i + 11] != b'-';
       if after_ok && not_dash {
@@ -4993,7 +4997,7 @@ fn match_iban(text: &str) -> bool {
             let c = chars[end];
             !c.is_alphanumeric()
           };
-          if word_after && (trailing >= 1 || group_count >= 2) {
+          if word_after && trailing >= 1 {
             // Minimum total chars: 2+2 + 2*(4+1) = 14, but require at least a meaningful IBAN
             let raw_len = end - i;
             if raw_len >= 15 {
@@ -5149,8 +5153,8 @@ fn match_phone(text: &str) -> bool {
     }
 
     // Pattern 3: \b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b  (NANP 3-3-4)
-    // Word boundary before
-    let word_before = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+    // Word boundary before — mirror JS \b: '_' is also a word char.
+    let word_before = i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
     if word_before
       && i + 11 <= len
       && bytes[i].is_ascii_digit()
@@ -5233,6 +5237,10 @@ fn match_address(text: &str) -> bool {
             k += 1;
           }
           let word: String = chars[word_start..k].iter().collect();
+          // TS pattern [A-Z][A-Za-z]+ requires ≥2 chars; single-char words do not count.
+          if word.len() < 2 {
+            break;
+          }
           // Check if this word is a street suffix
           let is_suffix = SUFFIXES.contains(&word.as_str());
           if is_suffix && word_count >= 1 {
@@ -14118,6 +14126,101 @@ mod tests {
     assert!(
       r.tier != "secret_never_send" || r.reasons.iter().all(|s| !s.contains("Luhn")),
       "Non-Luhn 16-digit number must not trigger card detector"
+    );
+  }
+
+  // ── D1: card letter-adjacency parity tests ──────────────────────────────
+  #[test]
+  fn parity_d1_card_letter_adjacent_left_not_matched() {
+    // "VISA4111111111111111" — 'A' is ASCII-alphabetic, adjacent to the digit run.
+    // TS \b\d{13,19}\b rejects this (no word boundary between 'A' and '4').
+    // Rust must now also reject it.
+    assert!(
+      !match_card_luhn("VISA4111111111111111"),
+      "letter-adjacent card (VISA4111...) must NOT match after D1 fix"
+    );
+  }
+
+  #[test]
+  fn parity_d1_card_underscore_adjacent_not_matched() {
+    // Underscore is a JS word char, so _4111111111111111 has no \b before the digits.
+    assert!(
+      !match_card_luhn("_4111111111111111"),
+      "underscore-adjacent card must NOT match"
+    );
+  }
+
+  #[test]
+  fn parity_d1_card_space_adjacent_still_matches() {
+    // Space is not a word char — word boundary holds, should still match.
+    assert!(
+      match_card_luhn("card: 4111111111111111"),
+      "space-separated valid Luhn card must still match"
+    );
+  }
+
+  // ── D2: IBAN no-partial-tail parity tests ────────────────────────────────
+  #[test]
+  fn parity_d2_iban_no_trailing_group_not_matched() {
+    // XX99AAAABBBBCCCC — body is exactly N×4 chars, no partial tail.
+    // TS /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{1,3}\b/
+    // requires a mandatory 1-3 char trailing group, so this must NOT match.
+    assert!(
+      !match_iban("XX99AAAABBBBCCCC"),
+      "IBAN with no partial trailing group must NOT match after D2 fix"
+    );
+  }
+
+  #[test]
+  fn parity_d2_iban_real_de_still_matches() {
+    // DE89 3704 0044 0532 0130 00 — real IBAN with 2-char trailing group "00".
+    assert!(
+      match_iban("DE89 3704 0044 0532 0130 00"),
+      "real DE IBAN must still match after D2 fix"
+    );
+  }
+
+  // ── D3: address single-char name word parity tests ───────────────────────
+  #[test]
+  fn parity_d3_address_single_char_name_word_not_matched() {
+    // "5 A Street" — 'A' is only 1 char; TS [A-Z][A-Za-z]+ requires ≥2 chars.
+    assert!(
+      !match_address("5 A Street"),
+      "single-char name word '5 A Street' must NOT match after D3 fix"
+    );
+    // Same for another suffix
+    assert!(
+      !match_address("5 B Way"),
+      "single-char name word '5 B Way' must NOT match after D3 fix"
+    );
+  }
+
+  #[test]
+  fn parity_d3_address_multi_char_name_still_matches() {
+    // Real address with 2+ char name words must still match.
+    assert!(
+      match_address("123 Main Street, Springfield"),
+      "valid multi-char address must still match after D3 fix"
+    );
+  }
+
+  // ── D4: underscore word-boundary parity for SSN ──────────────────────────
+  #[test]
+  fn parity_d4_ssn_underscore_adjacent_not_matched() {
+    // "123-45-6789_record" — trailing '_' is a JS word char, so TS \b rejects this.
+    // Rust must also reject it.
+    assert!(
+      !match_ssn("123-45-6789_record"),
+      "underscore-adjacent SSN suffix must NOT match after D4 fix"
+    );
+  }
+
+  #[test]
+  fn parity_d4_ssn_leading_underscore_not_matched() {
+    // "_123-45-6789" — leading '_' is a JS word char, so no \b before digits.
+    assert!(
+      !match_ssn("_123-45-6789"),
+      "underscore-prefixed SSN must NOT match after D4 fix"
     );
   }
 
