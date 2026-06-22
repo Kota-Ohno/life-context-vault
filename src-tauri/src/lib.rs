@@ -4297,8 +4297,10 @@ fn match_credential_assignment(text: &str) -> bool {
 
   // Check compound keywords (api key, private key, recovery code) with optional separator
   for (w1, w2) in &compound_kw {
-    // Build variants: "api key", "api_key", "api-key"
+    // Build variants: "apikey", "api key", "api_key", "api-key"
+    // The zero-separator form is required to match TS regex api[_\s-]?key (? = 0 or 1)
     let variants = [
+      format!("{}{}", w1, w2),
       format!("{} {}", w1, w2),
       format!("{}_{}", w1, w2),
       format!("{}-{}", w1, w2),
@@ -4391,9 +4393,9 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
 
   fn bare_credential_en(t: &str) -> bool {
     let lower = t.to_lowercase();
-    contains_any(&lower, &["password", "passcode", "api key", "api_key", "api-key",
-      "token", "secret", "private key", "private_key", "private-key",
-      "recovery code", "recovery_code", "recovery-code"])
+    contains_any(&lower, &["password", "passcode", "apikey", "api key", "api_key", "api-key",
+      "token", "secret", "privatekey", "private key", "private_key", "private-key",
+      "recoverycode", "recovery code", "recovery_code", "recovery-code"])
   }
   fn bare_national_bank_en(t: &str) -> bool {
     let lower = t.to_lowercase();
@@ -4402,9 +4404,7 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
       "bank account", "bank_account"])
   }
   fn bare_national_bank_ja(t: &str) -> bool {
-    t.contains('口') && t.contains('座') && t.contains('番') // 口座番号
-      || t.contains('マ') && t.contains('イ') && t.contains('ナ') && t.contains('ン') && t.contains('バ') // マイナンバー (partial)
-      || contains_any(t, &["口座番号", "マイナンバー"])
+    contains_any(t, &["口座番号", "マイナンバー"])
   }
   fn bare_credential_ja(t: &str) -> bool {
     contains_any(t, &["パスワード", "秘密鍵"])
@@ -12135,6 +12135,42 @@ mod tests {
     assert!(confidence_rank("medium") > confidence_rank("low"));
     assert_eq!(confidence_rank("low"), 0);
     assert_eq!(confidence_rank("high"), 2);
+  }
+
+  // ── Task-5 review: zero-separator credential compounds ────────────────────
+  #[test]
+  fn classify_sensitivity_apikey_no_separator_returns_secret_never_send_high() {
+    // "apikey=sk-123" must match structured credential assignment (high confidence)
+    // TS regex: api[_\s-]?key  (separator is optional)
+    let r = classify_sensitivity("apikey=sk-123");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_privatekey_no_separator_returns_secret_never_send_high() {
+    let r = classify_sensitivity("privatekey=-----BEGIN RSA PRIVATE KEY-----");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_recoverycode_no_separator_returns_secret_never_send_high() {
+    let r = classify_sensitivity("recoverycode=abc-def-ghi");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  // ── Task-5 review: bare_national_bank_ja substring-only (no false positives) ──
+  #[test]
+  fn classify_sensitivity_non_contiguous_kanji_does_not_trigger_ja_identity() {
+    // 口, 座, 番 appear but not as the substring 口座番号 — must NOT classify as secret
+    let r = classify_sensitivity("口演と座席と番地の話題です。");
+    // Should not trigger secret_never_send via bare_national_bank_ja
+    assert_ne!(r.tier, "secret_never_send");
   }
 
   // ── Parity tests: classify_sensitivity tier >= detect_sensitivity tier ─────
