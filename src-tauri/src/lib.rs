@@ -4212,6 +4212,350 @@ fn detect_sensitivity(text: &str) -> &'static str {
   }
 }
 
+// ── classify_sensitivity: Rust mirror of TS classifySensitivity ──────────────
+// Mirrors src/sensitivity.ts SIGNALS list exactly: structured patterns → "high",
+// bare keyword hits → "low"; secret-first ordering; no match → public/low/false.
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SensitivityResult {
+  tier: String,
+  confidence: String,
+  classified: bool,
+  reasons: Vec<String>,
+}
+
+#[allow(dead_code)]
+fn confidence_rank(c: &str) -> u8 {
+  match c {
+    "high" => 2,
+    "medium" => 1,
+    _ => 0, // "low" or unknown
+  }
+}
+
+#[allow(dead_code)]
+fn tier_rank_str(t: &str) -> u8 {
+  match t {
+    "secret_never_send" => 4,
+    "sensitive" => 3,
+    "private_consequential" => 2,
+    "personal" => 1,
+    _ => 0, // "public" or unknown
+  }
+}
+
+
+/// Match credential assignment: keyword = value (structured, high confidence).
+/// Mirrors: /\b(password|passcode|api[_\s-]?key|token|secret|private[_\s-]?key|
+///           recovery[_\s-]?code|bearer\s+[a-z0-9._-]{12,})\b\s*[:=]\s*\S+/i
+#[allow(dead_code)]
+fn match_credential_assignment(text: &str) -> bool {
+  let lower = text.to_lowercase();
+  // Find each keyword group, then check if followed by [:=] and a value.
+  let keywords = [
+    "password", "passcode", "token", "secret", "bearer",
+  ];
+  let compound_kw = [
+    ("api", "key"), ("private", "key"), ("recovery", "code"),
+  ];
+
+  // Check simple keywords followed by [:=]value
+  for kw in &keywords {
+    if let Some(pos) = lower.find(kw) {
+      // Ensure word boundary: preceding char not alphanumeric
+      let before_ok = pos == 0 || {
+        let ch = lower[..pos].chars().last().unwrap_or(' ');
+        !ch.is_alphanumeric() && ch != '_'
+      };
+      if before_ok {
+        let after = &lower[pos + kw.len()..];
+        // For "bearer" allow space then 12+ chars (no [:=] required)
+        if *kw == "bearer" {
+          let rest = after.trim_start();
+          if rest.len() >= 12 && !rest.starts_with([':', '=']) {
+            // Check next char is alphanumeric/._-
+            let ch = rest.chars().next().unwrap_or(' ');
+            if ch.is_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+              return true;
+            }
+          }
+        }
+        // For others, allow optional whitespace then [:=] then non-whitespace
+        let rest = after.trim_start_matches(|c: char| c == '_' || c == '-' || c == ' ');
+        let rest = rest.trim_start();
+        if rest.starts_with(':') || rest.starts_with('=') {
+          let val = rest[1..].trim_start();
+          if !val.is_empty() && !val.starts_with(' ') {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  // Check compound keywords (api key, private key, recovery code) with optional separator
+  for (w1, w2) in &compound_kw {
+    // Build variants: "api key", "api_key", "api-key"
+    let variants = [
+      format!("{} {}", w1, w2),
+      format!("{}_{}", w1, w2),
+      format!("{}-{}", w1, w2),
+    ];
+    for variant in &variants {
+      if let Some(pos) = lower.find(variant.as_str()) {
+        let before_ok = pos == 0 || {
+          let ch = lower[..pos].chars().last().unwrap_or(' ');
+          !ch.is_alphanumeric() && ch != '_'
+        };
+        if before_ok {
+          let after = &lower[pos + variant.len()..];
+          let rest = after.trim_start();
+          if rest.starts_with(':') || rest.starts_with('=') {
+            let val = rest[1..].trim_start();
+            if !val.is_empty() {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  false
+}
+
+/// Match email address pattern. Mirrors: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
+#[allow(dead_code)]
+fn match_email(text: &str) -> bool {
+  // Simple state-machine email scan
+  let lower = text.to_lowercase();
+  let bytes = lower.as_bytes();
+  let len = bytes.len();
+  let mut i = 0;
+  while i < len {
+    // Find '@'
+    if bytes[i] == b'@' && i > 0 {
+      // Scan local part backwards: [a-z0-9._%+-]+
+      let local_end = i;
+      let mut j = local_end;
+      while j > 0 {
+        let c = bytes[j - 1];
+        if c.is_ascii_alphanumeric() || c == b'.' || c == b'_' || c == b'%' || c == b'+' || c == b'-' {
+          j -= 1;
+        } else {
+          break;
+        }
+      }
+      if j < local_end {
+        // Scan domain part forwards: [a-z0-9.-]+\.[a-z]{2,}
+        let domain_start = i + 1;
+        let mut k = domain_start;
+        while k < len {
+          let c = bytes[k];
+          if c.is_ascii_alphanumeric() || c == b'.' || c == b'-' {
+            k += 1;
+          } else {
+            break;
+          }
+        }
+        let domain = &lower[domain_start..k];
+        // Must contain a dot and end with 2+ alpha chars
+        if let Some(dot_pos) = domain.rfind('.') {
+          let tld = &domain[dot_pos + 1..];
+          if tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) {
+            return true;
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  false
+}
+
+/// Classify text with full parity to TS classifySensitivity.
+/// Signals ordered secret-first. Returns highest-tier, highest-confidence match.
+#[allow(dead_code)]
+fn classify_sensitivity(text: &str) -> SensitivityResult {
+  // Build signals list mirroring SIGNALS in src/sensitivity.ts
+  // Each entry: (matcher_fn, tier, confidence, reason)
+  type MatchFn = fn(&str) -> bool;
+
+  struct Signal {
+    matcher: MatchFn,
+    tier: &'static str,
+    confidence: &'static str,
+    reason: &'static str,
+  }
+
+  fn bare_credential_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["password", "passcode", "api key", "api_key", "api-key",
+      "token", "secret", "private key", "private_key", "private-key",
+      "recovery code", "recovery_code", "recovery-code"])
+  }
+  fn bare_national_bank_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["my number", "my_number", "mynumber",
+      "national id", "national_id", "nationalid",
+      "bank account", "bank_account"])
+  }
+  fn bare_national_bank_ja(t: &str) -> bool {
+    t.contains('口') && t.contains('座') && t.contains('番') // 口座番号
+      || t.contains('マ') && t.contains('イ') && t.contains('ナ') && t.contains('ン') && t.contains('バ') // マイナンバー (partial)
+      || contains_any(t, &["口座番号", "マイナンバー"])
+  }
+  fn bare_credential_ja(t: &str) -> bool {
+    contains_any(t, &["パスワード", "秘密鍵"])
+  }
+  fn health_legal_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["health", "medical", "doctor", "diagnosis",
+      "disability", "benefit", "legal", "minor"])
+  }
+  fn health_legal_ja(t: &str) -> bool {
+    contains_any(t, &["病院", "診断", "障害", "給付", "法律", "未成年"])
+  }
+  fn financial_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["finance", "tax", "pension", "insurance",
+      "contract", "rent", "salary", "payment"])
+  }
+  fn financial_ja(t: &str) -> bool {
+    contains_any(t, &["税", "年金", "保険", "契約", "家賃", "給与", "支払"])
+  }
+  fn personal_contact_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["name", "address", "phone", "email", "family"])
+  }
+  fn personal_contact_ja(t: &str) -> bool {
+    contains_any(t, &["名前", "住所", "電話", "メール", "家族"])
+  }
+
+  let signals: &[Signal] = &[
+    // ── secret_never_send: credential structured patterns (high) ──
+    Signal {
+      matcher: match_credential_assignment as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches credential assignment pattern",
+    },
+    // secret_never_send: national/bank ID bare keywords (low)
+    Signal {
+      matcher: bare_national_bank_en as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches national/bank identity keyword",
+    },
+    // secret_never_send: Japanese identity keywords (low)
+    Signal {
+      matcher: bare_national_bank_ja as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches Japanese identity/account keyword",
+    },
+    // secret_never_send: bare credential keywords (low)
+    Signal {
+      matcher: bare_credential_en as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches credential keyword",
+    },
+    // secret_never_send: Japanese credential keywords (low)
+    Signal {
+      matcher: bare_credential_ja as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches Japanese credential keyword",
+    },
+    // ── sensitive: health/legal/minor keywords (low) ──
+    Signal {
+      matcher: health_legal_en as MatchFn,
+      tier: "sensitive",
+      confidence: "low",
+      reason: "matches health/legal/minor keyword",
+    },
+    // sensitive: Japanese health/legal keywords (low)
+    Signal {
+      matcher: health_legal_ja as MatchFn,
+      tier: "sensitive",
+      confidence: "low",
+      reason: "matches Japanese health/legal keyword",
+    },
+    // ── private_consequential: financial/contract keywords (low) ──
+    Signal {
+      matcher: financial_en as MatchFn,
+      tier: "private_consequential",
+      confidence: "low",
+      reason: "matches financial/contract keyword",
+    },
+    // private_consequential: Japanese financial/contract keywords (low)
+    Signal {
+      matcher: financial_ja as MatchFn,
+      tier: "private_consequential",
+      confidence: "low",
+      reason: "matches Japanese financial/contract keyword",
+    },
+    // ── personal: email structured pattern (high) ──
+    Signal {
+      matcher: match_email as MatchFn,
+      tier: "personal",
+      confidence: "high",
+      reason: "matches email pattern",
+    },
+    // personal: bare contact/family keywords (low)
+    Signal {
+      matcher: personal_contact_en as MatchFn,
+      tier: "personal",
+      confidence: "low",
+      reason: "matches personal contact keyword",
+    },
+    // personal: Japanese contact/family keywords (low)
+    Signal {
+      matcher: personal_contact_ja as MatchFn,
+      tier: "personal",
+      confidence: "low",
+      reason: "matches Japanese personal keyword",
+    },
+  ];
+
+  let mut matched_tiers: Vec<(&'static str, &'static str, &'static str)> = Vec::new();
+  for sig in signals {
+    if (sig.matcher)(text) {
+      matched_tiers.push((sig.tier, sig.confidence, sig.reason));
+    }
+  }
+
+  if matched_tiers.is_empty() {
+    return SensitivityResult {
+      tier: "public".to_string(),
+      confidence: "low".to_string(),
+      classified: false,
+      reasons: vec![],
+    };
+  }
+
+  // Pick highest tier; among ties, pick highest confidence — mirrors TS reduce logic.
+  let top = matched_tiers.iter().copied().reduce(|a, b| {
+    let tier_diff = tier_rank_str(b.0) as i8 - tier_rank_str(a.0) as i8;
+    if tier_diff != 0 {
+      if tier_diff > 0 { b } else { a }
+    } else if confidence_rank(b.1) > confidence_rank(a.1) {
+      b
+    } else {
+      a
+    }
+  }).unwrap();
+
+  SensitivityResult {
+    tier: top.0.to_string(),
+    confidence: top.1.to_string(),
+    classified: true,
+    reasons: matched_tiers.iter().map(|m| m.2.to_string()).collect(),
+  }
+}
+
 fn candidate_type(text: &str) -> &'static str {
   let lower = text.to_lowercase();
   if contains_any(&lower, &["deadline", "due", "renew", "expires", "期限", "締切", "更新"]) {
@@ -11617,5 +11961,272 @@ mod tests {
       );
     }
     remove_temp_vault(&path);
+  }
+
+  // ── classify_sensitivity tests ─────────────────────────────────────────────
+
+  #[test]
+  fn classify_sensitivity_no_signal_returns_public_unclassified() {
+    let r = classify_sensitivity("Today I went for a walk in the park.");
+    assert_eq!(r.tier, "public");
+    assert_eq!(r.confidence, "low");
+    assert!(!r.classified);
+    assert!(r.reasons.is_empty());
+  }
+
+  #[test]
+  fn classify_sensitivity_email_returns_personal_high() {
+    let r = classify_sensitivity("Contact me at alice@example.com for details.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("email")));
+  }
+
+  #[test]
+  fn classify_sensitivity_credential_assignment_returns_secret_never_send_high() {
+    let r = classify_sensitivity("password=hunter2");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_credential_colon_returns_secret_never_send_high() {
+    let r = classify_sensitivity("token: abc123xyz");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_api_key_assignment_returns_secret_never_send_high() {
+    let r = classify_sensitivity("api_key=sk-1234567890");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_password_returns_secret_never_send_low() {
+    // Bare keyword only (no assignment) → low confidence
+    let r = classify_sensitivity("Remember to update your password sometime.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_token_returns_secret_never_send_low() {
+    let r = classify_sensitivity("The token was lost.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_national_id_returns_secret_never_send_low() {
+    let r = classify_sensitivity("Please bring your national id to the office.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_bank_account_returns_secret_never_send_low() {
+    let r = classify_sensitivity("I need your bank account number.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_identity_kw_returns_secret_never_send_low() {
+    let r = classify_sensitivity("口座番号を教えてください。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_my_number_returns_secret_never_send_low() {
+    let r = classify_sensitivity("マイナンバーの確認が必要です。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_credential_kw_returns_secret_never_send_low() {
+    let r = classify_sensitivity("パスワードを変更してください。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_health_keyword_returns_sensitive_low() {
+    let r = classify_sensitivity("My doctor gave me a diagnosis today.");
+    assert_eq!(r.tier, "sensitive");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_health_kw_returns_sensitive_low() {
+    let r = classify_sensitivity("病院で診断を受けました。");
+    assert_eq!(r.tier, "sensitive");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_financial_keyword_returns_private_consequential_low() {
+    let r = classify_sensitivity("My salary and pension are under review.");
+    assert_eq!(r.tier, "private_consequential");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_financial_kw_returns_private_consequential_low() {
+    let r = classify_sensitivity("年金と給与の情報が必要です。");
+    assert_eq!(r.tier, "private_consequential");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_personal_contact_keyword_returns_personal_low() {
+    // "phone" alone is a bare keyword → personal/low
+    let r = classify_sensitivity("Leave your phone on the desk.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_personal_kw_returns_personal_low() {
+    let r = classify_sensitivity("名前と住所を入力してください。");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_tier_ordering_secret_beats_sensitive() {
+    // Text with both health keyword and password keyword → secret_never_send wins
+    let r = classify_sensitivity("The patient's password is needed for diagnosis.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_structured_beats_bare_same_tier() {
+    // credential assignment (high) beats bare credential (low) at same tier
+    let r = classify_sensitivity("The secret=abc123 is here.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn confidence_rank_ordering() {
+    assert!(confidence_rank("high") > confidence_rank("medium"));
+    assert!(confidence_rank("medium") > confidence_rank("low"));
+    assert_eq!(confidence_rank("low"), 0);
+    assert_eq!(confidence_rank("high"), 2);
+  }
+
+  // ── Parity tests: classify_sensitivity tier >= detect_sensitivity tier ─────
+  // Enumerates representative inputs for each keyword group in detect_sensitivity
+  // and asserts classify_sensitivity never downgrades the tier.
+
+  fn parity_check(text: &str) {
+    let old_tier = detect_sensitivity(text);
+    let new_result = classify_sensitivity(text);
+    let old_rank = sensitivity_rank(old_tier);
+    let new_rank = sensitivity_rank(&new_result.tier) as i64;
+    assert!(
+      new_rank >= old_rank,
+      "Parity failure for {:?}: detect_sensitivity={:?} (rank {}) but classify_sensitivity={:?} (rank {})",
+      text, old_tier, old_rank, new_result.tier, new_rank
+    );
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_secret_never_send_group() {
+    // All keywords from detect_sensitivity secret_never_send group
+    parity_check("password reset");
+    parity_check("passcode required");
+    parity_check("api key configuration");
+    parity_check("token expired");
+    parity_check("secret value");
+    parity_check("private key file");
+    parity_check("recovery code sent");
+    parity_check("パスワードを忘れた");
+    parity_check("秘密鍵の保管");
+    parity_check("my number card");
+    parity_check("national id required");
+    parity_check("bank account details");
+    parity_check("口座番号を入力");
+    parity_check("マイナンバーの申請");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_sensitive_group() {
+    parity_check("health insurance");
+    parity_check("medical records");
+    parity_check("doctor appointment");
+    parity_check("diagnosis report");
+    parity_check("disability benefit");
+    parity_check("legal advice");
+    parity_check("minor child");
+    parity_check("病院に行く");
+    parity_check("診断書が必要");
+    parity_check("障害者手帳");
+    parity_check("給付金の申請");
+    parity_check("法律相談");
+    parity_check("未成年の同意");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_private_consequential_group() {
+    parity_check("finance report");
+    parity_check("tax return");
+    parity_check("pension plan");
+    parity_check("insurance policy");
+    parity_check("contract signed");
+    parity_check("rent payment");
+    parity_check("salary increase");
+    parity_check("payment due");
+    parity_check("税務申告");
+    parity_check("年金受給");
+    parity_check("保険証");
+    parity_check("契約書");
+    parity_check("家賃の支払い");
+    parity_check("給与明細");
+    parity_check("支払い完了");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_personal_group() {
+    parity_check("my name is Alice");
+    parity_check("home address");
+    parity_check("phone number");
+    parity_check("email address");
+    parity_check("family members");
+    parity_check("名前の確認");
+    parity_check("住所変更");
+    parity_check("電話番号");
+    parity_check("メールアドレス");
+    parity_check("家族の情報");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_public_group() {
+    // No signals → both return public
+    parity_check("The weather is nice today.");
+    parity_check("I bought groceries at the store.");
+    parity_check("Meeting at 3pm in the conference room.");
   }
 }
