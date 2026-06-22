@@ -172,6 +172,8 @@ export type MemoryCandidate = {
   createsFactIds: string[];
   conflictWithFactIds: string[];
   conflictReason?: string;
+  sensitivityClassified?: boolean;
+  sensitivityConfidence?: "low" | "medium" | "high";
 };
 
 export type MemoryProposal = {
@@ -184,6 +186,8 @@ export type MemoryProposal = {
   evidenceSpan?: MemoryCandidate["evidenceSpan"];
   reasonToRemember: string;
   status: CandidateStatus;
+  sensitivityClassified?: boolean;
+  sensitivityConfidence?: "low" | "medium" | "high";
 };
 
 export type ApprovedFact = {
@@ -221,6 +225,8 @@ export type ApprovedFact = {
   supersededByFactId?: string;
   reviewReason?: "source_deleted" | "source_updated";
   reviewSourceId?: string;
+  sensitivityClassified: boolean;
+  sensitivityConfidence: "low" | "medium" | "high";
 };
 
 export type ContextPackItem = {
@@ -233,6 +239,8 @@ export type ContextPackItem = {
   validFrom?: string;
   validUntil?: string;
   confidence: ApprovedFact["confidence"];
+  sensitivityClassified: boolean;
+  sensitivityConfidence: "low" | "medium" | "high";
 };
 
 export type ContextPackRequestStatus =
@@ -342,6 +350,7 @@ export type AccessPolicy = {
   domainAllowlist: LifeContextDomain[];
   sensitivityCeiling: SensitivityTier;
   requiresApprovalAbove: SensitivityTier;
+  zeroTouchConfidenceBar?: "low" | "medium" | "high";
   passiveCaptureAllowed: boolean;
   standingDeliveryEnabled?: boolean;
   expiresAt?: string;
@@ -439,6 +448,7 @@ export type VaultState = {
   contextPackRequests: ContextPackRequest[];
   contextPacks: ContextPack[];
   auditEvents: AuditEvent[];
+  classifierMigrationVersion?: number;
 };
 
 export type BackgroundSetupInput = {

@@ -122,6 +122,8 @@ struct NativeFactSearchResult {
   approved_at: String,
   updated_at: String,
   rank: f64,
+  sensitivity_classified: bool,
+  sensitivity_confidence: String,
 }
 
 #[derive(Serialize)]
@@ -413,6 +415,7 @@ fn open_vault_db_at_path(path: &Path) -> Result<Connection, String> {
   ensure_vault_state_updated_at_column(&connection)?;
   initialize_vault_schema(&connection)?;
   sync_normalized_tables_if_stale(&mut connection)?;
+  migrate_classification_if_needed(&mut connection)?;
   Ok(connection)
 }
 
@@ -520,7 +523,9 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
         approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL,
         supersedes_fact_ids TEXT,
-        superseded_by_fact_id TEXT
+        superseded_by_fact_id TEXT,
+        sensitivity_classified INTEGER,
+        sensitivity_confidence TEXT
       );
 
       CREATE TABLE IF NOT EXISTS entities (
@@ -626,6 +631,8 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
   ensure_column(connection, "facts", "approved_at", "TEXT")?;
   ensure_column(connection, "facts", "supersedes_fact_ids", "TEXT")?;
   ensure_column(connection, "facts", "superseded_by_fact_id", "TEXT")?;
+  ensure_column(connection, "facts", "sensitivity_classified", "INTEGER")?;
+  ensure_column(connection, "facts", "sensitivity_confidence", "TEXT")?;
   ensure_column(connection, "memory_candidates", "conflict_with_fact_ids", "TEXT")?;
   ensure_column(connection, "memory_candidates", "conflict_reason", "TEXT")?;
   connection
@@ -770,13 +777,25 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
     let fact_approved_at = optional_str_field(fact, "approvedAt")
       .filter(|value| !value.is_empty())
       .unwrap_or_else(|| fact_updated_at.clone());
+    let fact_sensitivity_classified: i64 = fact
+      .get("sensitivityClassified")
+      .and_then(|v| v.as_bool())
+      .map(|b| if b { 1 } else { 0 })
+      .unwrap_or(0);
+    let fact_sensitivity_confidence: String = fact
+      .get("sensitivityConfidence")
+      .and_then(|v| v.as_str())
+      .filter(|s| !s.is_empty())
+      .unwrap_or("low")
+      .to_string();
     transaction
       .execute(
         "INSERT INTO facts (
           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
           status, valid_from, valid_until, due_date, created_at, approved_at, updated_at,
-          supersedes_fact_ids, superseded_by_fact_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+          supersedes_fact_ids, superseded_by_fact_id,
+          sensitivity_classified, sensitivity_confidence
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
           fact_id,
           str_field(fact, "factText"),
@@ -793,7 +812,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
           fact_approved_at,
           fact_updated_at,
           json_field(fact, "supersedesFactIds"),
-          optional_str_field(fact, "supersededByFactId")
+          optional_str_field(fact, "supersededByFactId"),
+          fact_sensitivity_classified,
+          fact_sensitivity_confidence
         ],
       )
       .map_err(|error| format!("failed to sync fact {fact_id}: {error}"))?;
@@ -1057,6 +1078,15 @@ fn row_to_native_fact_search_result(
   row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<NativeFactSearchResult> {
   let source_ids_json: String = row.get("source_ids")?;
+  // NULL ⇒ fail-closed: classified=false, confidence="low"
+  let sensitivity_classified: bool = row
+    .get::<_, Option<i64>>("sensitivity_classified")?
+    .map(|v| v != 0)
+    .unwrap_or(false);
+  let sensitivity_confidence: String = row
+    .get::<_, Option<String>>("sensitivity_confidence")?
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "low".to_string());
   Ok(NativeFactSearchResult {
     id: row.get("id")?,
     fact_text: row.get("fact_text")?,
@@ -1073,6 +1103,8 @@ fn row_to_native_fact_search_result(
     approved_at: row.get("approved_at")?,
     updated_at: row.get("updated_at")?,
     rank: row.get("rank")?,
+    sensitivity_classified,
+    sensitivity_confidence,
   })
 }
 
@@ -1105,6 +1137,8 @@ fn search_facts_in_connection(
            f.created_at,
            f.approved_at,
            f.updated_at,
+           f.sensitivity_classified,
+           f.sensitivity_confidence,
            bm25(facts_fts) AS rank
          FROM facts_fts
          JOIN facts f ON f.id = facts_fts.fact_id
@@ -1141,6 +1175,8 @@ fn search_facts_in_connection(
          created_at,
          approved_at,
          updated_at,
+         sensitivity_classified,
+         sensitivity_confidence,
          0.0 AS rank
        FROM facts
        WHERE status = 'active'
@@ -1266,7 +1302,9 @@ fn create_native_context_pack_request_in_connection(
       "sourceTitles": source_titles,
       "validFrom": fact.valid_from.clone(),
       "validUntil": fact.valid_until.clone(),
-      "confidence": fact.confidence.clone()
+      "confidence": fact.confidence.clone(),
+      "sensitivityClassified": fact.sensitivity_classified,
+      "sensitivityConfidence": fact.sensitivity_confidence.clone()
     }));
 
     if let Some(snippet) = snippet {
@@ -1281,8 +1319,9 @@ fn create_native_context_pack_request_in_connection(
     .unwrap_or("public")
     .to_string();
   let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
+  let bar = policy_zero_touch_confidence_bar_for_client(vault, client_id);
   let requires_confirmation = approval_mode == "always_review"
-    || sensitivity_rank(&max_sensitivity_included) > sensitivity_rank(&requires_approval_above);
+    || !items.iter().all(|it| zero_touch_eligible(it, &requires_approval_above, &bar));
   let confirmation_status = if requires_confirmation {
     "pending_user_confirmation"
   } else {
@@ -2928,13 +2967,29 @@ pub fn update_fact_metadata_at_path(
     else {
       return Err(format!("ApprovedFact was not found: {fact_id}"));
     };
-    fact["factText"] = Value::String(fact_text);
+    let old_fact_text = str_field(fact, "factText");
+    let old_sensitivity = str_field(fact, "sensitivity");
+    fact["factText"] = Value::String(fact_text.clone());
     fact["domain"] = Value::String(domain.to_string());
     fact["sensitivity"] = Value::String(sensitivity.to_string());
     fact["updatedAt"] = Value::String(now);
     set_optional_fact_string(fact, "validFrom", valid_from);
     set_optional_fact_string(fact, "validUntil", valid_until);
     set_optional_fact_string(fact, "dueDate", due_date);
+    // Task 7: re-run classifier when factText changes; clear classification on manual
+    // sensitivity override so the gate knows the item has not been auto-classified.
+    // Branch order (mirrors TS updateFactMetadata):
+    //   1. Manual sensitivity override wins — even when text also changed.
+    //   2. Text-only change — re-classify with the new text.
+    //   3. Domain-only / no-change edit — leave classification fields untouched.
+    if sensitivity != old_sensitivity {
+      fact["sensitivityClassified"] = Value::Bool(false);
+      fact["sensitivityConfidence"] = Value::String("low".to_string());
+    } else if fact_text != old_fact_text {
+      let classification = classify_sensitivity(&fact_text);
+      fact["sensitivityClassified"] = Value::Bool(classification.classified);
+      fact["sensitivityConfidence"] = Value::String(classification.confidence.to_string());
+    }
   }
   let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
     &mut vault,
@@ -3034,19 +3089,45 @@ pub fn approve_candidate_with_options_at_path(
     .as_array()
     .map(|ids| !ids.is_empty())
     .unwrap_or(false);
+  // Determine whether the user actually changed the text.
+  let text_was_edited = edited_text
+    .map(str::trim)
+    .filter(|t| *t != proposed_text.trim())
+    .is_some();
+  // Always classify the fact text so sensitivityClassified / sensitivityConfidence
+  // are fresh on the new fact (Task 7: zero-touch gate evaluates these fields).
+  let classification = classify_sensitivity(&fact_text);
+  // When edited text was provided, derive sensitivity TIER from the NEW text so
+  // that injecting a credential into an otherwise-benign candidate cannot
+  // produce a low-sensitivity fact that auto-delivers (trust-boundary leak).
+  // Mirrors TS vault.ts approveCandidate (line ~607: sensitivity: classifiedForFact.tier).
+  let fact_sensitivity = if text_was_edited {
+    // Mirror the TS/extract path: secret_never_send must never become a fact.
+    if classification.tier == "secret_never_send" {
+      return Err(
+        "The edited text contains secret material and cannot be approved as a Fact.".to_string(),
+      );
+    }
+    classification.tier.clone()
+  } else {
+    // Non-edited path: use the candidate's original detected sensitivity tier.
+    detected_sensitivity.clone()
+  };
   let mut fact = json!({
     "id": fact_id.clone(),
     "factText": fact_text,
     "domain": str_field(&candidate, "domain"),
     "factType": candidate_type_to_fact_type(&str_field(&candidate, "candidateType")),
     "sourceIds": source_ids,
-    "sensitivity": detected_sensitivity.clone(),
+    "sensitivity": fact_sensitivity,
     "confidence": if source_backed { "source_backed" } else { "inferred_and_confirmed" },
     "status": "active",
     "createdAt": now.clone(),
     "approvedAt": now.clone(),
     "updatedAt": now.clone(),
-    "supersedesFactIds": superseded_fact_ids.clone()
+    "supersedesFactIds": superseded_fact_ids.clone(),
+    "sensitivityClassified": classification.classified,
+    "sensitivityConfidence": classification.confidence.to_string()
   });
   copy_optional_candidate_field(&candidate, &mut fact, "validFrom");
   copy_optional_candidate_field(&candidate, &mut fact, "validUntil");
@@ -3456,6 +3537,20 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
         return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
       }
     }
+    // Task 7: if the pack was delivered without user confirmation (zero-touch), every item
+    // must still be eligible at retrieval time.  An item that became unclassified or dropped
+    // below the confidence bar after pack creation must cause re-validation to fail.
+    // Packs that went through user confirmation ("confirmed") are exempt — a human reviewed them.
+    let pack_confirmation_status = str_field(pack, "confirmationStatus");
+    if pack_confirmation_status == "not_required" {
+      let bar = policy_zero_touch_confidence_bar_for_client(vault, &client_id);
+      let requires_approval_above = policy_requires_approval_above_for_client(vault, &client_id);
+      if !zero_touch_eligible(&item, &requires_approval_above, &bar) {
+        return Err(
+          "ContextPack item is no longer eligible for zero-touch delivery.".to_string(),
+        );
+      }
+    }
   }
   Ok(())
 }
@@ -3597,7 +3692,9 @@ fn context_pack_item_from_fact(
     "sourceTitles": source_titles_in_connection(connection, &fact.source_ids, ceiling)?,
     "validFrom": fact.valid_from,
     "validUntil": fact.valid_until,
-    "confidence": fact.confidence
+    "confidence": fact.confidence,
+    "sensitivityClassified": fact.sensitivity_classified,
+    "sensitivityConfidence": fact.sensitivity_confidence
   }))
 }
 
@@ -3672,6 +3769,8 @@ fn fact_by_id_in_connection(
          created_at,
          approved_at,
          updated_at,
+         sensitivity_classified,
+         sensitivity_confidence,
          0.0 AS rank
        FROM facts
        WHERE id = ?1",
@@ -3845,6 +3944,8 @@ fn context_candidate_facts_in_connection(
        created_at,
        approved_at,
        updated_at,
+       sensitivity_classified,
+       sensitivity_confidence,
        0.0 AS rank
      FROM facts
      WHERE domain IN ({domains_sql})
@@ -4209,6 +4310,350 @@ fn detect_sensitivity(text: &str) -> &'static str {
     "personal"
   } else {
     "public"
+  }
+}
+
+// ── classify_sensitivity: Rust mirror of TS classifySensitivity ──────────────
+// Mirrors src/sensitivity.ts SIGNALS list exactly: structured patterns → "high",
+// bare keyword hits → "low"; secret-first ordering; no match → public/low/false.
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SensitivityResult {
+  tier: String,
+  confidence: String,
+  classified: bool,
+  reasons: Vec<String>,
+}
+
+#[allow(dead_code)]
+fn confidence_rank(c: &str) -> u8 {
+  match c {
+    "high" => 2,
+    "medium" => 1,
+    _ => 0, // "low" or unknown
+  }
+}
+
+#[allow(dead_code)]
+fn tier_rank_str(t: &str) -> u8 {
+  match t {
+    "secret_never_send" => 4,
+    "sensitive" => 3,
+    "private_consequential" => 2,
+    "personal" => 1,
+    _ => 0, // "public" or unknown
+  }
+}
+
+
+/// Match credential assignment: keyword = value (structured, high confidence).
+/// Mirrors: /\b(password|passcode|api[_\s-]?key|token|secret|private[_\s-]?key|
+///           recovery[_\s-]?code|bearer\s+[a-z0-9._-]{12,})\b\s*[:=]\s*\S+/i
+#[allow(dead_code)]
+fn match_credential_assignment(text: &str) -> bool {
+  let lower = text.to_lowercase();
+  // Find each keyword group, then check if followed by [:=] and a value.
+  let keywords = [
+    "password", "passcode", "token", "secret", "bearer",
+  ];
+  let compound_kw = [
+    ("api", "key"), ("private", "key"), ("recovery", "code"),
+  ];
+
+  // Check simple keywords followed by [:=]value
+  for kw in &keywords {
+    if let Some(pos) = lower.find(kw) {
+      // Ensure word boundary: preceding char not alphanumeric
+      let before_ok = pos == 0 || {
+        let ch = lower[..pos].chars().last().unwrap_or(' ');
+        !ch.is_alphanumeric() && ch != '_'
+      };
+      if before_ok {
+        let after = &lower[pos + kw.len()..];
+        // For "bearer" allow space then 12+ chars (no [:=] required)
+        if *kw == "bearer" {
+          let rest = after.trim_start();
+          if rest.len() >= 12 && !rest.starts_with([':', '=']) {
+            // Check next char is alphanumeric/._-
+            let ch = rest.chars().next().unwrap_or(' ');
+            if ch.is_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+              return true;
+            }
+          }
+        }
+        // For others, allow optional whitespace then [:=] then non-whitespace
+        let rest = after.trim_start_matches(|c: char| c == '_' || c == '-' || c == ' ');
+        let rest = rest.trim_start();
+        if rest.starts_with(':') || rest.starts_with('=') {
+          let val = rest[1..].trim_start();
+          if !val.is_empty() && !val.starts_with(' ') {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  // Check compound keywords (api key, private key, recovery code) with optional separator
+  for (w1, w2) in &compound_kw {
+    // Build variants: "apikey", "api key", "api_key", "api-key"
+    // The zero-separator form is required to match TS regex api[_\s-]?key (? = 0 or 1)
+    let variants = [
+      format!("{}{}", w1, w2),
+      format!("{} {}", w1, w2),
+      format!("{}_{}", w1, w2),
+      format!("{}-{}", w1, w2),
+    ];
+    for variant in &variants {
+      if let Some(pos) = lower.find(variant.as_str()) {
+        let before_ok = pos == 0 || {
+          let ch = lower[..pos].chars().last().unwrap_or(' ');
+          !ch.is_alphanumeric() && ch != '_'
+        };
+        if before_ok {
+          let after = &lower[pos + variant.len()..];
+          let rest = after.trim_start();
+          if rest.starts_with(':') || rest.starts_with('=') {
+            let val = rest[1..].trim_start();
+            if !val.is_empty() {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+  false
+}
+
+/// Match email address pattern. Mirrors: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
+#[allow(dead_code)]
+fn match_email(text: &str) -> bool {
+  // Simple state-machine email scan
+  let lower = text.to_lowercase();
+  let bytes = lower.as_bytes();
+  let len = bytes.len();
+  let mut i = 0;
+  while i < len {
+    // Find '@'
+    if bytes[i] == b'@' && i > 0 {
+      // Scan local part backwards: [a-z0-9._%+-]+
+      let local_end = i;
+      let mut j = local_end;
+      while j > 0 {
+        let c = bytes[j - 1];
+        if c.is_ascii_alphanumeric() || c == b'.' || c == b'_' || c == b'%' || c == b'+' || c == b'-' {
+          j -= 1;
+        } else {
+          break;
+        }
+      }
+      if j < local_end {
+        // Scan domain part forwards: [a-z0-9.-]+\.[a-z]{2,}
+        let domain_start = i + 1;
+        let mut k = domain_start;
+        while k < len {
+          let c = bytes[k];
+          if c.is_ascii_alphanumeric() || c == b'.' || c == b'-' {
+            k += 1;
+          } else {
+            break;
+          }
+        }
+        let domain = &lower[domain_start..k];
+        // Must contain a dot and end with 2+ alpha chars
+        if let Some(dot_pos) = domain.rfind('.') {
+          let tld = &domain[dot_pos + 1..];
+          if tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) {
+            return true;
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  false
+}
+
+/// Classify text with full parity to TS classifySensitivity.
+/// Signals ordered secret-first. Returns highest-tier, highest-confidence match.
+#[allow(dead_code)]
+fn classify_sensitivity(text: &str) -> SensitivityResult {
+  // Build signals list mirroring SIGNALS in src/sensitivity.ts
+  // Each entry: (matcher_fn, tier, confidence, reason)
+  type MatchFn = fn(&str) -> bool;
+
+  struct Signal {
+    matcher: MatchFn,
+    tier: &'static str,
+    confidence: &'static str,
+    reason: &'static str,
+  }
+
+  fn bare_credential_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["password", "passcode", "apikey", "api key", "api_key", "api-key",
+      "token", "secret", "privatekey", "private key", "private_key", "private-key",
+      "recoverycode", "recovery code", "recovery_code", "recovery-code"])
+  }
+  fn bare_national_bank_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["my number", "my_number", "mynumber",
+      "national id", "national_id", "nationalid",
+      "bank account", "bank_account"])
+  }
+  fn bare_national_bank_ja(t: &str) -> bool {
+    contains_any(t, &["口座番号", "マイナンバー"])
+  }
+  fn bare_credential_ja(t: &str) -> bool {
+    contains_any(t, &["パスワード", "秘密鍵"])
+  }
+  fn health_legal_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["health", "medical", "doctor", "diagnosis",
+      "disability", "benefit", "legal", "minor"])
+  }
+  fn health_legal_ja(t: &str) -> bool {
+    contains_any(t, &["病院", "診断", "障害", "給付", "法律", "未成年"])
+  }
+  fn financial_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["finance", "tax", "pension", "insurance",
+      "contract", "rent", "salary", "payment"])
+  }
+  fn financial_ja(t: &str) -> bool {
+    contains_any(t, &["税", "年金", "保険", "契約", "家賃", "給与", "支払"])
+  }
+  fn personal_contact_en(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    contains_any(&lower, &["name", "address", "phone", "email", "family"])
+  }
+  fn personal_contact_ja(t: &str) -> bool {
+    contains_any(t, &["名前", "住所", "電話", "メール", "家族"])
+  }
+
+  let signals: &[Signal] = &[
+    // ── secret_never_send: credential structured patterns (high) ──
+    Signal {
+      matcher: match_credential_assignment as MatchFn,
+      tier: "secret_never_send",
+      confidence: "high",
+      reason: "matches credential assignment pattern",
+    },
+    // secret_never_send: national/bank ID bare keywords (low)
+    Signal {
+      matcher: bare_national_bank_en as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches national/bank identity keyword",
+    },
+    // secret_never_send: Japanese identity keywords (low)
+    Signal {
+      matcher: bare_national_bank_ja as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches Japanese identity/account keyword",
+    },
+    // secret_never_send: bare credential keywords (low)
+    Signal {
+      matcher: bare_credential_en as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches credential keyword",
+    },
+    // secret_never_send: Japanese credential keywords (low)
+    Signal {
+      matcher: bare_credential_ja as MatchFn,
+      tier: "secret_never_send",
+      confidence: "low",
+      reason: "matches Japanese credential keyword",
+    },
+    // ── sensitive: health/legal/minor keywords (low) ──
+    Signal {
+      matcher: health_legal_en as MatchFn,
+      tier: "sensitive",
+      confidence: "low",
+      reason: "matches health/legal/minor keyword",
+    },
+    // sensitive: Japanese health/legal keywords (low)
+    Signal {
+      matcher: health_legal_ja as MatchFn,
+      tier: "sensitive",
+      confidence: "low",
+      reason: "matches Japanese health/legal keyword",
+    },
+    // ── private_consequential: financial/contract keywords (low) ──
+    Signal {
+      matcher: financial_en as MatchFn,
+      tier: "private_consequential",
+      confidence: "low",
+      reason: "matches financial/contract keyword",
+    },
+    // private_consequential: Japanese financial/contract keywords (low)
+    Signal {
+      matcher: financial_ja as MatchFn,
+      tier: "private_consequential",
+      confidence: "low",
+      reason: "matches Japanese financial/contract keyword",
+    },
+    // ── personal: email structured pattern (high) ──
+    Signal {
+      matcher: match_email as MatchFn,
+      tier: "personal",
+      confidence: "high",
+      reason: "matches email pattern",
+    },
+    // personal: bare contact/family keywords (low)
+    Signal {
+      matcher: personal_contact_en as MatchFn,
+      tier: "personal",
+      confidence: "low",
+      reason: "matches personal contact keyword",
+    },
+    // personal: Japanese contact/family keywords (low)
+    Signal {
+      matcher: personal_contact_ja as MatchFn,
+      tier: "personal",
+      confidence: "low",
+      reason: "matches Japanese personal keyword",
+    },
+  ];
+
+  let mut matched_tiers: Vec<(&'static str, &'static str, &'static str)> = Vec::new();
+  for sig in signals {
+    if (sig.matcher)(text) {
+      matched_tiers.push((sig.tier, sig.confidence, sig.reason));
+    }
+  }
+
+  if matched_tiers.is_empty() {
+    return SensitivityResult {
+      tier: "public".to_string(),
+      confidence: "low".to_string(),
+      classified: false,
+      reasons: vec![],
+    };
+  }
+
+  // Pick highest tier; among ties, pick highest confidence — mirrors TS reduce logic.
+  let top = matched_tiers.iter().copied().reduce(|a, b| {
+    let tier_diff = tier_rank_str(b.0) as i8 - tier_rank_str(a.0) as i8;
+    if tier_diff != 0 {
+      if tier_diff > 0 { b } else { a }
+    } else if confidence_rank(b.1) > confidence_rank(a.1) {
+      b
+    } else {
+      a
+    }
+  }).unwrap();
+
+  SensitivityResult {
+    tier: top.0.to_string(),
+    confidence: top.1.to_string(),
+    classified: true,
+    reasons: matched_tiers.iter().map(|m| m.2.to_string()).collect(),
   }
 }
 
@@ -7802,6 +8247,86 @@ pub fn run() {
     .expect("error while running tauri application");
 }
 
+// ── Task 7: Zero-touch gate helpers ──────────────────────────────────────────
+
+/// Returns true when a pack item is eligible for zero-touch delivery:
+/// - it has been classified (`sensitivityClassified = true`)
+/// - its confidence meets or exceeds `bar`
+/// - its sensitivity tier is at or below `threshold`
+fn zero_touch_eligible(item: &Value, threshold: &str, bar: &str) -> bool {
+  let classified = item
+    .get("sensitivityClassified")
+    .and_then(Value::as_bool)
+    .unwrap_or(false);
+  let conf = item
+    .get("sensitivityConfidence")
+    .and_then(Value::as_str)
+    .unwrap_or("low");
+  let tier = item
+    .get("sensitivity")
+    .and_then(Value::as_str)
+    .unwrap_or("secret_never_send");
+  classified
+    && confidence_rank(conf) >= confidence_rank(bar)
+    && sensitivity_rank(tier) <= sensitivity_rank(threshold)
+}
+
+/// Returns the `zeroTouchConfidenceBar` for a given client's access policy,
+/// defaulting to `"medium"` when absent or unrecognised.
+fn policy_zero_touch_confidence_bar_for_client(vault: &Value, client_id: &str) -> String {
+  let value = value_array(vault, "accessPolicies")
+    .into_iter()
+    .find(|policy| str_field(policy, "clientId") == client_id)
+    .map(|policy| str_field(policy, "zeroTouchConfidenceBar"))
+    .unwrap_or_default();
+  let trimmed = value.trim();
+  match trimmed {
+    "low" | "medium" | "high" => trimmed.to_string(),
+    _ => "medium".to_string(),
+  }
+}
+
+// ── Task 7: Durable classifier migration ─────────────────────────────────────
+
+const CLASSIFIER_MIGRATION_VERSION: u32 = 1;
+
+/// On first vault open after the classifier is deployed, back-fills
+/// `sensitivityClassified` and `sensitivityConfidence` on any Fact that was
+/// approved before the classifier existed.  Sets `classifierMigrationVersion`
+/// in the vault JSON so subsequent opens are no-ops.
+fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), String> {
+  let mut vault = load_vault_json_from_connection(connection)?;
+  let current_version = vault
+    .get("classifierMigrationVersion")
+    .and_then(Value::as_u64)
+    .unwrap_or(0) as u32;
+  if current_version >= CLASSIFIER_MIGRATION_VERSION {
+    return Ok(());
+  }
+  // Back-fill classification fields only on facts where sensitivityClassified is ABSENT
+  // from the persisted JSON (truly legacy). Facts that have an explicit value — even
+  // false — were deliberately set (e.g. after a manual sensitivity override) and must
+  // not be silently promoted.
+  if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+    for fact in facts.iter_mut() {
+      let fact_text = str_field(fact, "factText");
+      if fact_text.is_empty() {
+        continue;
+      }
+      let classification_key_present = fact.get("sensitivityClassified").is_some();
+      if !classification_key_present {
+        let result = classify_sensitivity(&fact_text);
+        fact["sensitivityClassified"] = Value::Bool(result.classified);
+        fact["sensitivityConfidence"] = Value::String(result.confidence.to_string());
+        // Preserve the user-reviewed sensitivity tier — only fill classification metadata.
+      }
+    }
+  }
+  vault["classifierMigrationVersion"] = json!(CLASSIFIER_MIGRATION_VERSION);
+  save_vault_json_with_projection(connection, &vault)?;
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -10426,6 +10951,121 @@ mod tests {
   }
 
   #[test]
+  fn approve_with_edited_text_injecting_secret_is_blocked() {
+    // C1 trust-boundary fix: editing a benign candidate to inject a credential
+    // must be REJECTED — the edited text's classification governs, not the
+    // candidate's original detectedSensitivity.
+    use_test_vault_key();
+    let path = temp_vault_path("edited-text-secret-inject");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Hobby",
+      "I enjoy hiking on weekends",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    // Sanity: the candidate itself is NOT secret_never_send (it's benign).
+    let conn = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault");
+    let vault = load_vault_json_from_connection(&conn).expect("load vault json");
+    let cand = find_vault_item_by_id(&vault, "candidates", &candidate_id).expect("candidate");
+    let original_tier = str_field(&cand, "detectedSensitivity");
+    assert_ne!(
+      original_tier, "secret_never_send",
+      "Precondition: candidate must start as non-secret"
+    );
+    drop(conn);
+
+    // Now approve with edited text that injects a credential.
+    let secret_text = "AWS_SECRET_ACCESS_KEY=abc123secret";
+    let err = approve_candidate_with_options_at_path(
+      &path,
+      &candidate_id,
+      Some(secret_text),
+      &[],
+    )
+    .err()
+    .expect("approval of edited-secret text must be rejected");
+
+    // Must be blocked and no fact created.
+    let conn2 = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault 2");
+    let fact_count: i64 = conn2
+      .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+      .expect("fact count");
+    assert!(
+      err.contains("secret") || err.contains("cannot be approved"),
+      "error should mention secret rejection, got: {err}"
+    );
+    assert_eq!(fact_count, 0, "no fact must be created when edited text is secret");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn approve_with_edited_text_uses_edited_text_sensitivity_tier() {
+    // C1 trust-boundary fix: editing a candidate to include an email address
+    // must produce a fact with sensitivity == "personal" (the tier derived from
+    // the EDITED text), not the original candidate's lower tier.
+    use_test_vault_key();
+    let path = temp_vault_path("edited-text-tier-promotion");
+    let ingested = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Note",
+      "generic public note with no signals",
+    )
+    .expect("source ingest");
+    let candidate_id = ingested
+      .candidate_ids
+      .first()
+      .expect("candidate id")
+      .to_string();
+
+    // Sanity: original candidate tier should be "public".
+    let conn = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault");
+    let vault_val = load_vault_json_from_connection(&conn).expect("load vault json");
+    let cand = find_vault_item_by_id(&vault_val, "candidates", &candidate_id).expect("candidate");
+    let original_tier = str_field(&cand, "detectedSensitivity");
+    assert_eq!(
+      original_tier, "public",
+      "Precondition: candidate must start as public"
+    );
+    drop(conn);
+
+    // Approve with edited text that contains an email — should classify as "personal".
+    let edited = "Contact me at alice@example.com for questions";
+    let result = approve_candidate_with_options_at_path(
+      &path,
+      &candidate_id,
+      Some(edited),
+      &[],
+    )
+    .expect("approval of email-edited text must succeed");
+
+    let fact_id = result.fact_id.expect("fact id");
+    let saved: Value = serde_json::from_str(&result.payload).expect("parse payload");
+    let fact = find_vault_item_by_id(&saved, "facts", &fact_id).expect("new fact");
+    let fact_sensitivity = str_field(&fact, "sensitivity");
+
+    assert_eq!(
+      fact_sensitivity, "personal",
+      "Fact sensitivity must be derived from edited text (email => personal), not candidate's original tier (public)"
+    );
+    // Must NOT be eligible for zero-touch delivery (personal is above zero-touch threshold).
+    assert_ne!(
+      fact_sensitivity, "public",
+      "Edited fact must not retain low original tier after email injection"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
   fn native_context_pack_uses_approved_facts_and_fact_only_snippets() {
     let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
     initialize_test_vault_connection(&connection);
@@ -11517,21 +12157,24 @@ mod tests {
   fn standing_delivery_flag_governs_mcp_auto_delivery() {
     use_test_vault_key();
     let path = temp_vault_path("standing-delivery-flag");
+    // Use an email address so the classifier marks the fact as classified=true,
+    // confidence="high" — required for zero-touch delivery under Task 7's new gate.
     let source = add_source_with_candidates_at_path(
       &path, "manual_note", "manual_entry",
-      "Passport reminder", "Passport expires on 2028-05-01.",
+      "Contact reminder", "Contact alice@example.com for schedule details.",
     ).expect("source");
     approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
       .expect("approve candidate");
 
     // Connection opted into standing delivery, request approval mode = None (core decides).
+    // Item is classified=true, confidence="high" → zero-touch eligible → not_required.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable");
     let auto = create_context_pack_request_at_path(
-      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
-      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
+      &path, "conn_chatgpt", "ChatGPT", "How do I contact alice about the schedule?",
+      Some("普段使うAIへの回答文脈"), Some("personal"), None,
     ).expect("auto pack");
     assert_eq!(auto.confirmation_status, "not_required");
-    assert!(auto.context_pack.is_some(), "<=threshold must auto-deliver");
+    assert!(auto.context_pack.is_some(), "classified item with standing delivery must auto-deliver");
 
     // Same connection with standing delivery OFF must pend.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
@@ -11616,6 +12259,913 @@ mod tests {
         "fresh install connection {client_id} must have standingDeliveryEnabled=true"
       );
     }
+    remove_temp_vault(&path);
+  }
+
+  // ── classify_sensitivity tests ─────────────────────────────────────────────
+
+  #[test]
+  fn classify_sensitivity_no_signal_returns_public_unclassified() {
+    let r = classify_sensitivity("Today I went for a walk in the park.");
+    assert_eq!(r.tier, "public");
+    assert_eq!(r.confidence, "low");
+    assert!(!r.classified);
+    assert!(r.reasons.is_empty());
+  }
+
+  #[test]
+  fn classify_sensitivity_email_returns_personal_high() {
+    let r = classify_sensitivity("Contact me at alice@example.com for details.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+    assert!(r.reasons.iter().any(|s| s.contains("email")));
+  }
+
+  #[test]
+  fn classify_sensitivity_credential_assignment_returns_secret_never_send_high() {
+    let r = classify_sensitivity("password=hunter2");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_credential_colon_returns_secret_never_send_high() {
+    let r = classify_sensitivity("token: abc123xyz");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_api_key_assignment_returns_secret_never_send_high() {
+    let r = classify_sensitivity("api_key=sk-1234567890");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_password_returns_secret_never_send_low() {
+    // Bare keyword only (no assignment) → low confidence
+    let r = classify_sensitivity("Remember to update your password sometime.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_token_returns_secret_never_send_low() {
+    let r = classify_sensitivity("The token was lost.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_national_id_returns_secret_never_send_low() {
+    let r = classify_sensitivity("Please bring your national id to the office.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_bare_bank_account_returns_secret_never_send_low() {
+    let r = classify_sensitivity("I need your bank account number.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_identity_kw_returns_secret_never_send_low() {
+    let r = classify_sensitivity("口座番号を教えてください。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_my_number_returns_secret_never_send_low() {
+    let r = classify_sensitivity("マイナンバーの確認が必要です。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_credential_kw_returns_secret_never_send_low() {
+    let r = classify_sensitivity("パスワードを変更してください。");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_health_keyword_returns_sensitive_low() {
+    let r = classify_sensitivity("My doctor gave me a diagnosis today.");
+    assert_eq!(r.tier, "sensitive");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_health_kw_returns_sensitive_low() {
+    let r = classify_sensitivity("病院で診断を受けました。");
+    assert_eq!(r.tier, "sensitive");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_financial_keyword_returns_private_consequential_low() {
+    let r = classify_sensitivity("My salary and pension are under review.");
+    assert_eq!(r.tier, "private_consequential");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_financial_kw_returns_private_consequential_low() {
+    let r = classify_sensitivity("年金と給与の情報が必要です。");
+    assert_eq!(r.tier, "private_consequential");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_personal_contact_keyword_returns_personal_low() {
+    // "phone" alone is a bare keyword → personal/low
+    let r = classify_sensitivity("Leave your phone on the desk.");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_japanese_personal_kw_returns_personal_low() {
+    let r = classify_sensitivity("名前と住所を入力してください。");
+    assert_eq!(r.tier, "personal");
+    assert_eq!(r.confidence, "low");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_tier_ordering_secret_beats_sensitive() {
+    // Text with both health keyword and password keyword → secret_never_send wins
+    let r = classify_sensitivity("The patient's password is needed for diagnosis.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_structured_beats_bare_same_tier() {
+    // credential assignment (high) beats bare credential (low) at same tier
+    let r = classify_sensitivity("The secret=abc123 is here.");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+  }
+
+  #[test]
+  fn confidence_rank_ordering() {
+    assert!(confidence_rank("high") > confidence_rank("medium"));
+    assert!(confidence_rank("medium") > confidence_rank("low"));
+    assert_eq!(confidence_rank("low"), 0);
+    assert_eq!(confidence_rank("high"), 2);
+  }
+
+  // ── Task-5 review: zero-separator credential compounds ────────────────────
+  #[test]
+  fn classify_sensitivity_apikey_no_separator_returns_secret_never_send_high() {
+    // "apikey=sk-123" must match structured credential assignment (high confidence)
+    // TS regex: api[_\s-]?key  (separator is optional)
+    let r = classify_sensitivity("apikey=sk-123");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_privatekey_no_separator_returns_secret_never_send_high() {
+    let r = classify_sensitivity("privatekey=-----BEGIN RSA PRIVATE KEY-----");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  #[test]
+  fn classify_sensitivity_recoverycode_no_separator_returns_secret_never_send_high() {
+    let r = classify_sensitivity("recoverycode=abc-def-ghi");
+    assert_eq!(r.tier, "secret_never_send");
+    assert_eq!(r.confidence, "high");
+    assert!(r.classified);
+  }
+
+  // ── Task-5 review: bare_national_bank_ja substring-only (no false positives) ──
+  #[test]
+  fn classify_sensitivity_non_contiguous_kanji_does_not_trigger_ja_identity() {
+    // 口, 座, 番 appear but not as the substring 口座番号 — must NOT classify as secret
+    let r = classify_sensitivity("口演と座席と番地の話題です。");
+    // Should not trigger secret_never_send via bare_national_bank_ja
+    assert_ne!(r.tier, "secret_never_send");
+  }
+
+  // ── Parity tests: classify_sensitivity tier >= detect_sensitivity tier ─────
+  // Enumerates representative inputs for each keyword group in detect_sensitivity
+  // and asserts classify_sensitivity never downgrades the tier.
+
+  fn parity_check(text: &str) {
+    let old_tier = detect_sensitivity(text);
+    let new_result = classify_sensitivity(text);
+    let old_rank = sensitivity_rank(old_tier);
+    let new_rank = sensitivity_rank(&new_result.tier) as i64;
+    assert!(
+      new_rank >= old_rank,
+      "Parity failure for {:?}: detect_sensitivity={:?} (rank {}) but classify_sensitivity={:?} (rank {})",
+      text, old_tier, old_rank, new_result.tier, new_rank
+    );
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_secret_never_send_group() {
+    // All keywords from detect_sensitivity secret_never_send group
+    parity_check("password reset");
+    parity_check("passcode required");
+    parity_check("api key configuration");
+    parity_check("token expired");
+    parity_check("secret value");
+    parity_check("private key file");
+    parity_check("recovery code sent");
+    parity_check("パスワードを忘れた");
+    parity_check("秘密鍵の保管");
+    parity_check("my number card");
+    parity_check("national id required");
+    parity_check("bank account details");
+    parity_check("口座番号を入力");
+    parity_check("マイナンバーの申請");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_sensitive_group() {
+    parity_check("health insurance");
+    parity_check("medical records");
+    parity_check("doctor appointment");
+    parity_check("diagnosis report");
+    parity_check("disability benefit");
+    parity_check("legal advice");
+    parity_check("minor child");
+    parity_check("病院に行く");
+    parity_check("診断書が必要");
+    parity_check("障害者手帳");
+    parity_check("給付金の申請");
+    parity_check("法律相談");
+    parity_check("未成年の同意");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_private_consequential_group() {
+    parity_check("finance report");
+    parity_check("tax return");
+    parity_check("pension plan");
+    parity_check("insurance policy");
+    parity_check("contract signed");
+    parity_check("rent payment");
+    parity_check("salary increase");
+    parity_check("payment due");
+    parity_check("税務申告");
+    parity_check("年金受給");
+    parity_check("保険証");
+    parity_check("契約書");
+    parity_check("家賃の支払い");
+    parity_check("給与明細");
+    parity_check("支払い完了");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_personal_group() {
+    parity_check("my name is Alice");
+    parity_check("home address");
+    parity_check("phone number");
+    parity_check("email address");
+    parity_check("family members");
+    parity_check("名前の確認");
+    parity_check("住所変更");
+    parity_check("電話番号");
+    parity_check("メールアドレス");
+    parity_check("家族の情報");
+  }
+
+  #[test]
+  fn classify_sensitivity_parity_public_group() {
+    // No signals → both return public
+    parity_check("The weather is nice today.");
+    parity_check("I bought groceries at the store.");
+    parity_check("Meeting at 3pm in the conference room.");
+  }
+
+  // Task 6: sensitivityClassified + sensitivityConfidence flow through projection → pack item
+
+  #[test]
+  fn pack_item_carries_sensitivity_classified_and_confidence_from_fact_json() {
+    // A fact with sensitivityClassified:true, sensitivityConfidence:"high" in canonical JSON
+    // must surface both fields on the resulting pack item.
+    let mut connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+    // Use contracts_and_policies domain (same as the existing pack test) so
+    // rank_context_facts_in_connection scores the fact > 0.
+    let payload = r#"
+    {
+      "version": 2,
+      "sources": [
+        {
+          "id": "src_contract",
+          "kind": "manual_note",
+          "title": "Contract note",
+          "origin": "manual_entry",
+          "body": "Insurance policy renews on 2026-09-01.",
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "capturedAt": "2026-06-01T00:00:00.000Z",
+          "defaultSensitivity": "private_consequential",
+          "processingStatus": "ready",
+          "deletionState": "active"
+        }
+      ],
+      "candidates": [],
+      "facts": [
+        {
+          "id": "fact_contract_classified",
+          "factText": "Insurance policy renews on 2026-09-01.",
+          "domain": "contracts_and_policies",
+          "factType": "deadline",
+          "sourceIds": ["src_contract"],
+          "sensitivity": "private_consequential",
+          "confidence": "source_backed",
+          "status": "active",
+          "sensitivityClassified": true,
+          "sensitivityConfidence": "high",
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "approvedAt": "2026-06-01T00:10:00.000Z",
+          "updatedAt": "2026-06-01T00:20:00.000Z"
+        }
+      ],
+      "accessPolicies": [
+        {
+          "id": "policy_test",
+          "clientId": "conn_test",
+          "scopes": ["context_pack.request"],
+          "domainAllowlist": ["contracts_and_policies"],
+          "sensitivityCeiling": "private_consequential",
+          "requiresApprovalAbove": "personal",
+          "passiveCaptureAllowed": false,
+          "createdAt": "2026-06-01T00:00:00.000Z",
+          "updatedAt": "2026-06-01T00:00:00.000Z"
+        }
+      ],
+      "contextPackRequests": [],
+      "contextPacks": [],
+      "connectorSessions": [],
+      "passiveCaptureEvents": [],
+      "auditEvents": []
+    }
+    "#;
+    sync_normalized_tables(&mut connection, payload).expect("sync");
+    let mut vault: Value = serde_json::from_str(payload).expect("vault json");
+
+    let (_request_id, _pack_id) = create_native_context_pack_request_in_connection(
+      &connection,
+      &mut vault,
+      "conn_test",
+      "TestClient",
+      "What should I check for insurance renewal?",
+      None,
+      Some("private_consequential"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack created");
+
+    let pack = vault
+      .get("contextPacks")
+      .and_then(Value::as_array)
+      .and_then(|packs| packs.first())
+      .expect("pack");
+    let items = pack.get("items").and_then(Value::as_array).expect("items");
+    assert_eq!(items.len(), 1, "expected one pack item");
+    let item = &items[0];
+    assert_eq!(
+      item.get("factId").and_then(Value::as_str),
+      Some("fact_contract_classified"),
+      "factId mismatch"
+    );
+    assert_eq!(
+      item.get("sensitivityClassified").and_then(Value::as_bool),
+      Some(true),
+      "sensitivityClassified must be true (from canonical JSON)"
+    );
+    assert_eq!(
+      item.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("high"),
+      "sensitivityConfidence must be 'high' (from canonical JSON)"
+    );
+  }
+
+  #[test]
+  fn pack_item_null_columns_map_to_fail_closed_defaults() {
+    // A fact row with NULL sensitivity_classified / sensitivity_confidence columns
+    // (legacy schema) must map to classified=false, confidence="low" (fail-closed).
+    let connection = Connection::open_in_memory().expect("in-memory sqlite");
+    initialize_test_vault_connection(&connection);
+
+    // Directly INSERT a fact row with NULLs for the new columns, simulating a
+    // pre-Task-6 vault that has never written sensitivityClassified.
+    connection
+      .execute(
+        "INSERT INTO facts (
+           id, fact_text, domain, fact_type, source_ids, sensitivity, confidence,
+           status, created_at, approved_at, updated_at,
+           sensitivity_classified, sensitivity_confidence
+         ) VALUES (
+           'fact_legacy', 'Legacy fact text.', 'health', 'note', '[]',
+           'sensitive', 'source_backed', 'active',
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+           NULL, NULL
+         )",
+        [],
+      )
+      .expect("insert legacy fact");
+    connection
+      .execute(
+        "INSERT INTO facts_fts (fact_id, fact_text, domain) VALUES ('fact_legacy', 'Legacy fact text.', 'health')",
+        [],
+      )
+      .expect("insert legacy fts");
+
+    let result = fact_by_id_in_connection(&connection, "fact_legacy")
+      .expect("query ok")
+      .expect("fact exists");
+
+    assert!(
+      !result.sensitivity_classified,
+      "NULL sensitivity_classified must map to false (fail-closed)"
+    );
+    assert_eq!(
+      result.sensitivity_confidence, "low",
+      "NULL sensitivity_confidence must map to 'low' (fail-closed)"
+    );
+  }
+
+  // ── Task 7: Gate + retrieval + migration + edit-reclassify ───────────────
+
+  #[test]
+  fn gate_unclassified_item_requires_confirmation() {
+    // When all items are unclassified (sensitivityClassified=false),
+    // requires_confirmation should be true even with explicit_sensitive mode.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-unclassified");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Plain note",
+      "I enjoy hiking on weekends.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result.candidate_ids.first().cloned().expect("cand");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve");
+
+    // Manually clear sensitivityClassified to simulate a legacy fact.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
+        fact["sensitivityConfidence"] = Value::String("low".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "What are my hobbies?",
+      None,
+      Some("sensitive"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "unclassified items must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_always_review_still_requires_confirmation_even_if_all_eligible() {
+    // always_review overrides all eligibility: still requires confirmation.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-always-review");
+    let source_result = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact me at alice@example.com for more details.",
+    )
+    .expect("source ingest");
+    let candidate_id = source_result.candidate_ids.first().cloned().expect("cand");
+    approve_candidate_at_path(&path, &candidate_id, None).expect("approve");
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How should I contact Alice?",
+      None,
+      Some("personal"),
+      Some("always_review"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "always_review must always require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_mixed_pack_one_unclassified_requires_confirmation() {
+    // A pack where one item is unclassified → requires confirmation.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-mixed");
+    let r1 = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact me at bob@example.com",
+    )
+    .expect("src1");
+    approve_candidate_at_path(&path, r1.candidate_ids.first().expect("c1"), None).expect("a1");
+
+    let r2 = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Generic note",
+      "I enjoy cooking pasta.",
+    )
+    .expect("src2");
+    approve_candidate_at_path(&path, r2.candidate_ids.first().expect("c2"), None).expect("a2");
+
+    // Clear classification on the second (last) fact only.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      if let Some(fact) = facts.last_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Tell me about Bob and cooking.",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "mixed pack with one unclassified item must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn gate_per_client_bar_high_forces_high_confidence() {
+    // When zeroTouchConfidenceBar = "high" on a connection's policy,
+    // an item that is classified=true but with confidence="low" is not eligible.
+    use_test_vault_key();
+    let path = temp_vault_path("gate-bar-high");
+    // Use an email so the fact is classified=true, confidence="high" by the
+    // classifier — but we then manually lower the confidence to "low" to simulate
+    // a fact that was classified below the bar.
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact note",
+      "Contact bob@example.com about the project.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    // Lower the sensitivity confidence to "low" and set bar="high" in the policy.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        // Keep classified=true but drop confidence so it falls below bar=high.
+        fact["sensitivityClassified"] = Value::Bool(true);
+        fact["sensitivityConfidence"] = Value::String("low".to_string());
+      }
+    }
+    if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+      for policy in policies.iter_mut() {
+        if str_field(policy, "clientId") == "conn_chatgpt" {
+          policy["zeroTouchConfidenceBar"] = Value::String("high".to_string());
+        }
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact bob about the project?",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    // With bar=high but item confidence=low, the item is below bar → must require confirmation.
+    assert_eq!(
+      pack_result.confirmation_status,
+      "pending_user_confirmation",
+      "per-client bar=high: item with low confidence must require confirmation"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn retrieval_revalidation_rejects_pack_when_item_becomes_unclassified() {
+    // After a pack is built, if a pack item's classification is cleared,
+    // ensure_context_pack_allowed_by_current_policy must reject it.
+    use_test_vault_key();
+    let path = temp_vault_path("retrieval-revalidate");
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Email note",
+      "Contact alice@example.com for details.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let pack_result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact Alice?",
+      None,
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("pack");
+    let pack_id = pack_result.pack_id;
+
+    // Simulate classification clearing on the pack item and mark pack as not_required.
+    let mut connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    if let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) {
+      for pack in packs.iter_mut() {
+        if str_field(pack, "id") == pack_id {
+          if let Some(items) = pack.get_mut("items").and_then(Value::as_array_mut) {
+            for item in items.iter_mut() {
+              item["sensitivityClassified"] = Value::Bool(false);
+            }
+          }
+          pack["confirmationStatus"] = Value::String("not_required".to_string());
+        }
+      }
+    }
+    if let Some(requests) =
+      vault.get_mut("contextPackRequests").and_then(Value::as_array_mut)
+    {
+      for request in requests.iter_mut() {
+        request["status"] = Value::String("fulfilled".to_string());
+        request["approvalMode"] = Value::String("explicit_sensitive".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open for retrieval");
+    let vault = load_vault_json_from_connection(&connection).expect("load for retrieval");
+    let pack =
+      find_vault_item_by_id(&vault, "contextPacks", &pack_id).expect("pack exists");
+    let validation_result = ensure_context_pack_allowed_by_current_policy(&vault, &pack);
+    assert!(
+      validation_result.is_err(),
+      "retrieval re-validation must reject pack with unclassified items"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn migration_durability_second_open_is_no_op() {
+    // After first open, classifierMigrationVersion must be 1 in vault_state.
+    // Second open must not re-write (updated_at unchanged).
+    use_test_vault_key();
+    let path = temp_vault_path("migration-durability");
+    {
+      let _connection = open_vault_db_at_path(&path).expect("first open");
+    }
+    let version: u64 = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open");
+      let vault = load_vault_json_from_connection(&connection).expect("load vault");
+      vault
+        .get("classifierMigrationVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+    };
+    assert_eq!(version, 1, "classifierMigrationVersion must be 1 after first open");
+
+    let first_updated_at: String = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open2");
+      connection
+        .query_row(
+          "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
+          [],
+          |row| row.get(0),
+        )
+        .expect("get updated_at")
+    };
+    {
+      let _connection = open_vault_db_at_path(&path).expect("second open");
+    }
+    let second_updated_at: String = {
+      let connection =
+        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open3");
+      connection
+        .query_row(
+          "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
+          [],
+          |row| row.get(0),
+        )
+        .expect("get updated_at2")
+    };
+    assert_eq!(
+      first_updated_at, second_updated_at,
+      "second open must not churn updated_at (migration was already applied)"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn edit_fact_reclassifies_when_text_changes() {
+    // Editing a fact's text (without changing sensitivity) must re-run classify_sensitivity.
+    use_test_vault_key();
+    let path = temp_vault_path("edit-reclassify");
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Generic note",
+      "I enjoy hiking on weekends.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let vault = load_vault_json_from_connection(&connection).expect("load");
+    let fact = vault
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .cloned()
+      .expect("fact");
+    let fact_id = str_field(&fact, "id");
+    // Plain text has no sensitive signals → approved as "public".
+    let original_sensitivity = str_field(&fact, "sensitivity");
+    drop(connection);
+
+    // Edit the fact text to include an email address (triggers high-confidence classification).
+    // Keep the SAME sensitivity tier so this is a text-only change (not an override).
+    let result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Contact alice@example.com for hiking group details.",
+      "relationships_and_household",
+      &original_sensitivity, // unchanged → text-only branch fires
+      None,
+      None,
+      None,
+    )
+    .expect("edit fact");
+
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let updated_fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|f| str_field(f, "id") == fact_id))
+      .expect("fact in vault");
+
+    assert!(
+      updated_fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false),
+      "editing fact text with email should re-classify as classified=true"
+    );
+    assert_eq!(
+      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("high"),
+      "email pattern should produce high confidence"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn edit_fact_manual_sensitivity_override_clears_classification() {
+    // A manual sensitivity change (even when text also changes) must set classified=false,
+    // confidence=low — override wins per the plan.
+    use_test_vault_key();
+    let path = temp_vault_path("edit-override");
+    // Use body with "email" keyword so detect_sensitivity returns "personal".
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact note",
+      "Please send your email address to alice.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let vault = load_vault_json_from_connection(&connection).expect("load");
+    let fact = vault
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .cloned()
+      .expect("fact");
+    let fact_id = str_field(&fact, "id");
+    let original_sensitivity = str_field(&fact, "sensitivity"); // "personal" from "email" keyword
+    drop(connection);
+    assert_eq!(original_sensitivity, "personal", "body with 'email' keyword should yield personal tier");
+
+    // Override sensitivity to "public" (manual change) while also changing text.
+    let result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Contact alice@example.com for hiking group details.", // text also changed
+      "relationships_and_household",
+      "public", // different from "personal" → override branch wins
+      None,
+      None,
+      None,
+    )
+    .expect("edit fact");
+
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let updated_fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|f| str_field(f, "id") == fact_id))
+      .expect("fact in vault");
+
+    assert_eq!(
+      updated_fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool),
+      Some(false),
+      "manual sensitivity override must set classified=false"
+    );
+    assert_eq!(
+      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("low"),
+      "manual sensitivity override must set confidence=low"
+    );
+    assert_eq!(
+      updated_fact.get("sensitivity").and_then(Value::as_str),
+      Some("public"),
+      "override sensitivity must be persisted"
+    );
     remove_temp_vault(&path);
   }
 }

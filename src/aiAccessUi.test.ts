@@ -132,7 +132,9 @@ describe("AI access UI safety", () => {
           reasonIncluded: "Relevant to the user's task",
           sensitivity: "sensitive",
           sourceTitles: ["Insurance document"],
-          confidence: "source_backed"
+          confidence: "source_backed",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low"
         }
       ],
       sourceSnippets: [
@@ -289,7 +291,9 @@ describe("AI access UI safety", () => {
         createdAt: "2026-06-01T00:00:00.000Z",
         approvedAt: "2026-06-01T00:00:00.000Z",
         updatedAt: "2026-06-01T00:00:00.000Z",
-        supersedesFactIds: []
+        supersedesFactIds: [],
+        sensitivityClassified: false,
+        sensitivityConfidence: "low"
       }
     ];
 
@@ -322,7 +326,9 @@ describe("AI access UI safety", () => {
         createdAt: "2026-06-10T00:00:00.000Z",
         approvedAt: "2026-06-10T00:00:00.000Z",
         updatedAt: "2026-06-10T00:00:00.000Z",
-        supersedesFactIds: []
+        supersedesFactIds: [],
+        sensitivityClassified: false,
+        sensitivityConfidence: "low"
       }
     ];
     restored.connectorSessions = [
@@ -385,7 +391,9 @@ describe("AI access UI safety", () => {
             reasonIncluded: "Relevant backup fact",
             sensitivity: "sensitive",
             sourceTitles: ["Backup insurance document"],
-            confidence: "source_backed"
+            confidence: "source_backed",
+            sensitivityClassified: false,
+            sensitivityConfidence: "low"
           }
         ],
         excludedItems: [],
@@ -498,7 +506,9 @@ describe("AI access UI safety", () => {
         createdAt: "2026-06-13T00:00:00.000Z",
         approvedAt: "2026-06-13T00:00:00.000Z",
         updatedAt: "2026-06-13T00:00:00.000Z",
-        supersedesFactIds: []
+        supersedesFactIds: [],
+        sensitivityClassified: false,
+        sensitivityConfidence: "low"
       }
     ];
     state.contextPackRequests = [
@@ -535,7 +545,9 @@ describe("AI access UI safety", () => {
             reasonIncluded: "Relevant",
             sensitivity: "sensitive",
             sourceTitles: ["Clear impact source"],
-            confidence: "source_backed"
+            confidence: "source_backed",
+            sensitivityClassified: false,
+            sensitivityConfidence: "low"
           }
         ],
         excludedItems: [],

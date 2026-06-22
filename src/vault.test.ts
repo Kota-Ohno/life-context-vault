@@ -22,6 +22,7 @@ import {
   searchFacts,
   updateAccessPolicy,
   updateContextPackItemVisibility,
+  updateFactMetadata,
   updateSourceBody,
   updateSourceMetadata
 } from "./vault";
@@ -229,6 +230,8 @@ describe("vault flow", () => {
       facts: [
         {
           id: "fact_work_blocked",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Work shift starts at 9am.",
           domain: "work_and_education",
           factType: "routine",
@@ -243,6 +246,8 @@ describe("vault flow", () => {
         },
         {
           id: "fact_health_allowed",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Doctor follow-up is scheduled for next month.",
           domain: "health_and_care",
           factType: "support_need",
@@ -306,6 +311,8 @@ describe("vault flow", () => {
     const facts: VaultState["facts"] = [
       {
         id: "fact_public",
+        sensitivityClassified: false,
+        sensitivityConfidence: "low",
         factText: "Preferred display name is Kota.",
         domain: "identity_and_profile",
         factType: "identity",
@@ -320,6 +327,8 @@ describe("vault flow", () => {
       },
       {
         id: "fact_personal",
+        sensitivityClassified: false,
+        sensitivityConfidence: "low",
         factText: "Doctor follow-up is scheduled for next month.",
         domain: "health_and_care",
         factType: "support_need",
@@ -334,6 +343,8 @@ describe("vault flow", () => {
       },
       {
         id: "fact_sensitive",
+        sensitivityClassified: false,
+        sensitivityConfidence: "low",
         factText: "Sensitive care plan should stay tightly controlled.",
         domain: "health_and_care",
         factType: "support_need",
@@ -457,6 +468,8 @@ describe("vault flow", () => {
       facts: [
         {
           id: "fact_health",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Doctor follow-up is scheduled for next month.",
           domain: "health_and_care",
           factType: "support_need",
@@ -471,6 +484,8 @@ describe("vault flow", () => {
         },
         {
           id: "fact_work",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Work shift starts at 9am.",
           domain: "work_and_education",
           factType: "routine",
@@ -518,6 +533,8 @@ describe("vault flow", () => {
       facts: [
         {
           id: "fact_health",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Doctor follow-up is scheduled for next month.",
           domain: "health_and_care",
           factType: "support_need",
@@ -573,6 +590,8 @@ describe("vault flow", () => {
       facts: [
         {
           id: "fact_constraint",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "Recurring constraints: weekday time is limited.",
           domain: "constraints_and_accessibility",
           factType: "constraint",
@@ -943,7 +962,8 @@ describe("vault flow", () => {
       facts: [{
         id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
         factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
-        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: [],
+        sensitivityClassified: true, sensitivityConfidence: "high"
       }]
     });
     const enabled = {
@@ -983,6 +1003,8 @@ describe("vault flow", () => {
       facts: [
         {
           id: "fact_1",
+          sensitivityClassified: false,
+          sensitivityConfidence: "low",
           factText: "My name is Kota",
           domain: "identity_and_profile",
           factType: "identity",
@@ -1036,6 +1058,8 @@ describe("vault flow", () => {
           items: [
             {
               id: "item_1",
+              sensitivityClassified: false,
+              sensitivityConfidence: "low",
               factId: "fact_1",
               itemText: "My name is Kota",
               reasonIncluded: "relevant",
@@ -1059,6 +1083,8 @@ describe("vault flow", () => {
           items: [
             {
               id: "item_2",
+              sensitivityClassified: false,
+              sensitivityConfidence: "low",
               factId: "fact_1",
               itemText: "My name is Kota",
               reasonIncluded: "relevant",
@@ -1152,7 +1178,8 @@ describe("vault flow", () => {
       facts: [{
         id: "fact_name", factText: "Preferred name: Kota", domain: "identity_and_profile",
         factType: "identity", sourceIds: [], sensitivity: "personal", confidence: "inferred_and_confirmed",
-        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: []
+        status: "active", createdAt: now, approvedAt: now, updatedAt: now, supersedesFactIds: [],
+        sensitivityClassified: true, sensitivityConfidence: "high"
       }],
       accessPolicies: [{
         clientId: "conn_chatgpt",
@@ -1177,6 +1204,411 @@ describe("vault flow", () => {
     const req = createContextPackRequest(loaded, { clientId: "conn_chatgpt", clientName: "ChatGPT", taskText: "name?", ttlMinutes: 10 });
     const built = buildContextPackForRequest(req.state, req.request.id);
     expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  // Task 4: fail-safe classifier tests
+  it("normalizeFactForLoad defaults missing classifier fields to fail-closed", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const legacyFact = {
+      id: "fact_legacy",
+      factText: "Preferred name: Kota",
+      domain: "identity_and_profile" as const,
+      factType: "background_profile" as const,
+      sourceIds: [],
+      sensitivity: "public" as const,
+      confidence: "source_backed" as const,
+      status: "active" as const,
+      createdAt: now,
+      approvedAt: now,
+      updatedAt: now,
+      supersedesFactIds: []
+      // intentionally omit sensitivityClassified and sensitivityConfidence
+    };
+    const normalized = normalizeVaultState({ ...base, facts: [legacyFact as any] });
+    const fact = normalized.facts[0];
+    expect(fact.sensitivityClassified).toBe(false);
+    expect(fact.sensitivityConfidence).toBe("low");
+  });
+
+  it("reclassifyLegacyFacts upgrades legacy persisted facts (no migration version) on load", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    // Legacy persisted state: a fact with classifier-significant text, NO classifier fields, NO migration version.
+    const legacyFact = {
+      id: "fact_legacy_email",
+      factText: "Contact me at user@example.com",
+      domain: "identity_and_profile" as const,
+      factType: "background_profile" as const,
+      sourceIds: [],
+      sensitivity: "public" as const,
+      confidence: "source_backed" as const,
+      status: "active" as const,
+      createdAt: now,
+      approvedAt: now,
+      updatedAt: now,
+      supersedesFactIds: []
+    };
+    // Strip the migration version to simulate genuinely legacy persisted JSON.
+    const legacyState: any = { ...base, facts: [legacyFact as any] };
+    delete legacyState.classifierMigrationVersion;
+    const normalized = normalizeVaultState(legacyState);
+    const fact = normalized.facts[0];
+    // The email pattern → classified true, high confidence (proves migration ran, not just defaults).
+    expect(fact.sensitivityClassified).toBe(true);
+    expect(fact.sensitivityConfidence).toBe("high");
+    expect(normalized.classifierMigrationVersion).toBe(1);
+  });
+
+  it("mixed pack: one eligible item + one unclassified → pending_user_confirmation", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_classified",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "high" as const
+        },
+        {
+          id: "fact_unclassified",
+          factText: "Some note about plans.",
+          domain: "life_events_and_plans" as const,
+          factType: "note" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: false,
+          sensitivityConfidence: "low" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: true, requiresApprovalAbove: "sensitive" as const }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me with my plans",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  it("always_review short-circuit: even all-eligible items → pending_user_confirmation", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_eligible",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "high" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: false }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me with my plans",
+      approvalMode: "always_review",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  it("empty pack: zero items → not_required (vacuous)", () => {
+    const base = createEmptyVault();
+    const state: VaultState = {
+      ...base,
+      facts: [],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: true }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me plan",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack?.items).toHaveLength(0);
+    expect(built.pack?.confirmationStatus).toBe("not_required");
+  });
+
+  it("edit-adds-secret: approve with edited text reclassifies; manual updateFactMetadata sets sensitivityClassified=false + confidence=low", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Tone note",
+      body: "Tone preference: concise"
+    });
+    const candidateId = state.candidates[0].id;
+    // Approve with edited text that adds an email (personal/high confidence)
+    state = approveCandidate(state, candidateId, { editedText: "Contact: user@example.com" });
+    const fact = state.facts[0];
+    expect(fact.sensitivityClassified).toBe(true);
+    expect(fact.sensitivityConfidence).toBe("high"); // email pattern → high
+    expect(fact.sensitivity).toBe("personal"); // email → personal tier
+
+    // Manual override via updateFactMetadata sets sensitivityClassified=false, confidence=low
+    state = updateFactMetadata(state, fact.id, {
+      factText: fact.factText,
+      domain: fact.domain,
+      sensitivity: "public" // manual override
+    });
+    const updated = state.facts.find((f) => f.id === fact.id)!;
+    expect(updated.sensitivityClassified).toBe(false);
+    expect(updated.sensitivityConfidence).toBe("low");
+  });
+
+  it("updateFactMetadata text-only edit re-classifies the new text (classified=true)", () => {
+    // Start with a fact approved from plain text (no sensitive signals → classified=false).
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Public note",
+      body: "Today I went for a walk."
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    // Plain text → no sensitive signals; sensitivityClassified may be false.
+
+    // Edit to add an email address — keep same sensitivity tier (personal already set by
+    // the email signal), passing current sensitivity so it's not a manual override.
+    const editedText = "Contact me at user@example.com for details.";
+    // The new text has an email: classifier will return personal/high.
+    // We pass the SAME sensitivity value that would be on the fact after approve so the
+    // branch is text-change-only (no sensitivity override).
+    state = updateFactMetadata(state, fact.id, {
+      factText: editedText,
+      domain: fact.domain,
+      sensitivity: fact.sensitivity // same tier as before → text-only branch
+    });
+    const edited = state.facts.find((f) => f.id === fact.id)!;
+    // Re-classification should have run: email → classified=true, confidence=high.
+    expect(edited.sensitivityClassified).toBe(true);
+    expect(edited.sensitivityConfidence).toBe("high");
+  });
+
+  it("updateFactMetadata manual override wins even when text also changes", () => {
+    // Start with a fact with an email (personal/high).
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Contact",
+      body: "Contact: user@example.com"
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    expect(fact.sensitivity).toBe("personal");
+
+    // Change BOTH text AND sensitivity (override wins → classified=false, not re-classified).
+    state = updateFactMetadata(state, fact.id, {
+      factText: "New contact: other@example.com",
+      domain: fact.domain,
+      sensitivity: "public" // manual override different from "personal"
+    });
+    const updated = state.facts.find((f) => f.id === fact.id)!;
+    expect(updated.sensitivityClassified).toBe(false);
+    expect(updated.sensitivityConfidence).toBe("low");
+    expect(updated.sensitivity).toBe("public");
+  });
+
+  it("updateFactMetadata domain-only edit leaves classification fields unchanged", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Work note",
+      body: "Contact: user@example.com"
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    const beforeClassified = fact.sensitivityClassified;
+    const beforeConfidence = fact.sensitivityConfidence;
+
+    // Change only domain — text and sensitivity unchanged.
+    state = updateFactMetadata(state, fact.id, {
+      factText: fact.factText,
+      domain: "work_and_education",
+      sensitivity: fact.sensitivity
+    });
+    const updated = state.facts.find((f) => f.id === fact.id)!;
+    expect(updated.sensitivityClassified).toBe(beforeClassified);
+    expect(updated.sensitivityConfidence).toBe(beforeConfidence);
+    expect(updated.domain).toBe("work_and_education");
+  });
+
+  it("reclassifyLegacyFacts does NOT overwrite explicit sensitivityClassified=false (deliberate override)", () => {
+    // Simulate a vault persisted after a manual override (sensitivityClassified explicitly false).
+    const now = "2026-06-21T00:00:00.000Z";
+    const rawWithExplicitFalse = {
+      facts: [
+        {
+          id: "fact_override",
+          factText: "Contact: user@example.com",
+          domain: "identity_and_profile",
+          sensitivity: "public", // manually overridden
+          sensitivityClassified: false, // explicitly set to false
+          sensitivityConfidence: "low",
+          factType: "background_profile",
+          sourceIds: [],
+          confidence: "source_backed",
+          status: "active",
+          supersedesFactIds: [],
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now
+        }
+      ]
+      // classifierMigrationVersion absent → migration would normally run
+    };
+    const loaded = normalizeVaultState(rawWithExplicitFalse as any);
+    const fact = loaded.facts.find((f) => f.id === "fact_override")!;
+    // Must NOT re-classify: the explicit false must be preserved.
+    expect(fact.sensitivityClassified).toBe(false);
+    expect(fact.sensitivityConfidence).toBe("low");
+    expect(fact.sensitivity).toBe("public");
+  });
+
+  it("per-client bar: zeroTouchConfidenceBar=high blocks medium-confidence item", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_medium_conf",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "medium" as const // medium confidence
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? {
+              ...p,
+              standingDeliveryEnabled: true,
+              zeroTouchConfidenceBar: "high" as const, // bar set to high → medium is below
+              requiresApprovalAbove: "sensitive" as const
+            }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "Help me",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  it("retrieval re-validation: fact going unclassified after build makes pack non-deliverable", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_eligible",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "high" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: true, requiresApprovalAbove: "sensitive" as const }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "What is my name?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    const confirmedState = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmedState.contextPacks.find((p) => p.id === built.pack!.id)!;
+    expect(canSendContextPackToAi(confirmedState, confirmedPack)).toBe(true);
+
+    // Now simulate the fact becoming unclassified
+    const degradedState: VaultState = {
+      ...confirmedState,
+      facts: confirmedState.facts.map((f) =>
+        f.id === "fact_eligible"
+          ? { ...f, sensitivityClassified: false }
+          : f
+      )
+    };
+    expect(canSendContextPackToAi(degradedState, confirmedPack)).toBe(false);
   });
 });
 
