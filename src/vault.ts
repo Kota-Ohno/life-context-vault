@@ -163,9 +163,16 @@ export function normalizeFactForLoad(fact: ApprovedFact): ApprovedFact {
   };
 }
 
-export function reclassifyLegacyFacts(state: VaultState): VaultState {
+export function reclassifyLegacyFacts(state: VaultState, absentClassificationIds?: Set<string>): VaultState {
   if ((state.classifierMigrationVersion ?? 0) >= CLASSIFIER_MIGRATION_VERSION) return state;
+  // Only back-fill facts whose sensitivityClassified key was ABSENT in the persisted JSON
+  // (truly legacy). Facts with an explicit sensitivityClassified value — even false — were
+  // deliberately set and must not be silently promoted.
   const facts = state.facts.map((fact) => {
+    if (absentClassificationIds && !absentClassificationIds.has(fact.id)) {
+      // Field was explicitly present in persisted data: leave it untouched.
+      return fact;
+    }
     const r = classifySensitivity(fact.factText);
     return { ...fact, sensitivityClassified: r.classified, sensitivityConfidence: r.confidence };
   });
@@ -175,6 +182,15 @@ export function reclassifyLegacyFacts(state: VaultState): VaultState {
 export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
   const empty = createEmptyVault();
   if (!parsed || typeof parsed !== "object") return empty;
+  // Collect the IDs of facts whose sensitivityClassified key is ABSENT in the raw persisted
+  // data before normalizeFactForLoad defaults it to false. reclassifyLegacyFacts uses this
+  // set to skip facts that have an explicit (even false) value — those were deliberately set
+  // and must not be silently promoted.
+  const absentClassificationIds = new Set<string>(
+    (parsed.facts ?? [])
+      .filter((f) => f.sensitivityClassified === undefined || f.sensitivityClassified === null)
+      .map((f) => f.id)
+  );
   const normalized: VaultState = {
     ...empty,
     ...parsed,
@@ -205,7 +221,7 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     auditEvents: parsed.auditEvents ?? [],
     classifierMigrationVersion: parsed.classifierMigrationVersion
   };
-  return reclassifyLegacyFacts(normalized);
+  return reclassifyLegacyFacts(normalized, absentClassificationIds);
 }
 
 function normalizeAccessPolicies(
@@ -1000,6 +1016,26 @@ export function updateFactMetadata(
   if (!fact || !factText || input.sensitivity === "secret_never_send") return state;
 
   const now = nowIso();
+
+  // Task 7: re-run classifier when factText changes; clear classification on manual
+  // sensitivity override so the gate knows the item has not been auto-classified.
+  // Branch order mirrors Rust update_fact_metadata_at_path:
+  //   1. Manual sensitivity override (wins even when text also changed) → classified=false, confidence=low
+  //   2. Text-only change → re-classify with the new text
+  //   3. Domain-only or no-change edit → leave classification fields untouched
+  let classificationPatch: Partial<Pick<ApprovedFact, "sensitivityClassified" | "sensitivityConfidence">>;
+  if (input.sensitivity !== fact.sensitivity) {
+    // Manual override: caller explicitly chose a different sensitivity tier.
+    classificationPatch = { sensitivityClassified: false, sensitivityConfidence: "low" };
+  } else if (factText !== fact.factText) {
+    // Text changed, sensitivity not overridden: re-classify the new text.
+    const r = classifySensitivity(factText);
+    classificationPatch = { sensitivityClassified: r.classified, sensitivityConfidence: r.confidence };
+  } else {
+    // No change to sensitivity or text (e.g. domain-only edit): leave classification as-is.
+    classificationPatch = {};
+  }
+
   const affectedFactIds = new Set([factId]);
   const nextPacks = invalidatePacksForFacts(state.contextPacks, affectedFactIds, {
     kind: "stale_fact",
@@ -1020,7 +1056,7 @@ export function updateFactMetadata(
             factText,
             domain: input.domain,
             sensitivity: input.sensitivity,
-            sensitivityClassified: false,
+            ...classificationPatch,
             validFrom: blankToUndefined(input.validFrom),
             validUntil: blankToUndefined(input.validUntil),
             dueDate: blankToUndefined(input.dueDate),

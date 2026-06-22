@@ -2978,12 +2978,17 @@ pub fn update_fact_metadata_at_path(
     set_optional_fact_string(fact, "dueDate", due_date);
     // Task 7: re-run classifier when factText changes; clear classification on manual
     // sensitivity override so the gate knows the item has not been auto-classified.
-    if fact_text != old_fact_text {
+    // Branch order (mirrors TS updateFactMetadata):
+    //   1. Manual sensitivity override wins — even when text also changed.
+    //   2. Text-only change — re-classify with the new text.
+    //   3. Domain-only / no-change edit — leave classification fields untouched.
+    if sensitivity != old_sensitivity {
+      fact["sensitivityClassified"] = Value::Bool(false);
+      fact["sensitivityConfidence"] = Value::String("low".to_string());
+    } else if fact_text != old_fact_text {
       let classification = classify_sensitivity(&fact_text);
       fact["sensitivityClassified"] = Value::Bool(classification.classified);
       fact["sensitivityConfidence"] = Value::String(classification.confidence.to_string());
-    } else if sensitivity != old_sensitivity {
-      fact["sensitivityClassified"] = Value::Bool(false);
     }
   }
   let invalidated_pack_count = invalidate_context_packs_for_facts_with_warning(
@@ -8277,18 +8282,18 @@ fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), S
   if current_version >= CLASSIFIER_MIGRATION_VERSION {
     return Ok(());
   }
-  // Back-fill classification fields on unclassified facts.
+  // Back-fill classification fields only on facts where sensitivityClassified is ABSENT
+  // from the persisted JSON (truly legacy). Facts that have an explicit value — even
+  // false — were deliberately set (e.g. after a manual sensitivity override) and must
+  // not be silently promoted.
   if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
     for fact in facts.iter_mut() {
       let fact_text = str_field(fact, "factText");
       if fact_text.is_empty() {
         continue;
       }
-      let already_classified = fact
-        .get("sensitivityClassified")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-      if !already_classified {
+      let classification_key_present = fact.get("sensitivityClassified").is_some();
+      if !classification_key_present {
         let result = classify_sensitivity(&fact_text);
         fact["sensitivityClassified"] = Value::Bool(result.classified);
         fact["sensitivityConfidence"] = Value::String(result.confidence.to_string());
@@ -12894,7 +12899,7 @@ mod tests {
 
   #[test]
   fn edit_fact_reclassifies_when_text_changes() {
-    // Editing a fact's text must re-run classify_sensitivity and update fields.
+    // Editing a fact's text (without changing sensitivity) must re-run classify_sensitivity.
     use_test_vault_key();
     let path = temp_vault_path("edit-reclassify");
     let r = add_source_with_candidates_at_path(
@@ -12910,21 +12915,25 @@ mod tests {
     let connection =
       vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let vault = load_vault_json_from_connection(&connection).expect("load");
-    let fact_id = vault
+    let fact = vault
       .get("facts")
       .and_then(Value::as_array)
       .and_then(|facts| facts.first())
-      .map(|fact| str_field(fact, "id"))
-      .expect("fact id");
+      .cloned()
+      .expect("fact");
+    let fact_id = str_field(&fact, "id");
+    // Plain text has no sensitive signals → approved as "public".
+    let original_sensitivity = str_field(&fact, "sensitivity");
     drop(connection);
 
     // Edit the fact text to include an email address (triggers high-confidence classification).
+    // Keep the SAME sensitivity tier so this is a text-only change (not an override).
     let result = update_fact_metadata_at_path(
       &path,
       &fact_id,
       "Contact alice@example.com for hiking group details.",
       "relationships_and_household",
-      "personal",
+      &original_sensitivity, // unchanged → text-only branch fires
       None,
       None,
       None,
@@ -12932,23 +12941,94 @@ mod tests {
     .expect("edit fact");
 
     let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
-    let fact = saved
+    let updated_fact = saved
       .get("facts")
       .and_then(Value::as_array)
       .and_then(|facts| facts.iter().find(|f| str_field(f, "id") == fact_id))
       .expect("fact in vault");
 
     assert!(
-      fact
+      updated_fact
         .get("sensitivityClassified")
         .and_then(Value::as_bool)
         .unwrap_or(false),
       "editing fact text with email should re-classify as classified=true"
     );
     assert_eq!(
-      fact.get("sensitivityConfidence").and_then(Value::as_str),
+      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
       Some("high"),
       "email pattern should produce high confidence"
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn edit_fact_manual_sensitivity_override_clears_classification() {
+    // A manual sensitivity change (even when text also changes) must set classified=false,
+    // confidence=low — override wins per the plan.
+    use_test_vault_key();
+    let path = temp_vault_path("edit-override");
+    // Use body with "email" keyword so detect_sensitivity returns "personal".
+    let r = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact note",
+      "Please send your email address to alice.",
+    )
+    .expect("src");
+    approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
+
+    let connection =
+      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let vault = load_vault_json_from_connection(&connection).expect("load");
+    let fact = vault
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.first())
+      .cloned()
+      .expect("fact");
+    let fact_id = str_field(&fact, "id");
+    let original_sensitivity = str_field(&fact, "sensitivity"); // "personal" from "email" keyword
+    drop(connection);
+    assert_eq!(original_sensitivity, "personal", "body with 'email' keyword should yield personal tier");
+
+    // Override sensitivity to "public" (manual change) while also changing text.
+    let result = update_fact_metadata_at_path(
+      &path,
+      &fact_id,
+      "Contact alice@example.com for hiking group details.", // text also changed
+      "relationships_and_household",
+      "public", // different from "personal" → override branch wins
+      None,
+      None,
+      None,
+    )
+    .expect("edit fact");
+
+    let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
+    let updated_fact = saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .and_then(|facts| facts.iter().find(|f| str_field(f, "id") == fact_id))
+      .expect("fact in vault");
+
+    assert_eq!(
+      updated_fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool),
+      Some(false),
+      "manual sensitivity override must set classified=false"
+    );
+    assert_eq!(
+      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
+      Some("low"),
+      "manual sensitivity override must set confidence=low"
+    );
+    assert_eq!(
+      updated_fact.get("sensitivity").and_then(Value::as_str),
+      Some("public"),
+      "override sensitivity must be persisted"
     );
     remove_temp_vault(&path);
   }

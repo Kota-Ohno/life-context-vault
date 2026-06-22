@@ -1377,7 +1377,7 @@ describe("vault flow", () => {
     expect(built.pack?.confirmationStatus).toBe("not_required");
   });
 
-  it("edit-adds-secret: approve with edited text reclassifies; manual updateFactMetadata sets sensitivityClassified=false", () => {
+  it("edit-adds-secret: approve with edited text reclassifies; manual updateFactMetadata sets sensitivityClassified=false + confidence=low", () => {
     let state = addSourceWithCandidates(createEmptyVault(), {
       kind: "manual_note",
       origin: "manual_entry",
@@ -1392,7 +1392,7 @@ describe("vault flow", () => {
     expect(fact.sensitivityConfidence).toBe("high"); // email pattern → high
     expect(fact.sensitivity).toBe("personal"); // email → personal tier
 
-    // Manual override via updateFactMetadata sets sensitivityClassified=false
+    // Manual override via updateFactMetadata sets sensitivityClassified=false, confidence=low
     state = updateFactMetadata(state, fact.id, {
       factText: fact.factText,
       domain: fact.domain,
@@ -1400,6 +1400,119 @@ describe("vault flow", () => {
     });
     const updated = state.facts.find((f) => f.id === fact.id)!;
     expect(updated.sensitivityClassified).toBe(false);
+    expect(updated.sensitivityConfidence).toBe("low");
+  });
+
+  it("updateFactMetadata text-only edit re-classifies the new text (classified=true)", () => {
+    // Start with a fact approved from plain text (no sensitive signals → classified=false).
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Public note",
+      body: "Today I went for a walk."
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    // Plain text → no sensitive signals; sensitivityClassified may be false.
+
+    // Edit to add an email address — keep same sensitivity tier (personal already set by
+    // the email signal), passing current sensitivity so it's not a manual override.
+    const editedText = "Contact me at user@example.com for details.";
+    // The new text has an email: classifier will return personal/high.
+    // We pass the SAME sensitivity value that would be on the fact after approve so the
+    // branch is text-change-only (no sensitivity override).
+    state = updateFactMetadata(state, fact.id, {
+      factText: editedText,
+      domain: fact.domain,
+      sensitivity: fact.sensitivity // same tier as before → text-only branch
+    });
+    const edited = state.facts.find((f) => f.id === fact.id)!;
+    // Re-classification should have run: email → classified=true, confidence=high.
+    expect(edited.sensitivityClassified).toBe(true);
+    expect(edited.sensitivityConfidence).toBe("high");
+  });
+
+  it("updateFactMetadata manual override wins even when text also changes", () => {
+    // Start with a fact with an email (personal/high).
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Contact",
+      body: "Contact: user@example.com"
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    expect(fact.sensitivity).toBe("personal");
+
+    // Change BOTH text AND sensitivity (override wins → classified=false, not re-classified).
+    state = updateFactMetadata(state, fact.id, {
+      factText: "New contact: other@example.com",
+      domain: fact.domain,
+      sensitivity: "public" // manual override different from "personal"
+    });
+    const updated = state.facts.find((f) => f.id === fact.id)!;
+    expect(updated.sensitivityClassified).toBe(false);
+    expect(updated.sensitivityConfidence).toBe("low");
+    expect(updated.sensitivity).toBe("public");
+  });
+
+  it("updateFactMetadata domain-only edit leaves classification fields unchanged", () => {
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Work note",
+      body: "Contact: user@example.com"
+    });
+    const candidateId = state.candidates[0].id;
+    state = approveCandidate(state, candidateId);
+    const fact = state.facts[0];
+    const beforeClassified = fact.sensitivityClassified;
+    const beforeConfidence = fact.sensitivityConfidence;
+
+    // Change only domain — text and sensitivity unchanged.
+    state = updateFactMetadata(state, fact.id, {
+      factText: fact.factText,
+      domain: "work_and_career",
+      sensitivity: fact.sensitivity
+    });
+    const updated = state.facts.find((f) => f.id === fact.id)!;
+    expect(updated.sensitivityClassified).toBe(beforeClassified);
+    expect(updated.sensitivityConfidence).toBe(beforeConfidence);
+    expect(updated.domain).toBe("work_and_career");
+  });
+
+  it("reclassifyLegacyFacts does NOT overwrite explicit sensitivityClassified=false (deliberate override)", () => {
+    // Simulate a vault persisted after a manual override (sensitivityClassified explicitly false).
+    const now = "2026-06-21T00:00:00.000Z";
+    const rawWithExplicitFalse = {
+      facts: [
+        {
+          id: "fact_override",
+          factText: "Contact: user@example.com",
+          domain: "identity_and_profile",
+          sensitivity: "public", // manually overridden
+          sensitivityClassified: false, // explicitly set to false
+          sensitivityConfidence: "low",
+          factType: "background_profile",
+          sourceIds: [],
+          confidence: "source_backed",
+          status: "active",
+          supersedesFactIds: [],
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now
+        }
+      ]
+      // classifierMigrationVersion absent → migration would normally run
+    };
+    const loaded = normalizeVaultState(rawWithExplicitFalse as any);
+    const fact = loaded.facts.find((f) => f.id === "fact_override")!;
+    // Must NOT re-classify: the explicit false must be preserved.
+    expect(fact.sensitivityClassified).toBe(false);
+    expect(fact.sensitivityConfidence).toBe("low");
+    expect(fact.sensitivity).toBe("public");
   });
 
   it("per-client bar: zeroTouchConfidenceBar=high blocks medium-confidence item", () => {
