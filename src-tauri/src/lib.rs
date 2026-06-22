@@ -12,10 +12,8 @@ use std::{
   ffi::OsString,
   fs,
   io::{Cursor, Read, Write},
-
   path::{Path, PathBuf},
   process::{Command, Output, Stdio},
-
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -25,11 +23,11 @@ use tauri::{
   ActivationPolicy, App, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
+mod embeddings;
 mod mcp_stdio;
 mod vault_backup;
 mod vault_crypto;
 mod vault_recovery;
-mod embeddings;
 
 const VAULT_STATE_KEY: &str = "vault_state";
 const PROJECTION_STATE_KEY: &str = "vault_state_updated_at";
@@ -386,8 +384,7 @@ fn vault_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     .path()
     .app_data_dir()
     .map_err(|error| format!("failed to resolve app data dir: {error}"))?;
-  fs::create_dir_all(&dir)
-    .map_err(|error| format!("failed to create app data dir: {error}"))?;
+  fs::create_dir_all(&dir).map_err(|error| format!("failed to create app data dir: {error}"))?;
   Ok(dir.join("vault.sqlite3"))
 }
 
@@ -633,7 +630,12 @@ fn initialize_vault_schema(connection: &Connection) -> Result<(), String> {
   ensure_column(connection, "facts", "superseded_by_fact_id", "TEXT")?;
   ensure_column(connection, "facts", "sensitivity_classified", "INTEGER")?;
   ensure_column(connection, "facts", "sensitivity_confidence", "TEXT")?;
-  ensure_column(connection, "memory_candidates", "conflict_with_fact_ids", "TEXT")?;
+  ensure_column(
+    connection,
+    "memory_candidates",
+    "conflict_with_fact_ids",
+    "TEXT",
+  )?;
   ensure_column(connection, "memory_candidates", "conflict_reason", "TEXT")?;
   connection
     .execute(
@@ -664,15 +666,18 @@ fn ensure_column(
 
   if !columns.iter().any(|existing| existing == column) {
     connection
-      .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"), [])
+      .execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+      )
       .map_err(|error| format!("failed to add {table}.{column}: {error}"))?;
   }
   Ok(())
 }
 
 fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<(), String> {
-  let vault: Value =
-    serde_json::from_str(payload).map_err(|error| format!("failed to parse vault payload: {error}"))?;
+  let vault: Value = serde_json::from_str(payload)
+    .map_err(|error| format!("failed to parse vault payload: {error}"))?;
   let transaction = connection
     .transaction()
     .map_err(|error| format!("failed to start vault sync transaction: {error}"))?;
@@ -738,7 +743,9 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
             str_field(source, "createdAt")
           ],
         )
-        .map_err(|error| format!("failed to sync source chunk {chunk_index} for {source_id}: {error}"))?;
+        .map_err(|error| {
+          format!("failed to sync source chunk {chunk_index} for {source_id}: {error}")
+        })?;
     }
   }
 
@@ -821,7 +828,11 @@ fn sync_normalized_tables(connection: &mut Connection, payload: &str) -> Result<
     transaction
       .execute(
         "INSERT INTO facts_fts (fact_id, fact_text, domain) VALUES (?1, ?2, ?3)",
-        params![fact_id, str_field(fact, "factText"), str_field(fact, "domain")],
+        params![
+          fact_id,
+          str_field(fact, "factText"),
+          str_field(fact, "domain")
+        ],
       )
       .map_err(|error| format!("failed to sync fact FTS {fact_id}: {error}"))?;
   }
@@ -966,7 +977,8 @@ fn source_chunks_for_text(text: &str) -> Vec<String> {
     let hard_end = (start + SOURCE_CHUNK_TARGET_CHARS).min(chars.len());
     let mut end = hard_end;
     if hard_end < chars.len() {
-      let search_start = start + SOURCE_CHUNK_TARGET_CHARS.saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS);
+      let search_start =
+        start + SOURCE_CHUNK_TARGET_CHARS.saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS);
       if let Some(boundary) = (search_start..hard_end)
         .rev()
         .find(|index| chars[*index].is_whitespace() || matches!(chars[*index], '.' | '。' | '\n'))
@@ -977,11 +989,19 @@ fn source_chunks_for_text(text: &str) -> Vec<String> {
       }
     }
 
-    chunks.push(chars[start..end].iter().collect::<String>().trim().to_string());
+    chunks.push(
+      chars[start..end]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string(),
+    );
     if end >= chars.len() {
       break;
     }
-    start = end.saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS).max(start + 1);
+    start = end
+      .saturating_sub(SOURCE_CHUNK_OVERLAP_CHARS)
+      .max(start + 1);
   }
 
   chunks
@@ -1151,7 +1171,10 @@ fn search_facts_in_connection(
       )
       .map_err(|error| format!("failed to prepare FTS fact search: {error}"))?;
     let results = statement
-      .query_map(params![fts_query, domain, sensitivity, limit], row_to_native_fact_search_result)
+      .query_map(
+        params![fts_query, domain, sensitivity, limit],
+        row_to_native_fact_search_result,
+      )
       .map_err(|error| format!("failed to run FTS fact search: {error}"))?
       .collect::<Result<Vec<_>, _>>()
       .map_err(|error| format!("failed to collect FTS fact search results: {error}"));
@@ -1187,7 +1210,10 @@ fn search_facts_in_connection(
     )
     .map_err(|error| format!("failed to prepare fact search: {error}"))?;
   let results = statement
-    .query_map(params![domain, sensitivity, limit], row_to_native_fact_search_result)
+    .query_map(
+      params![domain, sensitivity, limit],
+      row_to_native_fact_search_result,
+    )
     .map_err(|error| format!("failed to run fact search: {error}"))?
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| format!("failed to collect fact search results: {error}"));
@@ -1274,12 +1300,7 @@ fn create_native_context_pack_request_in_connection(
       }));
       continue;
     }
-    if fact
-      .valid_until
-      .as_deref()
-      .map(is_expired)
-      .unwrap_or(false)
-    {
+    if fact.valid_until.as_deref().map(is_expired).unwrap_or(false) {
       excluded_items.push(json!({
         "referencedId": fact.id,
         "reason": "expired"
@@ -1321,7 +1342,9 @@ fn create_native_context_pack_request_in_connection(
   let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
   let bar = policy_zero_touch_confidence_bar_for_client(vault, client_id);
   let requires_confirmation = approval_mode == "always_review"
-    || !items.iter().all(|it| zero_touch_eligible(it, &requires_approval_above, &bar));
+    || !items
+      .iter()
+      .all(|it| zero_touch_eligible(it, &requires_approval_above, &bar));
   let confirmation_status = if requires_confirmation {
     "pending_user_confirmation"
   } else {
@@ -1435,7 +1458,8 @@ pub fn create_context_pack_request_at_path(
   let expires_at = str_field(&request, "expiresAt");
   let max_sensitivity_included = str_field(&pack, "maxSensitivityIncluded");
   let confirmation_status = str_field(&pack, "confirmationStatus");
-  let context_pack = if confirmation_status == "not_required" || confirmation_status == "confirmed" {
+  let context_pack = if confirmation_status == "not_required" || confirmation_status == "confirmed"
+  {
     Some(safe_context_pack_for_client(&pack))
   } else {
     None
@@ -1556,7 +1580,8 @@ pub fn confirm_context_pack_at_path(
   if let Some(request_id) = request_id.as_deref() {
     set_context_request_status(&mut vault, request_id, "fulfilled");
   }
-  let confirmed_pack = find_vault_item_by_id(&vault, "contextPacks", pack_id).unwrap_or_else(|| pack.clone());
+  let confirmed_pack =
+    find_vault_item_by_id(&vault, "contextPacks", pack_id).unwrap_or_else(|| pack.clone());
   let mut metadata = context_pack_receipt_metadata(
     &vault,
     &confirmed_pack,
@@ -1635,11 +1660,13 @@ pub fn deny_context_pack_request_at_path(
 
 fn load_vault_json_from_connection(connection: &Connection) -> Result<Value, String> {
   let snapshot = load_vault_state_snapshot_from_connection(connection)?;
-  Ok(snapshot
-    .payload
-    .as_deref()
-    .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
-    .unwrap_or_else(empty_vault_json))
+  Ok(
+    snapshot
+      .payload
+      .as_deref()
+      .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+      .unwrap_or_else(empty_vault_json),
+  )
 }
 
 fn purge_expired_passive_captures_in_vault(vault: &mut Value) -> usize {
@@ -1714,7 +1741,10 @@ fn save_vault_json_with_projection(
   let payload = vault_to_save.to_string();
   let save_result = save_vault_state_payload(connection, &payload, None)?;
   let saved_snapshot = load_vault_state_snapshot_from_connection(connection)?;
-  Ok((saved_snapshot.payload.unwrap_or(payload), save_result.updated_at))
+  Ok((
+    saved_snapshot.payload.unwrap_or(payload),
+    save_result.updated_at,
+  ))
 }
 
 pub fn export_encrypted_backup_at_path(path: &Path, passphrase: &str) -> Result<String, String> {
@@ -1747,7 +1777,12 @@ pub fn import_encrypted_backup_at_path(
 pub fn get_runtime_preferences_at_path(path: &Path) -> Result<Value, String> {
   let connection = open_vault_db_at_path(path)?;
   let vault = load_vault_json_from_connection(&connection)?;
-  Ok(vault.get("runtimePreferences").cloned().unwrap_or_else(|| json!({})))
+  Ok(
+    vault
+      .get("runtimePreferences")
+      .cloned()
+      .unwrap_or_else(|| json!({})),
+  )
 }
 
 pub fn save_runtime_preferences_at_path(path: &Path, prefs: &Value) -> Result<(), String> {
@@ -1796,7 +1831,8 @@ pub fn write_local_backup_to_dir(
   dest_dir: &Path,
   retention: usize,
 ) -> Result<PathBuf, String> {
-  fs::create_dir_all(dest_dir).map_err(|error| format!("failed to create backup directory: {error}"))?;
+  fs::create_dir_all(dest_dir)
+    .map_err(|error| format!("failed to create backup directory: {error}"))?;
   let envelope = export_local_backup_at_path(db_path)?;
   let stamp = SystemTime::now()
     .duration_since(UNIX_EPOCH)
@@ -1815,7 +1851,11 @@ fn prune_local_backups(dest_dir: &Path, retention: usize) -> Result<(), String> 
     .filter_map(|entry| {
       let path = entry.path();
       let name = path.file_name()?.to_str()?;
-      let stamp = name.strip_prefix("vault-")?.strip_suffix(".lcvbak")?.parse::<u64>().ok()?;
+      let stamp = name
+        .strip_prefix("vault-")?
+        .strip_suffix(".lcvbak")?
+        .parse::<u64>()
+        .ok()?;
       Some((path, stamp))
     })
     .collect();
@@ -1852,7 +1892,10 @@ fn write_recovery_envelope(app: AppHandle, recovery_key: String) -> Result<(), S
 
 #[tauri::command]
 fn recover_vault_with_recovery_key(_app: AppHandle, _recovery_key: String) -> Result<(), String> {
-  Err("Recovery re-key requires macOS Keychain; restore from an encrypted backup instead.".to_string())
+  Err(
+    "Recovery re-key requires macOS Keychain; restore from an encrypted backup instead."
+      .to_string(),
+  )
 }
 
 #[tauri::command]
@@ -1887,14 +1930,22 @@ pub fn write_recovery_envelope_at_path(db_path: &Path, recovery_key: &str) -> Re
   let vault_key = vault_crypto::vault_key()?;
   let envelope = vault_recovery::wrap_vault_key(&vault_key, recovery_key)?;
   let sidecar = recovery_sidecar_path(db_path);
-  fs::write(&sidecar, envelope)
-    .map_err(|error| format!("failed to write recovery envelope to {}: {error}", sidecar.display()))
+  fs::write(&sidecar, envelope).map_err(|error| {
+    format!(
+      "failed to write recovery envelope to {}: {error}",
+      sidecar.display()
+    )
+  })
 }
 
 pub fn recover_vault_key_at_path(db_path: &Path, recovery_key: &str) -> Result<String, String> {
   let sidecar = recovery_sidecar_path(db_path);
-  let envelope = fs::read_to_string(&sidecar)
-    .map_err(|error| format!("failed to read recovery envelope at {}: {error}", sidecar.display()))?;
+  let envelope = fs::read_to_string(&sidecar).map_err(|error| {
+    format!(
+      "failed to read recovery envelope at {}: {error}",
+      sidecar.display()
+    )
+  })?;
   vault_recovery::unwrap_vault_key(&envelope, recovery_key)
 }
 
@@ -2413,7 +2464,10 @@ pub fn update_passive_capture_settings_at_path(
   );
 
   let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
-  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+  Ok(VaultCoreSettingsUpdateResult {
+    payload,
+    updated_at,
+  })
 }
 
 pub fn update_access_policy_at_path(
@@ -2432,25 +2486,26 @@ pub fn update_access_policy_at_path(
   let mut vault = load_vault_json_from_connection(&connection)?;
   ensure_access_policy_for_client(&mut vault, client_id);
   let now = now_iso();
-  let ceiling = sensitivity_ceiling
-    .map(sensitivity_tier)
-    .transpose()?;
-  let approval = requires_approval_above
-    .map(sensitivity_tier)
-    .transpose()?;
+  let ceiling = sensitivity_ceiling.map(sensitivity_tier).transpose()?;
+  let approval = requires_approval_above.map(sensitivity_tier).transpose()?;
   let domains = domain_allowlist
     .map(normalize_policy_domain_allowlist)
     .transpose()?;
 
   let (policy_id, sensitivity, mut metadata) = {
-    let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+    let Some(policies) = vault
+      .get_mut("accessPolicies")
+      .and_then(Value::as_array_mut)
+    else {
       return Err("Vault has no accessPolicies array.".to_string());
     };
     let Some(policy) = policies
       .iter_mut()
       .find(|policy| str_field(policy, "clientId") == client_id)
     else {
-      return Err(format!("AccessPolicy was not found for client: {client_id}"));
+      return Err(format!(
+        "AccessPolicy was not found for client: {client_id}"
+      ));
     };
 
     if let Some(ceiling) = ceiling {
@@ -2468,7 +2523,8 @@ pub fn update_access_policy_at_path(
     policy["updatedAt"] = Value::String(now.clone());
     let policy_id = str_field(policy, "id");
     let sensitivity = str_field(policy, "sensitivityCeiling");
-    let normalized_domains = normalize_existing_policy_domain_allowlist(policy.get("domainAllowlist"));
+    let normalized_domains =
+      normalize_existing_policy_domain_allowlist(policy.get("domainAllowlist"));
     let normalized_domain_count = normalized_domains.len();
     let metadata = json!({
       "clientId": client_id,
@@ -2483,7 +2539,10 @@ pub fn update_access_policy_at_path(
   };
   let invalidated_pack_count = invalidate_context_packs_for_client_policy(&mut vault, client_id);
   if let Some(object) = metadata.as_object_mut() {
-    object.insert("invalidatedPackCount".to_string(), json!(invalidated_pack_count));
+    object.insert(
+      "invalidatedPackCount".to_string(),
+      json!(invalidated_pack_count),
+    );
   }
 
   push_json_array(
@@ -2499,7 +2558,10 @@ pub fn update_access_policy_at_path(
   );
 
   let (payload, updated_at) = save_vault_json_with_projection(&mut connection, &vault)?;
-  Ok(VaultCoreSettingsUpdateResult { payload, updated_at })
+  Ok(VaultCoreSettingsUpdateResult {
+    payload,
+    updated_at,
+  })
 }
 
 pub fn set_connection_standing_delivery_at_path(
@@ -2516,14 +2578,19 @@ pub fn set_connection_standing_delivery_at_path(
   ensure_access_policy_for_client(&mut vault, client_id);
   let now = now_iso();
   {
-    let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) else {
+    let Some(policies) = vault
+      .get_mut("accessPolicies")
+      .and_then(Value::as_array_mut)
+    else {
       return Err("Vault has no accessPolicies array.".to_string());
     };
     let Some(policy) = policies
       .iter_mut()
       .find(|policy| str_field(policy, "clientId") == client_id)
     else {
-      return Err(format!("AccessPolicy was not found for client: {client_id}"));
+      return Err(format!(
+        "AccessPolicy was not found for client: {client_id}"
+      ));
     };
     policy["standingDeliveryEnabled"] = Value::Bool(enabled);
     policy["updatedAt"] = Value::String(now);
@@ -2561,7 +2628,9 @@ pub fn update_source_lifecycle_at_path(
     match action {
       "restore" => {
         if str_field(source, "deletionState") == "purged" {
-          return Err("purged Sources cannot be restored because the Raw body was removed.".to_string());
+          return Err(
+            "purged Sources cannot be restored because the Raw body was removed.".to_string(),
+          );
         }
         source["deletionState"] = Value::String("active".to_string());
         source["processingStatus"] = Value::String("ready".to_string());
@@ -2644,7 +2713,11 @@ pub fn purge_browser_passive_capture_source_at_path(
   let Some(source) = vault
     .get("sources")
     .and_then(Value::as_array)
-    .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_id))
+    .and_then(|sources| {
+      sources
+        .iter()
+        .find(|source| str_field(source, "id") == source_id)
+    })
   else {
     return Err(format!("Source was not found: {source_id}"));
   };
@@ -2769,7 +2842,10 @@ pub fn update_source_body_at_path(
       return Err(format!("Source was not found: {source_id}"));
     };
     if str_field(source, "deletionState") != "active" {
-      return Err("only active Sources can be edited. Restore the Source before editing its body.".to_string());
+      return Err(
+        "only active Sources can be edited. Restore the Source before editing its body."
+          .to_string(),
+      );
     }
     source["body"] = Value::String(sanitized.clone());
     source["defaultSensitivity"] = Value::String(detected_sensitivity.clone());
@@ -3054,10 +3130,7 @@ pub fn approve_candidate_with_options_at_path(
     return Err("candidate is already approved.".to_string());
   }
   let proposed_text = str_field(&candidate, "proposedFactText");
-  let fact_text = edited_text
-    .unwrap_or(&proposed_text)
-    .trim()
-    .to_string();
+  let fact_text = edited_text.unwrap_or(&proposed_text).trim().to_string();
   if fact_text.is_empty() {
     return Err("approved fact text is required.".to_string());
   }
@@ -3074,7 +3147,9 @@ pub fn approve_candidate_with_options_at_path(
       return Err(format!("Superseded Fact was not found: {requested_id}"));
     };
     if str_field(&existing_fact, "status") != "active" {
-      return Err(format!("Only active Facts can be superseded: {requested_id}"));
+      return Err(format!(
+        "Only active Facts can be superseded: {requested_id}"
+      ));
     }
     superseded_fact_ids.push(requested_id.to_string());
   }
@@ -3083,7 +3158,9 @@ pub fn approve_candidate_with_options_at_path(
     .cloned()
     .unwrap_or_else(|| json!([]));
   if source_ids_have_deleted_source_in_vault(&vault, &source_ids) {
-    return Err("candidates from deleted or purged Sources cannot be approved as Facts.".to_string());
+    return Err(
+      "candidates from deleted or purged Sources cannot be approved as Facts.".to_string(),
+    );
   }
   let source_backed = source_ids
     .as_array()
@@ -3351,7 +3428,11 @@ fn get_context_request_status_at_path_with_client(
       return Ok(VaultCoreRequestStatusResult {
         status: "expired".to_string(),
         request_id: request_id.to_string(),
-        expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+        expires_at: if expires_at.is_empty() {
+          None
+        } else {
+          Some(expires_at)
+        },
         context_pack: None,
       });
     };
@@ -3359,14 +3440,22 @@ fn get_context_request_status_at_path_with_client(
       return Ok(VaultCoreRequestStatusResult {
         status: "expired".to_string(),
         request_id: request_id.to_string(),
-        expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+        expires_at: if expires_at.is_empty() {
+          None
+        } else {
+          Some(expires_at)
+        },
         context_pack: None,
       });
     }
     return Ok(VaultCoreRequestStatusResult {
       status: "fulfilled".to_string(),
       request_id: request_id.to_string(),
-      expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+      expires_at: if expires_at.is_empty() {
+        None
+      } else {
+        Some(expires_at)
+      },
       context_pack: Some(safe_context_pack_for_client(pack)),
     });
   }
@@ -3374,7 +3463,11 @@ fn get_context_request_status_at_path_with_client(
   Ok(VaultCoreRequestStatusResult {
     status: str_field(&request, "status"),
     request_id: request_id.to_string(),
-    expires_at: if expires_at.is_empty() { None } else { Some(expires_at) },
+    expires_at: if expires_at.is_empty() {
+      None
+    } else {
+      Some(expires_at)
+    },
     context_pack: None,
   })
 }
@@ -3430,7 +3523,9 @@ fn ensure_pack_can_be_edited(vault: &mut Value, pack: &Value) -> Result<(), Stri
     return Err("cancelled ContextPacks cannot be edited.".to_string());
   }
   if status == "confirmed" {
-    return Err("confirmed ContextPacks cannot be edited. Create a new request instead.".to_string());
+    return Err(
+      "confirmed ContextPacks cannot be edited. Create a new request instead.".to_string(),
+    );
   }
   ensure_pack_not_expired(vault, pack)?;
   if let Some(request_id) = optional_str_field(pack, "requestId") {
@@ -3444,7 +3539,10 @@ fn ensure_pack_can_be_edited(vault: &mut Value, pack: &Value) -> Result<(), Stri
   Ok(())
 }
 
-fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) -> Result<(), String> {
+fn ensure_context_pack_allowed_by_current_policy(
+  vault: &Value,
+  pack: &Value,
+) -> Result<(), String> {
   let request_id = optional_str_field(pack, "requestId")
     .ok_or_else(|| "ContextPack has no client request boundary.".to_string())?;
   let request = find_vault_item_by_id(vault, "contextPackRequests", &request_id)
@@ -3458,7 +3556,8 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
     return Err(format!("ContextPackRequest is already {request_status}."));
   }
   let policy_ceiling = policy_ceiling_for_client(vault, &client_id);
-  let request_ceiling = policy_sensitivity_value(&str_field(&request, "sensitivityCeiling"), "public");
+  let request_ceiling =
+    policy_sensitivity_value(&str_field(&request, "sensitivityCeiling"), "public");
   let ceiling = lower_sensitivity_tier(&policy_ceiling, &request_ceiling);
   let domain_allowlist = policy_domain_allowlist_for_client(vault, &client_id);
   let items = pack
@@ -3546,9 +3645,7 @@ fn ensure_context_pack_allowed_by_current_policy(vault: &Value, pack: &Value) ->
       let bar = policy_zero_touch_confidence_bar_for_client(vault, &client_id);
       let requires_approval_above = policy_requires_approval_above_for_client(vault, &client_id);
       if !zero_touch_eligible(&item, &requires_approval_above, &bar) {
-        return Err(
-          "ContextPack item is no longer eligible for zero-touch delivery.".to_string(),
-        );
+        return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
       }
     }
   }
@@ -3603,7 +3700,10 @@ fn remove_fact_from_context_pack(
       && item.get("reason").and_then(Value::as_str) == Some("user_hidden")
   });
   if !already_excluded {
-    excluded_items.insert(0, json!({ "referencedId": fact_id, "reason": "user_hidden" }));
+    excluded_items.insert(
+      0,
+      json!({ "referencedId": fact_id, "reason": "user_hidden" }),
+    );
   }
   refresh_user_edited_context_pack(connection, pack, next_items, excluded_items, ceiling)
 }
@@ -3631,12 +3731,16 @@ fn restore_fact_to_context_pack(
   if !fact_eligible_for_context_pack(&fact, ceiling) {
     return Err("Fact is not eligible for this Context Pack.".to_string());
   }
-  if !domain_allowlist.is_empty() && !domain_allowlist.iter().any(|domain| domain == &fact.domain)
-  {
+  if !domain_allowlist.is_empty() && !domain_allowlist.iter().any(|domain| domain == &fact.domain) {
     return Err("Fact is outside this AI client's allowed life domains.".to_string());
   }
   let task_domain = str_field(pack, "taskDomain");
-  items.push(context_pack_item_from_fact(connection, &fact, &task_domain, ceiling)?);
+  items.push(context_pack_item_from_fact(
+    connection,
+    &fact,
+    &task_domain,
+    ceiling,
+  )?);
   let excluded_items = pack
     .get("excludedItems")
     .and_then(Value::as_array)
@@ -3664,7 +3768,8 @@ fn refresh_user_edited_context_pack(
   next_pack["sourceSnippets"] = Value::Array(snippets);
   next_pack["excludedItems"] = Value::Array(excluded_items.clone());
   next_pack["warnings"] = Value::Array(context_pack_warnings(connection, &items, &excluded_items)?);
-  next_pack["maxSensitivityIncluded"] = Value::String(max_sensitivity_for_items(&items).to_string());
+  next_pack["maxSensitivityIncluded"] =
+    Value::String(max_sensitivity_for_items(&items).to_string());
   next_pack["confirmationStatus"] = Value::String("edited_by_user".to_string());
   if let Some(object) = next_pack.as_object_mut() {
     object.remove("confirmedAt");
@@ -3702,12 +3807,7 @@ fn fact_eligible_for_context_pack(fact: &NativeFactSearchResult, ceiling: &str) 
   fact.status == "active"
     && fact.sensitivity != "secret_never_send"
     && sensitivity_rank(&fact.sensitivity) <= sensitivity_rank(ceiling)
-    && fact
-      .valid_until
-      .as_deref()
-      .map(is_expired)
-      .unwrap_or(false)
-      == false
+    && fact.valid_until.as_deref().map(is_expired).unwrap_or(false) == false
 }
 
 fn source_snippets_for_context_items(
@@ -3792,7 +3892,12 @@ fn replace_vault_item_by_id(
   })
 }
 
-fn mutate_vault_item_by_id<F>(vault: &mut Value, key: &str, id: &str, mut mutate: F) -> Result<(), String>
+fn mutate_vault_item_by_id<F>(
+  vault: &mut Value,
+  key: &str,
+  id: &str,
+  mut mutate: F,
+) -> Result<(), String>
 where
   F: FnMut(&mut Value),
 {
@@ -3856,7 +3961,11 @@ fn rank_context_facts_in_connection(
   let mut scored = candidates
     .into_iter()
     .map(|fact| {
-      let haystack = format!("{} {}", fact.fact_text.to_lowercase(), fact.domain.to_lowercase());
+      let haystack = format!(
+        "{} {}",
+        fact.fact_text.to_lowercase(),
+        fact.domain.to_lowercase()
+      );
       let fact_vec = embeddings::embed(&format!("{} {}", fact.fact_text, fact.domain));
       let token_score = tokens
         .iter()
@@ -3871,11 +3980,12 @@ fn rank_context_facts_in_connection(
         0
       };
       let bridge_score = cross_domain_bridge_score(&lower_task, &fact.domain);
-      let sensitivity_penalty = if sensitivity_rank(&fact.sensitivity) >= sensitivity_rank("sensitive") {
-        -1
-      } else {
-        0
-      };
+      let sensitivity_penalty =
+        if sensitivity_rank(&fact.sensitivity) >= sensitivity_rank("sensitive") {
+          -1
+        } else {
+          0
+        };
       let policy_bonus = if sensitivity_rank(&fact.sensitivity) <= sensitivity_rank(ceiling) {
         1
       } else {
@@ -3883,7 +3993,12 @@ fn rank_context_facts_in_connection(
       };
       let semantic_score = (embeddings::cosine(&task_vec, &fact_vec) * 6.0).round() as i64;
       (
-        token_score + domain_score + bridge_score + sensitivity_penalty + policy_bonus + semantic_score,
+        token_score
+          + domain_score
+          + bridge_score
+          + sensitivity_penalty
+          + policy_bonus
+          + semantic_score,
         fact,
       )
     })
@@ -3895,11 +4010,13 @@ fn rank_context_facts_in_connection(
       .cmp(left_score)
       .then_with(|| right_fact.updated_at.cmp(&left_fact.updated_at))
   });
-  Ok(scored
-    .into_iter()
-    .take(limit)
-    .map(|(_, fact)| fact)
-    .collect())
+  Ok(
+    scored
+      .into_iter()
+      .take(limit)
+      .map(|(_, fact)| fact)
+      .collect(),
+  )
 }
 
 fn context_candidate_facts_in_connection(
@@ -4060,7 +4177,9 @@ fn context_pack_warnings(
       item
         .get("sensitivity")
         .and_then(Value::as_str)
-        .map(|sensitivity| sensitivity_rank(sensitivity) >= sensitivity_rank("private_consequential"))
+        .map(|sensitivity| {
+          sensitivity_rank(sensitivity) >= sensitivity_rank("private_consequential")
+        })
         .unwrap_or(false)
     })
     .filter_map(|item| {
@@ -4195,7 +4314,11 @@ fn search_tokens(text: &str) -> Vec<String> {
   text
     .to_lowercase()
     .split_whitespace()
-    .map(|token| token.trim_matches(|character: char| !character.is_alphanumeric()).to_string())
+    .map(|token| {
+      token
+        .trim_matches(|character: char| !character.is_alphanumeric())
+        .to_string()
+    })
     .filter(|token| !token.is_empty())
     .collect()
 }
@@ -4204,7 +4327,10 @@ fn context_candidate_domains(task_text: &str) -> Vec<&'static str> {
   let task_domain = classify_domain(task_text);
   let lower = task_text.to_lowercase();
   let mut domains = vec![task_domain];
-  if contains_any(&lower, &["job", "work", "employer", "転職", "勤務先", "仕事"]) {
+  if contains_any(
+    &lower,
+    &["job", "work", "employer", "転職", "勤務先", "仕事"],
+  ) {
     domains.extend([
       "contracts_and_policies",
       "procedures_and_obligations",
@@ -4257,25 +4383,119 @@ fn is_stable_background_fact(fact: &NativeFactSearchResult) -> bool {
 
 fn classify_domain(text: &str) -> &'static str {
   let lower = text.to_lowercase();
-  if contains_any(&lower, &["health", "medical", "doctor", "disability", "care", "病院", "健康", "障害", "介護"]) {
+  if contains_any(
+    &lower,
+    &[
+      "health",
+      "medical",
+      "doctor",
+      "disability",
+      "care",
+      "病院",
+      "健康",
+      "障害",
+      "介護",
+    ],
+  ) {
     "health_and_care"
-  } else if contains_any(&lower, &["finance", "benefit", "pension", "tax", "bank", "payment", "money", "給付", "年金", "税", "銀行", "支払"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "finance", "benefit", "pension", "tax", "bank", "payment", "money", "給付", "年金", "税",
+      "銀行", "支払",
+    ],
+  ) {
     "finance_and_benefits"
-  } else if contains_any(&lower, &["work", "job", "school", "employer", "student", "勤務", "仕事", "学校", "転職", "職場"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "work", "job", "school", "employer", "student", "勤務", "仕事", "学校", "転職", "職場",
+    ],
+  ) {
     "work_and_education"
-  } else if contains_any(&lower, &["family", "partner", "child", "household", "家族", "配偶者", "子ども", "世帯"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "family",
+      "partner",
+      "child",
+      "household",
+      "家族",
+      "配偶者",
+      "子ども",
+      "世帯",
+    ],
+  ) {
     "relationships_and_household"
-  } else if contains_any(&lower, &["home", "address", "lease", "rent", "utility", "housing", "住所", "住居", "賃貸", "家"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "home", "address", "lease", "rent", "utility", "housing", "住所", "住居", "賃貸", "家",
+    ],
+  ) {
     "home_and_places"
-  } else if contains_any(&lower, &["contract", "policy", "insurance", "warranty", "契約", "保険", "保証"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "contract",
+      "policy",
+      "insurance",
+      "warranty",
+      "契約",
+      "保険",
+      "保証",
+    ],
+  ) {
     "contracts_and_policies"
-  } else if contains_any(&lower, &["deadline", "submit", "renew", "procedure", "form", "期限", "提出", "更新", "手続"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "deadline",
+      "submit",
+      "renew",
+      "procedure",
+      "form",
+      "期限",
+      "提出",
+      "更新",
+      "手続",
+    ],
+  ) {
     "procedures_and_obligations"
-  } else if contains_any(&lower, &["goal", "priority", "preference", "tone", "目標", "優先", "好み", "口調"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "goal",
+      "priority",
+      "preference",
+      "tone",
+      "目標",
+      "優先",
+      "好み",
+      "口調",
+    ],
+  ) {
     "values_goals_and_preferences"
-  } else if contains_any(&lower, &["routine", "schedule", "habit", "commute", "予定", "習慣", "通勤"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "routine", "schedule", "habit", "commute", "予定", "習慣", "通勤",
+    ],
+  ) {
     "routines_and_logistics"
-  } else if contains_any(&lower, &["move", "moving", "travel", "plan", "引っ越", "旅行", "予定", "計画"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "move",
+      "moving",
+      "travel",
+      "plan",
+      "引っ越",
+      "旅行",
+      "予定",
+      "計画",
+    ],
+  ) {
     "life_events_and_plans"
   } else {
     "documents_and_evidence"
@@ -4289,7 +4509,10 @@ fn classify_risk(text: &str) -> &'static str {
   } else if sensitivity == "private_consequential"
     || contains_any(
       &text.to_lowercase(),
-      &["contract", "deadline", "benefit", "health", "legal", "money", "契約", "期限", "給付", "健康", "法務", "お金"],
+      &[
+        "contract", "deadline", "benefit", "health", "legal", "money", "契約", "期限", "給付",
+        "健康", "法務", "お金",
+      ],
     )
   {
     "medium"
@@ -4300,13 +4523,82 @@ fn classify_risk(text: &str) -> &'static str {
 
 fn detect_sensitivity(text: &str) -> &'static str {
   let lower = text.to_lowercase();
-  if contains_any(&lower, &["password", "passcode", "api key", "token", "secret", "private key", "recovery code", "パスワード", "秘密鍵", "my number", "national id", "bank account", "口座番号", "マイナンバー"]) {
+  if contains_any(
+    &lower,
+    &[
+      "password",
+      "passcode",
+      "api key",
+      "token",
+      "secret",
+      "private key",
+      "recovery code",
+      "パスワード",
+      "秘密鍵",
+      "my number",
+      "national id",
+      "bank account",
+      "口座番号",
+      "マイナンバー",
+    ],
+  ) {
     "secret_never_send"
-  } else if contains_any(&lower, &["health", "medical", "doctor", "diagnosis", "disability", "benefit", "legal", "minor", "病院", "診断", "障害", "給付", "法律", "未成年"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "health",
+      "medical",
+      "doctor",
+      "diagnosis",
+      "disability",
+      "benefit",
+      "legal",
+      "minor",
+      "病院",
+      "診断",
+      "障害",
+      "給付",
+      "法律",
+      "未成年",
+    ],
+  ) {
     "sensitive"
-  } else if contains_any(&lower, &["finance", "tax", "pension", "insurance", "contract", "rent", "salary", "payment", "税", "年金", "保険", "契約", "家賃", "給与", "支払"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "finance",
+      "tax",
+      "pension",
+      "insurance",
+      "contract",
+      "rent",
+      "salary",
+      "payment",
+      "税",
+      "年金",
+      "保険",
+      "契約",
+      "家賃",
+      "給与",
+      "支払",
+    ],
+  ) {
     "private_consequential"
-  } else if contains_any(&lower, &["name", "address", "phone", "email", "family", "名前", "住所", "電話", "メール", "家族"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "name",
+      "address",
+      "phone",
+      "email",
+      "family",
+      "名前",
+      "住所",
+      "電話",
+      "メール",
+      "家族",
+    ],
+  ) {
     "personal"
   } else {
     "public"
@@ -4347,7 +4639,6 @@ fn tier_rank_str(t: &str) -> u8 {
   }
 }
 
-
 /// Match credential assignment: keyword = value (structured, high confidence).
 /// Mirrors: /\b(password|passcode|api[_\s-]?key|token|secret|private[_\s-]?key|
 ///           recovery[_\s-]?code|bearer\s+[a-z0-9._-]{12,})\b\s*[:=]\s*\S+/i
@@ -4355,12 +4646,8 @@ fn tier_rank_str(t: &str) -> u8 {
 fn match_credential_assignment(text: &str) -> bool {
   let lower = text.to_lowercase();
   // Find each keyword group, then check if followed by [:=] and a value.
-  let keywords = [
-    "password", "passcode", "token", "secret", "bearer",
-  ];
-  let compound_kw = [
-    ("api", "key"), ("private", "key"), ("recovery", "code"),
-  ];
+  let keywords = ["password", "passcode", "token", "secret", "bearer"];
+  let compound_kw = [("api", "key"), ("private", "key"), ("recovery", "code")];
 
   // Check simple keywords followed by [:=]value
   for kw in &keywords {
@@ -4444,7 +4731,13 @@ fn match_email(text: &str) -> bool {
       let mut j = local_end;
       while j > 0 {
         let c = bytes[j - 1];
-        if c.is_ascii_alphanumeric() || c == b'.' || c == b'_' || c == b'%' || c == b'+' || c == b'-' {
+        if c.is_ascii_alphanumeric()
+          || c == b'.'
+          || c == b'_'
+          || c == b'%'
+          || c == b'+'
+          || c == b'-'
+        {
           j -= 1;
         } else {
           break;
@@ -4494,15 +4787,43 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
 
   fn bare_credential_en(t: &str) -> bool {
     let lower = t.to_lowercase();
-    contains_any(&lower, &["password", "passcode", "apikey", "api key", "api_key", "api-key",
-      "token", "secret", "privatekey", "private key", "private_key", "private-key",
-      "recoverycode", "recovery code", "recovery_code", "recovery-code"])
+    contains_any(
+      &lower,
+      &[
+        "password",
+        "passcode",
+        "apikey",
+        "api key",
+        "api_key",
+        "api-key",
+        "token",
+        "secret",
+        "privatekey",
+        "private key",
+        "private_key",
+        "private-key",
+        "recoverycode",
+        "recovery code",
+        "recovery_code",
+        "recovery-code",
+      ],
+    )
   }
   fn bare_national_bank_en(t: &str) -> bool {
     let lower = t.to_lowercase();
-    contains_any(&lower, &["my number", "my_number", "mynumber",
-      "national id", "national_id", "nationalid",
-      "bank account", "bank_account"])
+    contains_any(
+      &lower,
+      &[
+        "my number",
+        "my_number",
+        "mynumber",
+        "national id",
+        "national_id",
+        "nationalid",
+        "bank account",
+        "bank_account",
+      ],
+    )
   }
   fn bare_national_bank_ja(t: &str) -> bool {
     contains_any(t, &["口座番号", "マイナンバー"])
@@ -4512,16 +4833,38 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
   }
   fn health_legal_en(t: &str) -> bool {
     let lower = t.to_lowercase();
-    contains_any(&lower, &["health", "medical", "doctor", "diagnosis",
-      "disability", "benefit", "legal", "minor"])
+    contains_any(
+      &lower,
+      &[
+        "health",
+        "medical",
+        "doctor",
+        "diagnosis",
+        "disability",
+        "benefit",
+        "legal",
+        "minor",
+      ],
+    )
   }
   fn health_legal_ja(t: &str) -> bool {
     contains_any(t, &["病院", "診断", "障害", "給付", "法律", "未成年"])
   }
   fn financial_en(t: &str) -> bool {
     let lower = t.to_lowercase();
-    contains_any(&lower, &["finance", "tax", "pension", "insurance",
-      "contract", "rent", "salary", "payment"])
+    contains_any(
+      &lower,
+      &[
+        "finance",
+        "tax",
+        "pension",
+        "insurance",
+        "contract",
+        "rent",
+        "salary",
+        "payment",
+      ],
+    )
   }
   fn financial_ja(t: &str) -> bool {
     contains_any(t, &["税", "年金", "保険", "契約", "家賃", "給与", "支払"])
@@ -4638,16 +4981,24 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
   }
 
   // Pick highest tier; among ties, pick highest confidence — mirrors TS reduce logic.
-  let top = matched_tiers.iter().copied().reduce(|a, b| {
-    let tier_diff = tier_rank_str(b.0) as i8 - tier_rank_str(a.0) as i8;
-    if tier_diff != 0 {
-      if tier_diff > 0 { b } else { a }
-    } else if confidence_rank(b.1) > confidence_rank(a.1) {
-      b
-    } else {
-      a
-    }
-  }).unwrap();
+  let top = matched_tiers
+    .iter()
+    .copied()
+    .reduce(|a, b| {
+      let tier_diff = tier_rank_str(b.0) as i8 - tier_rank_str(a.0) as i8;
+      if tier_diff != 0 {
+        if tier_diff > 0 {
+          b
+        } else {
+          a
+        }
+      } else if confidence_rank(b.1) > confidence_rank(a.1) {
+        b
+      } else {
+        a
+      }
+    })
+    .unwrap();
 
   SensitivityResult {
     tier: top.0.to_string(),
@@ -4659,15 +5010,36 @@ fn classify_sensitivity(text: &str) -> SensitivityResult {
 
 fn candidate_type(text: &str) -> &'static str {
   let lower = text.to_lowercase();
-  if contains_any(&lower, &["deadline", "due", "renew", "expires", "期限", "締切", "更新"]) {
+  if contains_any(
+    &lower,
+    &[
+      "deadline", "due", "renew", "expires", "期限", "締切", "更新",
+    ],
+  ) {
     "deadline"
-  } else if contains_any(&lower, &["must", "need to", "required", "submit", "notify", "必要", "提出", "連絡"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "must", "need to", "required", "submit", "notify", "必要", "提出", "連絡",
+    ],
+  ) {
     "obligation"
   } else if contains_any(&lower, &["tone", "preference", "好み", "口調"]) {
     "preference"
   } else if contains_any(&lower, &["goal", "priority", "目標", "優先"]) {
     "goal"
-  } else if contains_any(&lower, &["moving", "move", "job change", "travel", "引っ越", "転職", "旅行"]) {
+  } else if contains_any(
+    &lower,
+    &[
+      "moving",
+      "move",
+      "job change",
+      "travel",
+      "引っ越",
+      "転職",
+      "旅行",
+    ],
+  ) {
     "life_event"
   } else {
     "note"
@@ -4676,7 +5048,12 @@ fn candidate_type(text: &str) -> &'static str {
 
 fn cross_domain_bridge_score(task: &str, domain: &str) -> i64 {
   if contains_any(task, &["job", "work", "employer", "転職", "勤務先", "仕事"])
-    && ["contracts_and_policies", "procedures_and_obligations", "finance_and_benefits"].contains(&domain)
+    && [
+      "contracts_and_policies",
+      "procedures_and_obligations",
+      "finance_and_benefits",
+    ]
+    .contains(&domain)
   {
     return 2;
   }
@@ -4750,7 +5127,8 @@ fn sanitize_secret_material(text: &str) -> String {
 }
 
 fn sanitize_source_body(text: &str) -> String {
-  text.lines()
+  text
+    .lines()
     .map(sanitize_secret_material)
     .collect::<Vec<_>>()
     .join("\n")
@@ -4822,7 +5200,12 @@ fn default_passive_capture_settings() -> Value {
 }
 
 fn default_allowed_sites() -> Vec<&'static str> {
-  vec!["chat.openai.com", "chatgpt.com", "claude.ai", "gemini.google.com"]
+  vec![
+    "chat.openai.com",
+    "chatgpt.com",
+    "claude.ai",
+    "gemini.google.com",
+  ]
 }
 
 fn normalize_allowed_sites(sites: Vec<String>) -> Vec<String> {
@@ -4833,10 +5216,7 @@ fn normalize_allowed_sites(sites: Vec<String>) -> Vec<String> {
       continue;
     }
     let host = host_from_url(&raw).unwrap_or(raw);
-    let host = host
-      .trim_start_matches("*.")
-      .trim_matches('.')
-      .to_string();
+    let host = host.trim_start_matches("*.").trim_matches('.').to_string();
     if host.is_empty()
       || host.contains('/')
       || host.contains('@')
@@ -4990,7 +5370,11 @@ fn ensure_access_policy_for_client(vault: &mut Value, client_id: &str) {
   let exists = vault
     .get("accessPolicies")
     .and_then(Value::as_array)
-    .map(|policies| policies.iter().any(|policy| str_field(policy, "clientId") == client_id))
+    .map(|policies| {
+      policies
+        .iter()
+        .any(|policy| str_field(policy, "clientId") == client_id)
+    })
     .unwrap_or(false);
   if !exists {
     let policy = default_access_policy_for_client(client_id, &now_iso());
@@ -5195,13 +5579,9 @@ fn extract_standard_native_document_text(
       warnings.extend(document_warnings);
       text
     }
-    NativeDocumentKind::ImageOcr => extract_image_ocr_document(
-      file_name,
-      mime_type,
-      bytes,
-      warnings,
-      ocr_config.cloned(),
-    )?,
+    NativeDocumentKind::ImageOcr => {
+      extract_image_ocr_document(file_name, mime_type, bytes, warnings, ocr_config.cloned())?
+    }
     NativeDocumentKind::LegacyOffice => {
       return Err("旧Office文書は変換Provider経由でのみ抽出できます。".to_string())
     }
@@ -5224,7 +5604,16 @@ fn detect_native_document_kind(
   if mime_type.starts_with("text/")
     || matches!(
       extension.as_str(),
-      "txt" | "text" | "md" | "markdown" | "csv" | "tsv" | "json" | "jsonl" | "yaml" | "yml"
+      "txt"
+        | "text"
+        | "md"
+        | "markdown"
+        | "csv"
+        | "tsv"
+        | "json"
+        | "jsonl"
+        | "yaml"
+        | "yml"
         | "log"
     )
   {
@@ -5234,8 +5623,7 @@ fn detect_native_document_kind(
     return Ok(NativeDocumentKind::Pdf);
   }
   if extension == "docx"
-    || mime_type
-      == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    || mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
   {
     return Ok(NativeDocumentKind::Docx);
   }
@@ -5273,7 +5661,9 @@ fn detect_native_document_kind(
     return Ok(NativeDocumentKind::LegacyOffice);
   }
   if is_zip {
-    return Err("ZIP系文書として検出しましたが、対応するOffice/OpenDocument形式ではありません。".to_string());
+    return Err(
+      "ZIP系文書として検出しましたが、対応するOffice/OpenDocument形式ではありません。".to_string(),
+    );
   }
   Err(
     "このファイル形式はまだSource化できません。対応形式は TXT/MD/CSV/JSON/YAML/LOG/PDF/DOCX/PPTX/XLSX/ODT/ODS/ODP です。"
@@ -5320,9 +5710,7 @@ fn ocr_command_config_from_parts(
 }
 
 fn ocr_timeout_from_value(seconds: Option<u64>) -> Duration {
-  let seconds = seconds
-    .unwrap_or(30)
-    .clamp(1, 120);
+  let seconds = seconds.unwrap_or(30).clamp(1, 120);
   Duration::from_secs(seconds)
 }
 
@@ -5382,9 +5770,7 @@ fn legacy_office_command_config_from_parts(
 }
 
 fn legacy_office_timeout_from_value(seconds: Option<u64>) -> Duration {
-  let seconds = seconds
-    .unwrap_or(60)
-    .clamp(1, 120);
+  let seconds = seconds.unwrap_or(60).clamp(1, 120);
   Duration::from_secs(seconds)
 }
 
@@ -5393,7 +5779,8 @@ fn legacy_office_command_config_from_input(
   args: Option<&str>,
   timeout_seconds: Option<u64>,
 ) -> Option<LegacyOfficeCommandConfig> {
-  command.and_then(|command| legacy_office_command_config_from_parts(command, args, timeout_seconds))
+  command
+    .and_then(|command| legacy_office_command_config_from_parts(command, args, timeout_seconds))
 }
 
 fn detect_ocr_provider_candidates_from_sources(
@@ -5649,7 +6036,10 @@ fn extract_legacy_office_document(
   )
 }
 
-fn legacy_office_target_extension(file_name: &str, mime_type: &str) -> Result<&'static str, String> {
+fn legacy_office_target_extension(
+  file_name: &str,
+  mime_type: &str,
+) -> Result<&'static str, String> {
   let extension = Path::new(file_name)
     .extension()
     .and_then(|value| value.to_str())
@@ -5676,7 +6066,11 @@ fn write_legacy_office_temp_input(
   let extension = Path::new(file_name)
     .extension()
     .and_then(|value| value.to_str())
-    .filter(|value| value.chars().all(|character| character.is_ascii_alphanumeric()))
+    .filter(|value| {
+      value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric())
+    })
     .unwrap_or("doc");
   let stem = Path::new(file_name)
     .file_stem()
@@ -5788,7 +6182,10 @@ fn extract_image_ocr_document_with_config(
   let _ = fs::remove_dir_all(&temp_dir);
   let output = output?;
   if !output.status.success() {
-    return Err("OCR Providerが本文抽出に失敗しました。コマンド、引数、対応画像形式を確認してください。".to_string());
+    return Err(
+      "OCR Providerが本文抽出に失敗しました。コマンド、引数、対応画像形式を確認してください。"
+        .to_string(),
+    );
   }
   let text = String::from_utf8(output.stdout)
     .map_err(|_| "OCR Providerの出力をUTF-8として読めませんでした。".to_string())?;
@@ -5853,8 +6250,10 @@ fn run_command_with_timeout(
     .stderr
     .take()
     .ok_or_else(|| format!("{provider_label}の標準エラー出力を取得できませんでした。"))?;
-  let stdout_reader = thread::spawn(move || drain_reader_limited(stdout, MAX_PROVIDER_STDOUT_BYTES));
-  let stderr_reader = thread::spawn(move || drain_reader_limited(stderr, MAX_PROVIDER_STDERR_BYTES));
+  let stdout_reader =
+    thread::spawn(move || drain_reader_limited(stdout, MAX_PROVIDER_STDOUT_BYTES));
+  let stderr_reader =
+    thread::spawn(move || drain_reader_limited(stderr, MAX_PROVIDER_STDERR_BYTES));
   let started_at = SystemTime::now();
   let status = loop {
     match child
@@ -5964,9 +6363,7 @@ fn looks_like_readable_document_text(text: &str) -> bool {
   let total = sample.chars().count().max(1);
   let control_count = sample
     .chars()
-    .filter(|character| {
-      character.is_control() && !matches!(character, '\n' | '\r' | '\t')
-    })
+    .filter(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
     .count();
   control_count * 100 < total * 2
 }
@@ -5979,8 +6376,8 @@ where
   F: Fn(&str) -> bool,
 {
   let cursor = Cursor::new(bytes);
-  let mut archive = zip::ZipArchive::new(cursor)
-    .map_err(|error| format!("文書ZIPを開けませんでした: {error}"))?;
+  let mut archive =
+    zip::ZipArchive::new(cursor).map_err(|error| format!("文書ZIPを開けませんでした: {error}"))?;
   if archive.len() > 2_000 {
     return Err("この文書は内部ファイル数が多すぎるため、安全のため抽出しません。".to_string());
   }
@@ -5996,9 +6393,7 @@ where
       continue;
     }
     if file.size() > MAX_NATIVE_XML_ENTRY_BYTES {
-      warnings.push(format!(
-        "{name} は大きすぎるため抽出から除外しました。"
-      ));
+      warnings.push(format!("{name} は大きすぎるため抽出から除外しました。"));
       continue;
     }
     let mut xml = Vec::new();
@@ -6012,7 +6407,10 @@ where
   }
 
   if parts.is_empty() {
-    return Err("この文書から抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。".to_string());
+    return Err(
+      "この文書から抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。"
+        .to_string(),
+    );
   }
   Ok((parts.join("\n"), warnings))
 }
@@ -6119,7 +6517,9 @@ fn normalize_extracted_document_text(
   let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
   text = text.replace('\0', "");
   if text.trim().is_empty() {
-    return Err("抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。".to_string());
+    return Err(
+      "抽出できる本文が見つかりませんでした。画像だけの文書はOCR Providerが必要です。".to_string(),
+    );
   }
   let char_count = text.chars().count();
   if char_count > MAX_EXTRACTED_TEXT_CHARS {
@@ -6132,7 +6532,11 @@ fn normalize_extracted_document_text(
   Ok(text)
 }
 
-fn extract_memory_candidates_for_source(source_id: &str, body: &str, created_at: &str) -> Vec<Value> {
+fn extract_memory_candidates_for_source(
+  source_id: &str,
+  body: &str,
+  created_at: &str,
+) -> Vec<Value> {
   let mut candidates = Vec::new();
 
   for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -6173,7 +6577,10 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
       created_at,
     ));
   }
-  if contains_any(&lower, &["tone", "communication", "話し方", "文体", "口調", "伝え方"]) {
+  if contains_any(
+    &lower,
+    &["tone", "communication", "話し方", "文体", "口調", "伝え方"],
+  ) {
     return Some(memory_candidate(
       source_id,
       line,
@@ -6185,7 +6592,18 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
       created_at,
     ));
   }
-  if contains_any(&lower, &["goal", "priority", "want to", "目標", "優先", "大事", "やりたい"]) {
+  if contains_any(
+    &lower,
+    &[
+      "goal",
+      "priority",
+      "want to",
+      "目標",
+      "優先",
+      "大事",
+      "やりたい",
+    ],
+  ) {
     return Some(memory_candidate(
       source_id,
       line,
@@ -6197,7 +6615,21 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
       created_at,
     ));
   }
-  if contains_any(&lower, &["constraint", "budget", "energy", "accessibility", "schedule", "制約", "予算", "体力", "予定", "アクセシビリティ"]) {
+  if contains_any(
+    &lower,
+    &[
+      "constraint",
+      "budget",
+      "energy",
+      "accessibility",
+      "schedule",
+      "制約",
+      "予算",
+      "体力",
+      "予定",
+      "アクセシビリティ",
+    ],
+  ) {
     return Some(memory_candidate(
       source_id,
       line,
@@ -6214,7 +6646,20 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
   if date.is_some()
     && contains_any(
       &lower,
-      &["deadline", "due", "renew", "expires", "expiration", "submit", "update", "期限", "締切", "更新", "提出", "満了"],
+      &[
+        "deadline",
+        "due",
+        "renew",
+        "expires",
+        "expiration",
+        "submit",
+        "update",
+        "期限",
+        "締切",
+        "更新",
+        "提出",
+        "満了",
+      ],
     )
   {
     return Some(memory_candidate(
@@ -6241,7 +6686,13 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
       created_at,
     ));
   }
-  if contains_any(&lower, &["must", "need to", "required", "submit", "notify", "cancel", "renew", "必要", "提出", "連絡", "解約", "更新"]) {
+  if contains_any(
+    &lower,
+    &[
+      "must", "need to", "required", "submit", "notify", "cancel", "renew", "必要", "提出", "連絡",
+      "解約", "更新",
+    ],
+  ) {
     return Some(memory_candidate(
       source_id,
       line,
@@ -6253,7 +6704,22 @@ fn candidate_from_source_line(source_id: &str, line: &str, created_at: &str) -> 
       created_at,
     ));
   }
-  if contains_any(&lower, &["moving", "move", "job change", "travel", "caregiving", "引っ越", "転職", "旅行", "介護", "入学", "卒業"]) {
+  if contains_any(
+    &lower,
+    &[
+      "moving",
+      "move",
+      "job change",
+      "travel",
+      "caregiving",
+      "引っ越",
+      "転職",
+      "旅行",
+      "介護",
+      "入学",
+      "卒業",
+    ],
+  ) {
     return Some(memory_candidate(
       source_id,
       line,
@@ -6333,10 +6799,9 @@ fn annotate_candidate_conflicts(vault: &Value, candidate: &mut Value) {
 fn candidate_conflicts_with_fact(candidate: &Value, fact: &Value) -> bool {
   let candidate_text = str_field(candidate, "proposedFactText");
   let fact_text = str_field(fact, "factText");
-  let candidate_date = optional_str_field(candidate, "dueDate")
-    .or_else(|| extract_yyyy_mm_dd(&candidate_text));
-  let fact_date = optional_str_field(fact, "dueDate")
-    .or_else(|| extract_yyyy_mm_dd(&fact_text));
+  let candidate_date =
+    optional_str_field(candidate, "dueDate").or_else(|| extract_yyyy_mm_dd(&candidate_text));
+  let fact_date = optional_str_field(fact, "dueDate").or_else(|| extract_yyyy_mm_dd(&fact_text));
 
   if let (Some(candidate_date), Some(fact_date)) = (candidate_date, fact_date) {
     if candidate_date != fact_date
@@ -6360,8 +6825,8 @@ fn shared_conflict_keyword_count(left: &str, right: &str) -> usize {
 
 fn conflict_keywords(text: &str) -> Vec<String> {
   let stop_words = [
-    "the", "and", "for", "with", "before", "after", "need", "needs", "update", "updated",
-    "renew", "renews", "on", "by", "to", "of",
+    "the", "and", "for", "with", "before", "after", "need", "needs", "update", "updated", "renew",
+    "renews", "on", "by", "to", "of",
   ];
   let mut keywords = Vec::new();
   let mut current = String::new();
@@ -6511,15 +6976,19 @@ fn normalize_conflict_value(raw_value: &str) -> Option<String> {
 
 fn looks_like_contact_point(text: &str) -> bool {
   let has_email_shape = text.contains('@') && text.contains('.');
-  let digit_count = text.chars().filter(|character| character.is_ascii_digit()).count();
+  let digit_count = text
+    .chars()
+    .filter(|character| character.is_ascii_digit())
+    .count();
   has_email_shape || digit_count >= 9
 }
 
 fn extract_yyyy_mm_dd(text: &str) -> Option<String> {
-  for token in text.split(|character: char| character.is_whitespace() || character == '.' || character == ',') {
-    let candidate = token.trim_matches(|character: char| {
-      !character.is_ascii_digit() && character != '-'
-    });
+  for token in
+    text.split(|character: char| character.is_whitespace() || character == '.' || character == ',')
+  {
+    let candidate =
+      token.trim_matches(|character: char| !character.is_ascii_digit() && character != '-');
     if candidate.len() == 10
       && candidate.as_bytes().get(4) == Some(&b'-')
       && candidate.as_bytes().get(7) == Some(&b'-')
@@ -6654,9 +7123,13 @@ fn archive_pending_candidates_for_source(vault: &mut Value, source_id: &str, now
   let mut affected = 0;
   for candidate in candidates {
     let status = str_field(candidate, "status");
-    if json_array_contains_string(candidate.get("sourceIds").unwrap_or(&Value::Null), source_id)
-      && matches!(status.as_str(), "new" | "needs_user_detail" | "blocked_sensitive")
-    {
+    if json_array_contains_string(
+      candidate.get("sourceIds").unwrap_or(&Value::Null),
+      source_id,
+    ) && matches!(
+      status.as_str(),
+      "new" | "needs_user_detail" | "blocked_sensitive"
+    ) {
       candidate["status"] = Value::String("archived".to_string());
       candidate["reviewedAt"] = Value::String(now.to_string());
       affected += 1;
@@ -6720,7 +7193,9 @@ fn restore_source_deleted_facts(vault: &mut Value, source_id: &str, now: &str) -
 fn fact_ids_for_source(vault: &Value, source_id: &str) -> Vec<String> {
   value_array(vault, "facts")
     .into_iter()
-    .filter(|fact| json_array_contains_string(fact.get("sourceIds").unwrap_or(&Value::Null), source_id))
+    .filter(|fact| {
+      json_array_contains_string(fact.get("sourceIds").unwrap_or(&Value::Null), source_id)
+    })
     .map(|fact| str_field(fact, "id"))
     .filter(|fact_id| !fact_id.is_empty())
     .collect()
@@ -6900,7 +7375,11 @@ fn connection_standing_delivery_enabled(vault: &Value, client_id: &str) -> bool 
   value_array(vault, "accessPolicies")
     .into_iter()
     .find(|policy| str_field(policy, "clientId") == client_id)
-    .and_then(|policy| policy.get("standingDeliveryEnabled").and_then(Value::as_bool))
+    .and_then(|policy| {
+      policy
+        .get("standingDeliveryEnabled")
+        .and_then(Value::as_bool)
+    })
     .unwrap_or(false) // absent = legacy/strict; opt-in is explicit
 }
 
@@ -6927,9 +7406,7 @@ fn policy_sensitivity_value(value: &str, missing_default: &str) -> String {
   if trimmed.is_empty() {
     return missing_default.to_string();
   }
-  sensitivity_tier(trimmed)
-    .unwrap_or("public")
-    .to_string()
+  sensitivity_tier(trimmed).unwrap_or("public").to_string()
 }
 
 fn lower_sensitivity_tier(left: &str, right: &str) -> String {
@@ -6994,7 +7471,10 @@ fn push_json_array(value: &mut Value, key: &str, item: Value) {
 }
 
 fn touch_connector_in_vault(vault: &mut Value, client_id: &str, now: &str) {
-  let Some(sessions) = vault.get_mut("connectorSessions").and_then(Value::as_array_mut) else {
+  let Some(sessions) = vault
+    .get_mut("connectorSessions")
+    .and_then(Value::as_array_mut)
+  else {
     return;
   };
   for session in sessions {
@@ -7118,13 +7598,11 @@ fn now_iso() -> String {
 }
 
 fn minutes_from_now(minutes: i64) -> String {
-  (Utc::now() + chrono::Duration::minutes(minutes))
-    .to_rfc3339_opts(SecondsFormat::Millis, true)
+  (Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn days_from_now(days: i64) -> String {
-  (Utc::now() + chrono::Duration::days(days))
-    .to_rfc3339_opts(SecondsFormat::Millis, true)
+  (Utc::now() + chrono::Duration::days(days)).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn stable_hash(text: &str) -> String {
@@ -7159,7 +7637,6 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
     .map_err(|error| format!("failed to focus Control Center: {error}"))?;
   Ok(())
 }
-
 
 fn handle_tray_menu_event(app: &AppHandle, menu_id: &str) {
   match menu_id {
@@ -7212,19 +7689,23 @@ fn claude_desktop_config_path() -> Result<PathBuf, String> {
   #[cfg(target_os = "macos")]
   {
     let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    return Ok(PathBuf::from(home)
-      .join("Library")
-      .join("Application Support")
-      .join("Claude")
-      .join("claude_desktop_config.json"));
+    return Ok(
+      PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("Claude")
+        .join("claude_desktop_config.json"),
+    );
   }
 
   #[cfg(target_os = "windows")]
   {
     let appdata = env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
-    return Ok(PathBuf::from(appdata)
-      .join("Claude")
-      .join("claude_desktop_config.json"));
+    return Ok(
+      PathBuf::from(appdata)
+        .join("Claude")
+        .join("claude_desktop_config.json"),
+    );
   }
 
   #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -7440,22 +7921,26 @@ fn login_item_plist_path() -> Result<PathBuf, String> {
   #[cfg(target_os = "macos")]
   {
     let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    return Ok(PathBuf::from(home)
-      .join("Library")
-      .join("LaunchAgents")
-      .join(format!("{LOGIN_ITEM_LABEL}.plist")));
+    return Ok(
+      PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LOGIN_ITEM_LABEL}.plist")),
+    );
   }
 
   #[cfg(target_os = "windows")]
   {
     let appdata = env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
-    return Ok(PathBuf::from(appdata)
-      .join("Microsoft")
-      .join("Windows")
-      .join("Start Menu")
-      .join("Programs")
-      .join("Startup")
-      .join("Life Context Vault.cmd"));
+    return Ok(
+      PathBuf::from(appdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Startup")
+        .join("Life Context Vault.cmd"),
+    );
   }
 
   #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -7464,15 +7949,16 @@ fn login_item_plist_path() -> Result<PathBuf, String> {
       .map(PathBuf::from)
       .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
       .map_err(|_| "Neither XDG_CONFIG_HOME nor HOME is set".to_string())?;
-    Ok(base
-      .join("autostart")
-      .join("dev.life-context-vault.desktop"))
+    Ok(
+      base
+        .join("autostart")
+        .join("dev.life-context-vault.desktop"),
+    )
   }
 }
 
 fn current_executable_path() -> Result<PathBuf, String> {
-  env::current_exe()
-    .map_err(|error| format!("failed to resolve current app executable: {error}"))
+  env::current_exe().map_err(|error| format!("failed to resolve current app executable: {error}"))
 }
 
 fn login_item_status_with_backup(backup_path: Option<PathBuf>) -> LoginItemStatus {
@@ -7684,11 +8170,7 @@ fn save_vault_state(
   expected_updated_at: Option<String>,
 ) -> Result<SaveVaultStateResult, String> {
   let mut connection = open_vault_db(&app)?;
-  save_vault_state_payload(
-    &mut connection,
-    &payload,
-    expected_updated_at.as_deref(),
-  )
+  save_vault_state_payload(&mut connection, &payload, expected_updated_at.as_deref())
 }
 
 fn save_vault_state_payload(
@@ -8434,8 +8916,8 @@ mod tests {
 
     let envelope =
       export_encrypted_backup_at_path(&source_path, passphrase).expect("export should succeed");
-    let _restored_payload =
-      import_encrypted_backup_at_path(&restore_path, &envelope, passphrase).expect("import should succeed");
+    let _restored_payload = import_encrypted_backup_at_path(&restore_path, &envelope, passphrase)
+      .expect("import should succeed");
 
     let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
     let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
@@ -8465,7 +8947,10 @@ mod tests {
     }
     let dest = std::env::temp_dir().join(format!(
       "lcv-scheduled-test-{}",
-      SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default()
+      SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default()
     ));
     fs::create_dir_all(&dest).expect("test dest dir");
     fs::write(dest.join("vault-100.lcvbak"), "old").expect("seed old backup");
@@ -8520,7 +9005,10 @@ mod tests {
     import_local_backup_at_path(&restore_path, &envelope).expect("import local backup");
     let connection = open_vault_db_at_path(&restore_path).expect("open restored vault");
     let restored = load_vault_json_from_connection(&connection).expect("load restored vault");
-    let facts = restored.get("facts").and_then(Value::as_array).expect("facts array");
+    let facts = restored
+      .get("facts")
+      .and_then(Value::as_array)
+      .expect("facts array");
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0]["id"], "fact_x");
     assert_eq!(facts[0]["factText"], "ローカルバックアップテスト");
@@ -8564,7 +9052,10 @@ mod tests {
         |row| row.get(0),
       )
       .expect("knn query");
-    assert!(distance.is_finite(), "vec0 knn distance should be finite, got {distance}");
+    assert!(
+      distance.is_finite(),
+      "vec0 knn distance should be finite, got {distance}"
+    );
     remove_temp_vault(&path);
   }
 
@@ -8596,7 +9087,10 @@ mod tests {
     assert!(result.candidate_ids.is_empty());
     let connection = open_vault_db_at_path(&path).expect("reopen vault");
     let vault = load_vault_json_from_connection(&connection).expect("load vault");
-    let sources = vault.get("sources").and_then(Value::as_array).expect("sources array");
+    let sources = vault
+      .get("sources")
+      .and_then(Value::as_array)
+      .expect("sources array");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["processingStatus"], "needs_runtime");
     assert_eq!(sources[0]["title"], "scan.png");
@@ -8613,9 +9107,7 @@ mod tests {
     let mut writer = zip::ZipWriter::new(cursor);
     let options = zip::write::FileOptions::default();
     for (name, body) in entries {
-      writer
-        .start_file(*name, options)
-        .expect("start zip entry");
+      writer.start_file(*name, options).expect("start zip entry");
       writer.write_all(body.as_bytes()).expect("write zip entry");
     }
     writer.finish().expect("finish zip").into_inner()
@@ -8835,7 +9327,10 @@ mod tests {
       detect_ocr_provider_candidates_from_sources(Some(path_env), &[binary_path.clone()]);
 
     assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].command, binary_path.to_string_lossy().to_string());
+    assert_eq!(
+      candidates[0].command,
+      binary_path.to_string_lossy().to_string()
+    );
     assert_eq!(candidates[0].args, "{input} stdout");
     assert_eq!(candidates[0].timeout_seconds, 30);
     assert_eq!(candidates[0].source, "PATH");
@@ -8859,9 +9354,9 @@ mod tests {
               .strip_prefix("lcv_legacy_office_")
               .map(|suffix| {
                 suffix.len() == 24
-                  && suffix
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+                  && suffix.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                  })
               })
               .unwrap_or(false)
           })
@@ -8883,13 +9378,14 @@ mod tests {
     fs::write(&binary_path, b"not a real executable").expect("write fake provider");
     let path_env = env::join_paths([temp_dir.clone()]).expect("join path");
 
-    let candidates = detect_legacy_office_provider_candidates_from_sources(
-      Some(path_env),
-      &[binary_path.clone()],
-    );
+    let candidates =
+      detect_legacy_office_provider_candidates_from_sources(Some(path_env), &[binary_path.clone()]);
 
     assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].command, binary_path.to_string_lossy().to_string());
+    assert_eq!(
+      candidates[0].command,
+      binary_path.to_string_lossy().to_string()
+    );
     assert_eq!(
       candidates[0].args,
       "--headless --convert-to {target_ext} --outdir {output_dir} {input}"
@@ -8914,11 +9410,7 @@ mod tests {
 
   fn percentile_ms(samples: &mut [Duration], percentile: usize) -> f64 {
     samples.sort();
-    let index = samples
-      .len()
-      .saturating_mul(percentile)
-      .saturating_add(99)
-      / 100;
+    let index = samples.len().saturating_mul(percentile).saturating_add(99) / 100;
     let index = index.saturating_sub(1).min(samples.len().saturating_sub(1));
     duration_ms(samples[index])
   }
@@ -9204,15 +9696,19 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
       .expect("source count");
     let candidate_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| {
+        row.get(0)
+      })
       .expect("candidate count");
     let fact_count: i64 = connection
       .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
       .expect("fact count");
     let fts_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'address'", [], |row| {
-        row.get(0)
-      })
+      .query_row(
+        "SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'address'",
+        [],
+        |row| row.get(0),
+      )
       .expect("fts count");
 
     assert_eq!(source_count, 1);
@@ -9254,7 +9750,11 @@ mod tests {
     sync_normalized_tables(&mut connection, &payload).expect("sync");
 
     let chunk_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM source_chunks WHERE source_id = 'src_large'", [], |row| row.get(0))
+      .query_row(
+        "SELECT COUNT(*) FROM source_chunks WHERE source_id = 'src_large'",
+        [],
+        |row| row.get(0),
+      )
       .expect("chunk count");
     let first_chunk: String = connection
       .query_row(
@@ -9273,7 +9773,9 @@ mod tests {
 
     assert!(chunk_count > 1);
     assert!(first_chunk.len() < repeated.len());
-    assert!(second_chunk.starts_with("Insurance renewal") || second_chunk.contains("Insurance renewal"));
+    assert!(
+      second_chunk.starts_with("Insurance renewal") || second_chunk.contains("Insurance renewal")
+    );
   }
 
   #[test]
@@ -9476,7 +9978,12 @@ mod tests {
       .cloned()
       .unwrap_or_default()
       .into_iter()
-      .filter_map(|candidate| candidate.get("candidateType").and_then(Value::as_str).map(str::to_string))
+      .filter_map(|candidate| {
+        candidate
+          .get("candidateType")
+          .and_then(Value::as_str)
+          .map(str::to_string)
+      })
       .collect::<Vec<_>>();
 
     assert_eq!(source_count, 1);
@@ -9491,7 +9998,9 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
       .expect("normalized source count");
     let normalized_candidate_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| {
+        row.get(0)
+      })
       .expect("normalized candidate count");
     let normalized_chunk_count: i64 = connection
       .query_row("SELECT COUNT(*) FROM source_chunks", [], |row| row.get(0))
@@ -9551,13 +10060,11 @@ mod tests {
       candidate.get("status").and_then(Value::as_str),
       Some("blocked_sensitive")
     );
-    assert!(
-      saved
-        .get("facts")
-        .and_then(Value::as_array)
-        .map(Vec::is_empty)
-        .unwrap_or(false)
-    );
+    assert!(saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .map(Vec::is_empty)
+      .unwrap_or(false));
     remove_temp_vault(&path);
   }
 
@@ -9596,7 +10103,11 @@ mod tests {
     let source = saved
       .get("sources")
       .and_then(Value::as_array)
-      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .and_then(|sources| {
+        sources
+          .iter()
+          .find(|source| str_field(source, "id") == source_result.source_id)
+      })
       .expect("source");
     let fact = saved
       .get("facts")
@@ -9614,20 +10125,36 @@ mod tests {
       .and_then(|requests| requests.first())
       .expect("request");
 
-    assert_eq!(source.get("deletionState").and_then(Value::as_str), Some("soft_deleted"));
-    assert_eq!(source.get("processingStatus").and_then(Value::as_str), Some("deleted"));
-    assert_eq!(fact.get("status").and_then(Value::as_str), Some("needs_review"));
-    assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_deleted"));
+    assert_eq!(
+      source.get("deletionState").and_then(Value::as_str),
+      Some("soft_deleted")
+    );
+    assert_eq!(
+      source.get("processingStatus").and_then(Value::as_str),
+      Some("deleted")
+    );
+    assert_eq!(
+      fact.get("status").and_then(Value::as_str),
+      Some("needs_review")
+    );
+    assert_eq!(
+      fact.get("reviewReason").and_then(Value::as_str),
+      Some("source_deleted")
+    );
     assert_eq!(result.affected_fact_count, 1);
     assert_eq!(result.invalidated_pack_count, 1);
     assert_eq!(
       pack.get("confirmationStatus").and_then(Value::as_str),
       Some("cancelled")
     );
-    assert_eq!(request.get("status").and_then(Value::as_str), Some("expired"));
+    assert_eq!(
+      request.get("status").and_then(Value::as_str),
+      Some("expired")
+    );
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    let search =
+      search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
     let normalized_status: String = connection
       .query_row("SELECT status FROM facts LIMIT 1", [], |row| row.get(0))
       .expect("normalized fact status");
@@ -9650,11 +10177,11 @@ mod tests {
     )
     .expect("source ingest");
 
-    let error =
-      match purge_browser_passive_capture_source_at_path(&path, &source_result.source_id) {
-        Ok(_) => panic!("manual source should not be purgeable from capture host"),
-        Err(error) => error,
-      };
+    let error = match purge_browser_passive_capture_source_at_path(&path, &source_result.source_id)
+    {
+      Ok(_) => panic!("manual source should not be purgeable from capture host"),
+      Err(error) => error,
+    };
 
     assert!(error.contains("browser passive-capture"));
     remove_temp_vault(&path);
@@ -9699,7 +10226,11 @@ mod tests {
     let source = saved
       .get("sources")
       .and_then(Value::as_array)
-      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .and_then(|sources| {
+        sources
+          .iter()
+          .find(|source| str_field(source, "id") == source_result.source_id)
+      })
       .expect("source");
     let fact = saved
       .get("facts")
@@ -9728,8 +10259,14 @@ mod tests {
       source.get("body").and_then(Value::as_str),
       Some("Need to renew lease by 2027-02-01.")
     );
-    assert_eq!(fact.get("status").and_then(Value::as_str), Some("needs_review"));
-    assert_eq!(fact.get("reviewReason").and_then(Value::as_str), Some("source_updated"));
+    assert_eq!(
+      fact.get("status").and_then(Value::as_str),
+      Some("needs_review")
+    );
+    assert_eq!(
+      fact.get("reviewReason").and_then(Value::as_str),
+      Some("source_updated")
+    );
     assert_eq!(
       pack.get("confirmationStatus").and_then(Value::as_str),
       Some("cancelled")
@@ -9739,7 +10276,10 @@ mod tests {
       Some("new")
     );
     assert_eq!(
-      generated_candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      generated_candidate
+        .get("conflictWithFactIds")
+        .cloned()
+        .unwrap_or_else(|| json!([])),
       json!([])
     );
     assert!(generated_candidate
@@ -9749,7 +10289,8 @@ mod tests {
       .contains("lease"));
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    let search =
+      search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
     let normalized_body: String = connection
       .query_row(
         "SELECT body FROM sources WHERE id = ?1",
@@ -9758,7 +10299,9 @@ mod tests {
       )
       .expect("normalized source body");
     let normalized_candidate_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| {
+        row.get(0)
+      })
       .expect("normalized candidate count");
     let normalized_conflicts: String = connection
       .query_row(
@@ -9799,12 +10342,20 @@ mod tests {
     let source = saved
       .get("sources")
       .and_then(Value::as_array)
-      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .and_then(|sources| {
+        sources
+          .iter()
+          .find(|source| str_field(source, "id") == source_result.source_id)
+      })
       .expect("source");
     let candidate = saved
       .get("candidates")
       .and_then(Value::as_array)
-      .and_then(|candidates| candidates.iter().find(|candidate| str_field(candidate, "id") == candidate_id))
+      .and_then(|candidates| {
+        candidates
+          .iter()
+          .find(|candidate| str_field(candidate, "id") == candidate_id)
+      })
       .expect("candidate");
     let approval_error = match approve_candidate_at_path(&path, &candidate_id, None) {
       Ok(_) => panic!("purged source candidate should not approve"),
@@ -9812,8 +10363,14 @@ mod tests {
     };
 
     assert_eq!(source.get("body").and_then(Value::as_str), Some(""));
-    assert_eq!(source.get("deletionState").and_then(Value::as_str), Some("purged"));
-    assert_eq!(candidate.get("status").and_then(Value::as_str), Some("archived"));
+    assert_eq!(
+      source.get("deletionState").and_then(Value::as_str),
+      Some("purged")
+    );
+    assert_eq!(
+      candidate.get("status").and_then(Value::as_str),
+      Some("archived")
+    );
     assert!(approval_error.contains("deleted or purged Sources"));
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
@@ -9869,19 +10426,28 @@ mod tests {
     let source = saved
       .get("sources")
       .and_then(Value::as_array)
-      .and_then(|sources| sources.iter().find(|source| str_field(source, "id") == source_result.source_id))
+      .and_then(|sources| {
+        sources
+          .iter()
+          .find(|source| str_field(source, "id") == source_result.source_id)
+      })
       .expect("source");
-    let cancelled_pack = find_vault_item_by_id(&saved, "contextPacks", &first_pack.pack_id)
-      .expect("cancelled pack");
+    let cancelled_pack =
+      find_vault_item_by_id(&saved, "contextPacks", &first_pack.pack_id).expect("cancelled pack");
 
     assert_eq!(updated.invalidated_pack_count, 1);
-    assert_eq!(source.get("title").and_then(Value::as_str), Some("Apartment lease evidence"));
+    assert_eq!(
+      source.get("title").and_then(Value::as_str),
+      Some("Apartment lease evidence")
+    );
     assert_eq!(
       source.get("defaultSensitivity").and_then(Value::as_str),
       Some("private_consequential")
     );
     assert_eq!(
-      cancelled_pack.get("confirmationStatus").and_then(Value::as_str),
+      cancelled_pack
+        .get("confirmationStatus")
+        .and_then(Value::as_str),
       Some("cancelled")
     );
     assert_eq!(
@@ -9912,7 +10478,8 @@ mod tests {
       Some("explicit_sensitive"),
     )
     .expect("second context pack");
-    let second_saved: Value = serde_json::from_str(&second_pack.payload).expect("second vault json");
+    let second_saved: Value =
+      serde_json::from_str(&second_pack.payload).expect("second vault json");
     let pack = find_vault_item_by_id(&second_saved, "contextPacks", &second_pack.pack_id)
       .expect("second pack");
     let item = pack
@@ -9951,7 +10518,8 @@ mod tests {
       .first()
       .cloned()
       .expect("candidate id");
-    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let reviewed =
+      approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
     let fact_id = reviewed.fact_id.expect("fact id");
     create_context_pack_request_at_path(
       &path,
@@ -9979,11 +10547,18 @@ mod tests {
 
     assert_eq!(result.status, "user_hidden");
     assert_eq!(result.invalidated_pack_count, 1);
-    assert_eq!(fact.get("status").and_then(Value::as_str), Some("user_hidden"));
-    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+    assert_eq!(
+      fact.get("status").and_then(Value::as_str),
+      Some("user_hidden")
+    );
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let search = search_facts_in_connection(&connection, "insurance", None, None, 20).expect("search facts");
+    let search =
+      search_facts_in_connection(&connection, "insurance", None, None, 20).expect("search facts");
     assert!(search.is_empty());
     remove_temp_vault(&path);
   }
@@ -10005,13 +10580,14 @@ mod tests {
       .first()
       .cloned()
       .expect("candidate id");
-    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let reviewed =
+      approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
     let fact_id = reviewed.fact_id.expect("fact id");
     update_source_lifecycle_at_path(&path, &source_result.source_id, "soft_delete")
       .expect("soft delete source");
 
-    let result = update_fact_lifecycle_at_path(&path, &fact_id, "keep_active")
-      .expect("keep fact active");
+    let result =
+      update_fact_lifecycle_at_path(&path, &fact_id, "keep_active").expect("keep fact active");
     let saved: Value = serde_json::from_str(&result.payload).expect("saved vault json");
     let fact = saved
       .get("facts")
@@ -10025,7 +10601,8 @@ mod tests {
     assert!(fact.get("reviewSourceId").is_none());
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let search = search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
+    let search =
+      search_facts_in_connection(&connection, "lease", None, None, 20).expect("search facts");
     assert_eq!(search.len(), 1);
     remove_temp_vault(&path);
   }
@@ -10047,7 +10624,8 @@ mod tests {
       .first()
       .cloned()
       .expect("candidate id");
-    let reviewed = approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
+    let reviewed =
+      approve_candidate_at_path(&path, &candidate_id, None).expect("approve candidate");
     let fact_id = reviewed.fact_id.expect("fact id");
     create_context_pack_request_at_path(
       &path,
@@ -10093,13 +10671,16 @@ mod tests {
       Some("contracts_and_policies")
     );
     assert!(fact.get("validFrom").is_none());
-    assert_eq!(pack.get("confirmationStatus").and_then(Value::as_str), Some("cancelled"));
+    assert_eq!(
+      pack.get("confirmationStatus").and_then(Value::as_str),
+      Some("cancelled")
+    );
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let old_search = search_facts_in_connection(&connection, "2027-01-15", None, None, 20)
-      .expect("old search");
-    let new_search = search_facts_in_connection(&connection, "apartment", None, None, 20)
-      .expect("new search");
+    let old_search =
+      search_facts_in_connection(&connection, "2027-01-15", None, None, 20).expect("old search");
+    let new_search =
+      search_facts_in_connection(&connection, "apartment", None, None, 20).expect("new search");
     assert!(old_search.is_empty());
     assert_eq!(new_search.len(), 1);
 
@@ -10262,17 +10843,24 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
       .expect("normalized source count");
     let normalized_candidate_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| row.get(0))
+      .query_row("SELECT COUNT(*) FROM memory_candidates", [], |row| {
+        row.get(0)
+      })
       .expect("normalized candidate count");
     let normalized_fact_count: i64 = connection
       .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
       .expect("normalized fact count");
     let normalized_capture_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM passive_capture_events", [], |row| row.get(0))
+      .query_row("SELECT COUNT(*) FROM passive_capture_events", [], |row| {
+        row.get(0)
+      })
       .expect("normalized capture count");
 
     assert_eq!(normalized_source_count, 1);
-    assert_eq!(normalized_candidate_count, result.candidate_ids.len() as i64);
+    assert_eq!(
+      normalized_candidate_count,
+      result.candidate_ids.len() as i64
+    );
     assert_eq!(normalized_fact_count, 0);
     assert_eq!(normalized_capture_count, 1);
     remove_temp_vault(&path);
@@ -10320,14 +10908,15 @@ mod tests {
         "candidateIds": []
       }),
     );
-    save_vault_state_payload(&mut connection, &vault.to_string(), None).expect("seed expired vault");
+    save_vault_state_payload(&mut connection, &vault.to_string(), None)
+      .expect("seed expired vault");
     drop(connection);
 
     let result = update_passive_capture_settings_at_path(&path, Some(true), None, None)
       .expect("settings update purges expired capture");
     let saved: Value = serde_json::from_str(&result.payload).expect("vault json");
-    let source = find_vault_item_by_id(&saved, "sources", "src_expired_capture")
-      .expect("expired source");
+    let source =
+      find_vault_item_by_id(&saved, "sources", "src_expired_capture").expect("expired source");
     let event = find_vault_item_by_id(&saved, "passiveCaptureEvents", "cap_expired")
       .expect("expired capture event");
     let audit_text = saved
@@ -10391,9 +10980,15 @@ mod tests {
       .unwrap_or_default();
 
     assert_eq!(settings.get("enabled").and_then(Value::as_bool), Some(true));
-    assert_eq!(settings.get("retentionDays").and_then(Value::as_i64), Some(90));
     assert_eq!(
-      settings.get("allowedSites").cloned().unwrap_or_else(|| json!([])),
+      settings.get("retentionDays").and_then(Value::as_i64),
+      Some(90)
+    );
+    assert_eq!(
+      settings
+        .get("allowedSites")
+        .cloned()
+        .unwrap_or_else(|| json!([])),
       json!(["chatgpt.com", "claude.ai"])
     );
     assert_eq!(audit_count, 1);
@@ -10455,17 +11050,12 @@ mod tests {
 
     assert_eq!(normalized_policy_count, 1);
     assert_eq!(audit_count, 1);
-    let empty_domain_error = match update_access_policy_at_path(
-      &path,
-      "conn_chatgpt",
-      None,
-      None,
-      Some(Vec::new()),
-      None,
-    ) {
-      Ok(_) => panic!("empty domain allowlist should be rejected"),
-      Err(error) => error,
-    };
+    let empty_domain_error =
+      match update_access_policy_at_path(&path, "conn_chatgpt", None, None, Some(Vec::new()), None)
+      {
+        Ok(_) => panic!("empty domain allowlist should be rejected"),
+        Err(error) => error,
+      };
     assert!(empty_domain_error.contains("domainAllowlist"));
     let mixed_domain_error = match update_access_policy_at_path(
       &path,
@@ -10638,7 +11228,11 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
       .expect("fact count");
     let fts_count: i64 = connection
-      .query_row("SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'concrete'", [], |row| row.get(0))
+      .query_row(
+        "SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'concrete'",
+        [],
+        |row| row.get(0),
+      )
       .expect("fts count");
 
     assert_eq!(fact_count, 1);
@@ -10663,8 +11257,8 @@ mod tests {
       .first()
       .cloned()
       .expect("old candidate id");
-    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
-      .expect("approve old candidate");
+    let old_review =
+      approve_candidate_at_path(&path, &old_candidate_id, None).expect("approve old candidate");
     let old_fact_id = old_review.fact_id.expect("old fact id");
     create_context_pack_request_at_path(
       &path,
@@ -10710,10 +11304,16 @@ mod tests {
     assert_eq!(result.superseded_fact_ids, vec![old_fact_id.clone()]);
     assert_eq!(result.invalidated_pack_count, 1);
     assert_eq!(
-      new_fact.get("supersedesFactIds").cloned().unwrap_or_else(|| json!([])),
+      new_fact
+        .get("supersedesFactIds")
+        .cloned()
+        .unwrap_or_else(|| json!([])),
       json!([old_fact_id.clone()])
     );
-    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("superseded"));
+    assert_eq!(
+      old_fact.get("status").and_then(Value::as_str),
+      Some("superseded")
+    );
     assert_eq!(
       old_fact.get("supersededByFactId").and_then(Value::as_str),
       Some(new_fact_id.as_str())
@@ -10724,8 +11324,10 @@ mod tests {
     );
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
-    let old_search = search_facts_in_connection(&connection, "2026", None, None, 20).expect("old search");
-    let new_search = search_facts_in_connection(&connection, "2027", None, None, 20).expect("new search");
+    let old_search =
+      search_facts_in_connection(&connection, "2026", None, None, 20).expect("old search");
+    let new_search =
+      search_facts_in_connection(&connection, "2027", None, None, 20).expect("new search");
     let normalized_old_status: String = connection
       .query_row(
         "SELECT status FROM facts WHERE id = ?1",
@@ -10765,8 +11367,8 @@ mod tests {
       .first()
       .cloned()
       .expect("old candidate id");
-    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
-      .expect("approve old candidate");
+    let old_review =
+      approve_candidate_at_path(&path, &old_candidate_id, None).expect("approve old candidate");
     let old_fact_id = old_review.fact_id.expect("old fact id");
 
     let new_source = add_source_with_candidates_at_path(
@@ -10778,13 +11380,19 @@ mod tests {
     )
     .expect("new source ingest");
     let saved: Value = serde_json::from_str(&new_source.payload).expect("saved vault json");
-    let candidate = find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0])
-      .expect("candidate");
+    let candidate =
+      find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0]).expect("candidate");
     let old_fact = find_vault_item_by_id(&saved, "facts", &old_fact_id).expect("old fact");
 
-    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("active"));
     assert_eq!(
-      candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      old_fact.get("status").and_then(Value::as_str),
+      Some("active")
+    );
+    assert_eq!(
+      candidate
+        .get("conflictWithFactIds")
+        .cloned()
+        .unwrap_or_else(|| json!([])),
       json!([old_fact_id.clone()])
     );
     assert!(candidate
@@ -10823,8 +11431,8 @@ mod tests {
       .first()
       .cloned()
       .expect("old candidate id");
-    let old_review = approve_candidate_at_path(&path, &old_candidate_id, None)
-      .expect("approve old candidate");
+    let old_review =
+      approve_candidate_at_path(&path, &old_candidate_id, None).expect("approve old candidate");
     let old_fact_id = old_review.fact_id.expect("old fact id");
 
     let new_source = add_source_with_candidates_at_path(
@@ -10836,13 +11444,19 @@ mod tests {
     )
     .expect("new source ingest");
     let saved: Value = serde_json::from_str(&new_source.payload).expect("saved vault json");
-    let candidate = find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0])
-      .expect("candidate");
+    let candidate =
+      find_vault_item_by_id(&saved, "candidates", &new_source.candidate_ids[0]).expect("candidate");
     let old_fact = find_vault_item_by_id(&saved, "facts", &old_fact_id).expect("old fact");
 
-    assert_eq!(old_fact.get("status").and_then(Value::as_str), Some("active"));
     assert_eq!(
-      candidate.get("conflictWithFactIds").cloned().unwrap_or_else(|| json!([])),
+      old_fact.get("status").and_then(Value::as_str),
+      Some("active")
+    );
+    assert_eq!(
+      candidate
+        .get("conflictWithFactIds")
+        .cloned()
+        .unwrap_or_else(|| json!([])),
       json!([old_fact_id.clone()])
     );
     assert!(candidate
@@ -10882,8 +11496,8 @@ mod tests {
       .expect("candidate id")
       .to_string();
 
-    let reviewed = update_candidate_status_at_path(&path, &candidate_id, "archived")
-      .expect("archive candidate");
+    let reviewed =
+      update_candidate_status_at_path(&path, &candidate_id, "archived").expect("archive candidate");
     let saved: Value = serde_json::from_str(&reviewed.payload).expect("saved vault json");
     let candidate = saved
       .get("candidates")
@@ -10892,14 +11506,15 @@ mod tests {
       .expect("candidate");
 
     assert_eq!(reviewed.fact_id, None);
-    assert_eq!(candidate.get("status").and_then(Value::as_str), Some("archived"));
-    assert!(
-      saved
-        .get("facts")
-        .and_then(Value::as_array)
-        .map(Vec::is_empty)
-        .unwrap_or(false)
+    assert_eq!(
+      candidate.get("status").and_then(Value::as_str),
+      Some("archived")
     );
+    assert!(saved
+      .get("facts")
+      .and_then(Value::as_array)
+      .map(Vec::is_empty)
+      .unwrap_or(false));
 
     let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open test vault");
     let normalized_status: String = connection
@@ -10984,14 +11599,9 @@ mod tests {
 
     // Now approve with edited text that injects a credential.
     let secret_text = "AWS_SECRET_ACCESS_KEY=abc123secret";
-    let err = approve_candidate_with_options_at_path(
-      &path,
-      &candidate_id,
-      Some(secret_text),
-      &[],
-    )
-    .err()
-    .expect("approval of edited-secret text must be rejected");
+    let err = approve_candidate_with_options_at_path(&path, &candidate_id, Some(secret_text), &[])
+      .err()
+      .expect("approval of edited-secret text must be rejected");
 
     // Must be blocked and no fact created.
     let conn2 = vault_crypto::open_encrypted_vault_connection(&path).expect("open vault 2");
@@ -11002,7 +11612,10 @@ mod tests {
       err.contains("secret") || err.contains("cannot be approved"),
       "error should mention secret rejection, got: {err}"
     );
-    assert_eq!(fact_count, 0, "no fact must be created when edited text is secret");
+    assert_eq!(
+      fact_count, 0,
+      "no fact must be created when edited text is secret"
+    );
     remove_temp_vault(&path);
   }
 
@@ -11040,13 +11653,8 @@ mod tests {
 
     // Approve with edited text that contains an email — should classify as "personal".
     let edited = "Contact me at alice@example.com for questions";
-    let result = approve_candidate_with_options_at_path(
-      &path,
-      &candidate_id,
-      Some(edited),
-      &[],
-    )
-    .expect("approval of email-edited text must succeed");
+    let result = approve_candidate_with_options_at_path(&path, &candidate_id, Some(edited), &[])
+      .expect("approval of email-edited text must succeed");
 
     let fact_id = result.fact_id.expect("fact id");
     let saved: Value = serde_json::from_str(&result.payload).expect("parse payload");
@@ -11165,8 +11773,14 @@ mod tests {
       .and_then(Value::as_array)
       .expect("snippets");
 
-    assert_eq!(request.get("id").and_then(Value::as_str), Some(request_id.as_str()));
-    assert_eq!(pack.get("id").and_then(Value::as_str), Some(pack_id.as_str()));
+    assert_eq!(
+      request.get("id").and_then(Value::as_str),
+      Some(request_id.as_str())
+    );
+    assert_eq!(
+      pack.get("id").and_then(Value::as_str),
+      Some(pack_id.as_str())
+    );
     assert_eq!(
       request.get("status").and_then(Value::as_str),
       Some("pending_user_confirmation")
@@ -11176,23 +11790,20 @@ mod tests {
       items[0].get("factId").and_then(Value::as_str),
       Some("fact_insurance")
     );
-    assert!(
-      items
-        .iter()
-        .all(|item| item.get("itemText").and_then(Value::as_str) != Some("Unapproved candidate text must not become trusted context."))
-    );
+    assert!(items
+      .iter()
+      .all(|item| item.get("itemText").and_then(Value::as_str)
+        != Some("Unapproved candidate text must not become trusted context.")));
     assert_eq!(snippets.len(), 1);
     assert_eq!(
       snippets[0].get("text").and_then(Value::as_str),
       Some("Insurance policy renews on 2026-09-01.")
     );
-    assert!(
-      !snippets[0]
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .contains("RAW_POLICY_BODY")
-    );
+    assert!(!snippets[0]
+      .get("text")
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .contains("RAW_POLICY_BODY"));
   }
 
   #[test]
@@ -11217,13 +11828,19 @@ mod tests {
     .expect("private source");
     approve_candidate_at_path(
       &path,
-      public_source.candidate_ids.first().expect("public candidate"),
+      public_source
+        .candidate_ids
+        .first()
+        .expect("public candidate"),
       None,
     )
     .expect("approve public candidate");
     let private_approval = approve_candidate_at_path(
       &path,
-      private_source.candidate_ids.first().expect("private candidate"),
+      private_source
+        .candidate_ids
+        .first()
+        .expect("private candidate"),
       None,
     )
     .expect("approve private candidate");
@@ -11239,39 +11856,37 @@ mod tests {
     )
     .expect("context pack");
     let built_vault: Value = serde_json::from_str(&built.payload).expect("built vault");
-    let built_pack = find_vault_item_by_id(&built_vault, "contextPacks", &built.pack_id)
-      .expect("built pack");
+    let built_pack =
+      find_vault_item_by_id(&built_vault, "contextPacks", &built.pack_id).expect("built pack");
     assert!(built_pack
       .get("items")
       .and_then(Value::as_array)
       .map(|items| {
-        items.iter().any(|item| {
-          item.get("factId").and_then(Value::as_str) == Some(private_fact_id.as_str())
-        })
+        items
+          .iter()
+          .any(|item| item.get("factId").and_then(Value::as_str) == Some(private_fact_id.as_str()))
       })
       .unwrap_or(false));
 
-    let edited = update_context_pack_item_visibility_at_path(
-      &path,
-      &built.pack_id,
-      &private_fact_id,
-      false,
-    )
-    .expect("minimize pack");
+    let edited =
+      update_context_pack_item_visibility_at_path(&path, &built.pack_id, &private_fact_id, false)
+        .expect("minimize pack");
     let edited_vault: Value = serde_json::from_str(&edited.payload).expect("edited vault");
-    let edited_pack = find_vault_item_by_id(&edited_vault, "contextPacks", &built.pack_id)
-      .expect("edited pack");
+    let edited_pack =
+      find_vault_item_by_id(&edited_vault, "contextPacks", &built.pack_id).expect("edited pack");
     assert_eq!(
-      edited_pack.get("confirmationStatus").and_then(Value::as_str),
+      edited_pack
+        .get("confirmationStatus")
+        .and_then(Value::as_str),
       Some("edited_by_user")
     );
     assert!(edited_pack
       .get("items")
       .and_then(Value::as_array)
       .map(|items| {
-        items.iter().all(|item| {
-          item.get("factId").and_then(Value::as_str) != Some(private_fact_id.as_str())
-        })
+        items
+          .iter()
+          .all(|item| item.get("factId").and_then(Value::as_str) != Some(private_fact_id.as_str()))
       })
       .unwrap_or(false));
     assert!(edited_pack
@@ -11292,7 +11907,8 @@ mod tests {
     );
 
     confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm minimized pack");
-    let status = get_context_request_status_at_path(&path, &built.request_id).expect("request status");
+    let status =
+      get_context_request_status_at_path(&path, &built.request_id).expect("request status");
     let client_pack = status.context_pack.expect("client context pack");
     let client_items = client_pack
       .get("items")
@@ -11360,12 +11976,9 @@ mod tests {
     }
     save_vault_json_with_projection(&mut connection, &vault).expect("save expired vault");
 
-    let status = get_context_request_status_for_client_at_path(
-      &path,
-      &built.request_id,
-      "conn_chatgpt",
-    )
-    .expect("request status");
+    let status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status");
 
     assert_eq!(status.status, "expired");
     assert!(status.context_pack.is_none());
@@ -11403,12 +12016,9 @@ mod tests {
     .expect("context pack");
     confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
 
-    let ok_status = get_context_request_status_for_client_at_path(
-      &path,
-      &built.request_id,
-      "conn_chatgpt",
-    )
-    .expect("request status before fact drift");
+    let ok_status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status before fact drift");
     assert_eq!(ok_status.status, "fulfilled");
     assert!(ok_status.context_pack.is_some());
 
@@ -11425,12 +12035,9 @@ mod tests {
     }
     save_vault_json_with_projection(&mut connection, &vault).expect("save drifted vault");
 
-    let blocked_status = get_context_request_status_for_client_at_path(
-      &path,
-      &built.request_id,
-      "conn_chatgpt",
-    )
-    .expect("request status after fact drift");
+    let blocked_status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status after fact drift");
 
     assert_eq!(blocked_status.status, "expired");
     assert!(blocked_status.context_pack.is_none());
@@ -11569,16 +12176,19 @@ mod tests {
       .get("excludedItems")
       .and_then(Value::as_array)
       .expect("excluded");
-    let warnings = pack.get("warnings").and_then(Value::as_array).expect("warnings");
+    let warnings = pack
+      .get("warnings")
+      .and_then(Value::as_array)
+      .expect("warnings");
 
     assert!(items.is_empty());
     assert!(excluded.iter().any(|item| {
       item.get("referencedId").and_then(Value::as_str) == Some("fact_health")
         && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
     }));
-    assert!(warnings.iter().any(|warning| {
-      warning.get("kind").and_then(Value::as_str) == Some("policy_limited")
-    }));
+    assert!(warnings
+      .iter()
+      .any(|warning| { warning.get("kind").and_then(Value::as_str) == Some("policy_limited") }));
     assert_eq!(
       pack.get("confirmationStatus").and_then(Value::as_str),
       Some("not_required")
@@ -11673,9 +12283,9 @@ mod tests {
       .and_then(Value::as_array)
       .expect("excluded");
 
-    assert!(items.iter().any(|item| {
-      item.get("factId").and_then(Value::as_str) == Some("fact_health_allowed")
-    }));
+    assert!(items
+      .iter()
+      .any(|item| { item.get("factId").and_then(Value::as_str) == Some("fact_health_allowed") }));
     assert!(excluded.iter().any(|item| {
       item.get("referencedId").and_then(Value::as_str) == Some("fact_work_blocked")
         && item.get("reason").and_then(Value::as_str) == Some("domain_policy")
@@ -11804,9 +12414,9 @@ mod tests {
       request.get("sensitivityCeiling").and_then(Value::as_str),
       Some("personal")
     );
-    assert!(items.iter().any(|item| {
-      item.get("factId").and_then(Value::as_str) == Some("fact_personal")
-    }));
+    assert!(items
+      .iter()
+      .any(|item| { item.get("factId").and_then(Value::as_str) == Some("fact_personal") }));
     assert!(excluded.iter().any(|item| {
       item.get("referencedId").and_then(Value::as_str) == Some("fact_sensitive")
         && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
@@ -11855,12 +12465,14 @@ mod tests {
       .expect("invalid excluded");
 
     assert_eq!(
-      invalid_request.get("sensitivityCeiling").and_then(Value::as_str),
+      invalid_request
+        .get("sensitivityCeiling")
+        .and_then(Value::as_str),
       Some("public")
     );
-    assert!(invalid_items.iter().any(|item| {
-      item.get("factId").and_then(Value::as_str) == Some("fact_public")
-    }));
+    assert!(invalid_items
+      .iter()
+      .any(|item| { item.get("factId").and_then(Value::as_str) == Some("fact_public") }));
     assert!(invalid_excluded.iter().any(|item| {
       item.get("referencedId").and_then(Value::as_str) == Some("fact_personal")
         && item.get("reason").and_then(Value::as_str) == Some("sensitivity_policy")
@@ -11976,9 +12588,8 @@ mod tests {
     "#;
 
     sync_normalized_tables(&mut connection, payload).expect("sync");
-    let results =
-      search_facts_in_connection(&connection, "insurance OR passport", None, None, 20)
-        .expect("search");
+    let results = search_facts_in_connection(&connection, "insurance OR passport", None, None, 20)
+      .expect("search");
 
     assert_eq!(results.len(), 0);
     assert_eq!(
@@ -12032,8 +12643,9 @@ mod tests {
       )
       .expect("row");
 
-    let result = save_vault_state_payload(&mut connection, "{\"local\":true}", Some("old-revision"))
-      .expect("save result");
+    let result =
+      save_vault_state_payload(&mut connection, "{\"local\":true}", Some("old-revision"))
+        .expect("save result");
     let stored_payload: String = connection
       .query_row(
         "SELECT payload FROM vault_state WHERE key = ?1",
@@ -12043,8 +12655,14 @@ mod tests {
       .expect("stored payload");
 
     assert!(result.conflict);
-    assert_eq!(result.current_updated_at.as_deref(), Some("external-revision"));
-    assert_eq!(result.current_payload.as_deref(), Some("{\"external\":true}"));
+    assert_eq!(
+      result.current_updated_at.as_deref(),
+      Some("external-revision")
+    );
+    assert_eq!(
+      result.current_payload.as_deref(),
+      Some("{\"external\":true}")
+    );
     assert_eq!(stored_payload, "{\"external\":true}");
   }
 
@@ -12090,9 +12708,9 @@ mod tests {
 
     assert!(plist.contains(LOGIN_ITEM_LABEL));
     assert!(plist.contains("<key>ProgramArguments</key>"));
-    assert!(plist.contains(
-      "/Applications/Life Context Vault.app/Contents/MacOS/life-context-vault"
-    ));
+    assert!(
+      plist.contains("/Applications/Life Context Vault.app/Contents/MacOS/life-context-vault")
+    );
     assert!(plist.contains("<key>RunAtLoad</key>"));
     assert!(plist.contains("<true/>"));
     assert!(plist.contains("<key>KeepAlive</key>"));
@@ -12160,30 +12778,56 @@ mod tests {
     // Use an email address so the classifier marks the fact as classified=true,
     // confidence="high" — required for zero-touch delivery under Task 7's new gate.
     let source = add_source_with_candidates_at_path(
-      &path, "manual_note", "manual_entry",
-      "Contact reminder", "Contact alice@example.com for schedule details.",
-    ).expect("source");
-    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
-      .expect("approve candidate");
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact reminder",
+      "Contact alice@example.com for schedule details.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
 
     // Connection opted into standing delivery, request approval mode = None (core decides).
     // Item is classified=true, confidence="high" → zero-touch eligible → not_required.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable");
     let auto = create_context_pack_request_at_path(
-      &path, "conn_chatgpt", "ChatGPT", "How do I contact alice about the schedule?",
-      Some("普段使うAIへの回答文脈"), Some("personal"), None,
-    ).expect("auto pack");
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact alice about the schedule?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      None,
+    )
+    .expect("auto pack");
     assert_eq!(auto.confirmation_status, "not_required");
-    assert!(auto.context_pack.is_some(), "classified item with standing delivery must auto-deliver");
+    assert!(
+      auto.context_pack.is_some(),
+      "classified item with standing delivery must auto-deliver"
+    );
 
     // Same connection with standing delivery OFF must pend.
     set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
     let pend = create_context_pack_request_at_path(
-      &path, "conn_chatgpt", "ChatGPT", "When does my passport expire?",
-      Some("普段使うAIへの回答文脈"), Some("private_consequential"), None,
-    ).expect("pending pack");
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("private_consequential"),
+      None,
+    )
+    .expect("pending pack");
     assert_eq!(pend.confirmation_status, "pending_user_confirmation");
-    assert!(pend.context_pack.is_none(), "strict connection must not auto-deliver");
+    assert!(
+      pend.context_pack.is_none(),
+      "strict connection must not auto-deliver"
+    );
     remove_temp_vault(&path);
   }
 
@@ -12214,18 +12858,22 @@ mod tests {
     let mut connection = open_vault_db_at_path(&path).expect("open vault");
     let mut vault = empty_vault_json();
     // Simulate a legacy/upgraded vault: policy persisted WITHOUT standingDeliveryEnabled
-    push_json_array(&mut vault, "accessPolicies", json!({
-      "id": "policy_chatgpt",
-      "clientId": "conn_chatgpt",
-      "scopes": [],
-      "domainAllowlist": [],
-      "sensitivityCeiling": "private_consequential",
-      "requiresApprovalAbove": "personal",
-      "passiveCaptureAllowed": false,
-      "createdAt": "2024-01-01T00:00:00.000Z",
-      "updatedAt": "2024-01-01T00:00:00.000Z"
-      // standingDeliveryEnabled deliberately absent
-    }));
+    push_json_array(
+      &mut vault,
+      "accessPolicies",
+      json!({
+        "id": "policy_chatgpt",
+        "clientId": "conn_chatgpt",
+        "scopes": [],
+        "domainAllowlist": [],
+        "sensitivityCeiling": "private_consequential",
+        "requiresApprovalAbove": "personal",
+        "passiveCaptureAllowed": false,
+        "createdAt": "2024-01-01T00:00:00.000Z",
+        "updatedAt": "2024-01-01T00:00:00.000Z"
+        // standingDeliveryEnabled deliberately absent
+      }),
+    );
     save_vault_json_with_projection(&mut connection, &vault).expect("save");
     drop(connection);
 
@@ -12245,7 +12893,12 @@ mod tests {
     let mut connection = open_vault_db_at_path(&path).expect("open vault");
     let mut vault = empty_vault_json();
     // Simulate fresh install: ensure policies for the canonical connection IDs
-    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+    for client_id in &[
+      "conn_chatgpt",
+      "conn_claude_desktop",
+      "conn_gemini",
+      "conn_codex",
+    ] {
       ensure_access_policy_for_client(&mut vault, client_id);
     }
     save_vault_json_with_projection(&mut connection, &vault).expect("save");
@@ -12253,7 +12906,12 @@ mod tests {
 
     let connection = open_vault_db_at_path(&path).expect("reopen vault");
     let vault = load_vault_json_from_connection(&connection).expect("load vault");
-    for client_id in &["conn_chatgpt", "conn_claude_desktop", "conn_gemini", "conn_codex"] {
+    for client_id in &[
+      "conn_chatgpt",
+      "conn_claude_desktop",
+      "conn_gemini",
+      "conn_codex",
+    ] {
       assert!(
         connection_standing_delivery_enabled(&vault, client_id),
         "fresh install connection {client_id} must have standingDeliveryEnabled=true"
@@ -12735,8 +13393,7 @@ mod tests {
     approve_candidate_at_path(&path, &candidate_id, None).expect("approve");
 
     // Manually clear sensitivityClassified to simulate a legacy fact.
-    let mut connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
     if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
       for fact in facts.iter_mut() {
@@ -12758,8 +13415,7 @@ mod tests {
     )
     .expect("pack");
     assert_eq!(
-      pack_result.confirmation_status,
-      "pending_user_confirmation",
+      pack_result.confirmation_status, "pending_user_confirmation",
       "unclassified items must require confirmation"
     );
     remove_temp_vault(&path);
@@ -12792,8 +13448,7 @@ mod tests {
     )
     .expect("pack");
     assert_eq!(
-      pack_result.confirmation_status,
-      "pending_user_confirmation",
+      pack_result.confirmation_status, "pending_user_confirmation",
       "always_review must always require confirmation"
     );
     remove_temp_vault(&path);
@@ -12825,8 +13480,7 @@ mod tests {
     approve_candidate_at_path(&path, r2.candidate_ids.first().expect("c2"), None).expect("a2");
 
     // Clear classification on the second (last) fact only.
-    let mut connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
     if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
       if let Some(fact) = facts.last_mut() {
@@ -12847,8 +13501,7 @@ mod tests {
     )
     .expect("pack");
     assert_eq!(
-      pack_result.confirmation_status,
-      "pending_user_confirmation",
+      pack_result.confirmation_status, "pending_user_confirmation",
       "mixed pack with one unclassified item must require confirmation"
     );
     remove_temp_vault(&path);
@@ -12874,8 +13527,7 @@ mod tests {
     approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
 
     // Lower the sensitivity confidence to "low" and set bar="high" in the policy.
-    let mut connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
     if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
       for fact in facts.iter_mut() {
@@ -12884,7 +13536,10 @@ mod tests {
         fact["sensitivityConfidence"] = Value::String("low".to_string());
       }
     }
-    if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+    if let Some(policies) = vault
+      .get_mut("accessPolicies")
+      .and_then(Value::as_array_mut)
+    {
       for policy in policies.iter_mut() {
         if str_field(policy, "clientId") == "conn_chatgpt" {
           policy["zeroTouchConfidenceBar"] = Value::String("high".to_string());
@@ -12906,8 +13561,7 @@ mod tests {
     .expect("pack");
     // With bar=high but item confidence=low, the item is below bar → must require confirmation.
     assert_eq!(
-      pack_result.confirmation_status,
-      "pending_user_confirmation",
+      pack_result.confirmation_status, "pending_user_confirmation",
       "per-client bar=high: item with low confidence must require confirmation"
     );
     remove_temp_vault(&path);
@@ -12942,8 +13596,7 @@ mod tests {
     let pack_id = pack_result.pack_id;
 
     // Simulate classification clearing on the pack item and mark pack as not_required.
-    let mut connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
     if let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) {
       for pack in packs.iter_mut() {
@@ -12957,8 +13610,9 @@ mod tests {
         }
       }
     }
-    if let Some(requests) =
-      vault.get_mut("contextPackRequests").and_then(Value::as_array_mut)
+    if let Some(requests) = vault
+      .get_mut("contextPackRequests")
+      .and_then(Value::as_array_mut)
     {
       for request in requests.iter_mut() {
         request["status"] = Value::String("fulfilled".to_string());
@@ -12971,8 +13625,7 @@ mod tests {
     let connection =
       vault_crypto::open_encrypted_vault_connection(&path).expect("open for retrieval");
     let vault = load_vault_json_from_connection(&connection).expect("load for retrieval");
-    let pack =
-      find_vault_item_by_id(&vault, "contextPacks", &pack_id).expect("pack exists");
+    let pack = find_vault_item_by_id(&vault, "contextPacks", &pack_id).expect("pack exists");
     let validation_result = ensure_context_pack_allowed_by_current_policy(&vault, &pack);
     assert!(
       validation_result.is_err(),
@@ -12991,19 +13644,20 @@ mod tests {
       let _connection = open_vault_db_at_path(&path).expect("first open");
     }
     let version: u64 = {
-      let connection =
-        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open");
+      let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("raw open");
       let vault = load_vault_json_from_connection(&connection).expect("load vault");
       vault
         .get("classifierMigrationVersion")
         .and_then(Value::as_u64)
         .unwrap_or(0)
     };
-    assert_eq!(version, 1, "classifierMigrationVersion must be 1 after first open");
+    assert_eq!(
+      version, 1,
+      "classifierMigrationVersion must be 1 after first open"
+    );
 
     let first_updated_at: String = {
-      let connection =
-        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open2");
+      let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("raw open2");
       connection
         .query_row(
           "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
@@ -13016,8 +13670,7 @@ mod tests {
       let _connection = open_vault_db_at_path(&path).expect("second open");
     }
     let second_updated_at: String = {
-      let connection =
-        vault_crypto::open_encrypted_vault_connection(&path).expect("raw open3");
+      let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("raw open3");
       connection
         .query_row(
           "SELECT updated_at FROM vault_state WHERE key = 'vault_state'",
@@ -13048,8 +13701,7 @@ mod tests {
     .expect("src");
     approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
 
-    let connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let vault = load_vault_json_from_connection(&connection).expect("load");
     let fact = vault
       .get("facts")
@@ -13091,7 +13743,9 @@ mod tests {
       "editing fact text with email should re-classify as classified=true"
     );
     assert_eq!(
-      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
+      updated_fact
+        .get("sensitivityConfidence")
+        .and_then(Value::as_str),
       Some("high"),
       "email pattern should produce high confidence"
     );
@@ -13115,8 +13769,7 @@ mod tests {
     .expect("src");
     approve_candidate_at_path(&path, r.candidate_ids.first().expect("c"), None).expect("a");
 
-    let connection =
-      vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let vault = load_vault_json_from_connection(&connection).expect("load");
     let fact = vault
       .get("facts")
@@ -13127,7 +13780,10 @@ mod tests {
     let fact_id = str_field(&fact, "id");
     let original_sensitivity = str_field(&fact, "sensitivity"); // "personal" from "email" keyword
     drop(connection);
-    assert_eq!(original_sensitivity, "personal", "body with 'email' keyword should yield personal tier");
+    assert_eq!(
+      original_sensitivity, "personal",
+      "body with 'email' keyword should yield personal tier"
+    );
 
     // Override sensitivity to "public" (manual change) while also changing text.
     let result = update_fact_metadata_at_path(
@@ -13157,7 +13813,9 @@ mod tests {
       "manual sensitivity override must set classified=false"
     );
     assert_eq!(
-      updated_fact.get("sensitivityConfidence").and_then(Value::as_str),
+      updated_fact
+        .get("sensitivityConfidence")
+        .and_then(Value::as_str),
       Some("low"),
       "manual sensitivity override must set confidence=low"
     );

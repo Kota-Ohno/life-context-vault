@@ -128,6 +128,9 @@ Pack invalidation is automatic and cascading: any Source/Fact lifecycle change c
 
 - **IPC casing:** Rust structs use `#[serde(rename_all = "camelCase")]` → TS sees camelCase. SQL
   columns are snake_case. The persisted `vault_state` JSON is TS-shaped (camelCase).
+- **Rust formatting:** `src-tauri/rustfmt.toml` pins 2-space (`tab_spaces = 2`). The tree is now
+  rustfmt-clean — run `cargo fmt --manifest-path src-tauri/Cargo.toml` to keep it that way;
+  `product:check` enforces `cargo fmt --check`.
 - **IDs:** prefixed — `src_`, `cand_`, `fact_`, `pack_`, `req_`, `audit_`, `conn_` — via `new_id(prefix)`.
 - **UI is Japanese-first** (`index.html` `lang="ja"`); some user-facing strings live in the Rust layer.
 - **Secret redaction happens before persistence** (`sanitize_secret_material` /

@@ -61,7 +61,10 @@ mod tests {
   fn identical_text_has_cosine_near_one() {
     let vector = embed("健康診断の予約を取った");
     let similarity = cosine(&vector, &vector);
-    assert!((similarity - 1.0).abs() < 1e-5, "self-similarity was {similarity}");
+    assert!(
+      (similarity - 1.0).abs() < 1e-5,
+      "self-similarity was {similarity}"
+    );
   }
 
   #[test]
