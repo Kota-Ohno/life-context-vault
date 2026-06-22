@@ -1474,7 +1474,7 @@ describe("vault flow", () => {
     // Change only domain — text and sensitivity unchanged.
     state = updateFactMetadata(state, fact.id, {
       factText: fact.factText,
-      domain: "work_and_career",
+      domain: "work_and_education",
       sensitivity: fact.sensitivity
     });
     const updated = state.facts.find((f) => f.id === fact.id)!;
