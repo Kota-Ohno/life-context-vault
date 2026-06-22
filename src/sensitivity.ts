@@ -50,18 +50,18 @@ const SIGNALS: Signal[] = [
     confidence: "high",
     reason: "matches credential assignment pattern",
   },
-  // secret_never_send: national/bank ID structured patterns (high)
+  // secret_never_send: national/bank ID bare keywords (low — keyword only, no value context)
   {
     test: /\b(my[_\s]?number|national[_\s]?id|bank[_\s]?account)\b/i,
     tier: "secret_never_send",
-    confidence: "high",
-    reason: "matches national/bank identity pattern",
+    confidence: "low",
+    reason: "matches national/bank identity keyword",
   },
-  // secret_never_send: Japanese identity keywords (high — these are structured Japanese terms)
+  // secret_never_send: Japanese identity keywords (low — bare keyword, no value context)
   {
     test: /口座番号|マイナンバー/,
     tier: "secret_never_send",
-    confidence: "high",
+    confidence: "low",
     reason: "matches Japanese identity/account keyword",
   },
   // secret_never_send: bare credential keywords (low — keyword only, no value context)
@@ -115,13 +115,6 @@ const SIGNALS: Signal[] = [
     tier: "personal",
     confidence: "high",
     reason: "matches email pattern",
-  },
-  // personal: phone structured pattern (high)
-  {
-    test: /(?:\+?\d[\s\-.]?){7,14}\d/,
-    tier: "personal",
-    confidence: "high",
-    reason: "matches phone number pattern",
   },
   // personal: bare contact/family keywords (low)
   {
