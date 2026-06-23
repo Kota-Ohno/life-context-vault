@@ -350,7 +350,7 @@ const policySensitivityOptions: SensitivityTier[] = [
   "sensitive"
 ];
 
-const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
+const localMcpBinaryPath = "/Applications/Life Context Vault.app/Contents/MacOS/lcv-mcp";
 
 /** Set to true to mount the QV component gallery at startup (dev only). */
 const SHOW_QV_GALLERY = false;
@@ -1672,12 +1672,19 @@ export function App() {
       if (!result) {
         setNotice("Desktop appでのみClaude Desktop設定をインストールできます。");
       } else if (result.alreadyConfigured) {
-        setNotice("Claude Desktop設定はすでに最新です。");
+        const base = "Claude Desktop設定はすでに最新です。";
+        setNotice(result.warning ? `${base} ／ ${result.warning}` : base);
       } else {
-        setNotice("Claude Desktop設定へLife Context Vaultを追加しました。Claude Desktopを再起動してください。");
+        const base = "Claude Desktop設定へLife Context Vaultを追加しました。Claude Desktopを再起動してください。";
+        setNotice(result.warning ? `${base} ／ ${result.warning}` : base);
       }
     } catch (error) {
-      setNotice(formatVaultError(error, "Claude Desktop設定のインストールに失敗しました。"));
+      const errStr = formatVaultError(error, "");
+      const isSidecarMissing = errStr.includes("lcv-mcp");
+      const msg = isSidecarMissing
+        ? "lcv-mcp バイナリが見つかりません。npm run sidecars:prepare を実行するか、バンドル版アプリをお使いください。"
+        : formatVaultError(error, "インストールに失敗しました。");
+      setNotice(msg);
     } finally {
       setClaudeInstallBusy(false);
     }

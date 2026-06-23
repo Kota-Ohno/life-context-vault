@@ -74,6 +74,12 @@ export function ConnectView({
             ) : null}
           </div>
 
+          {!nativePath && (
+            <p className="qv-connect-card__note">
+              自動インストールにはデスクトップアプリが必要です（ブラウザプレビューでは使用できません）。
+            </p>
+          )}
+
           {claudeInstallResult ? (
             <p className="qv-connect-card__result">
               設定パス: {claudeInstallResult.configPath}
@@ -82,6 +88,7 @@ export function ConnectView({
 
           <details className="qv-connect-card__disclosure">
             <summary>MCP設定（手動コピー用）</summary>
+            <p className="qv-connect-card__note">※ これはテンプレートです。「Claude設定へ追加」を使うと正確なパスが自動設定されます。</p>
             <pre className="qv-connect-card__code">{claudeConfig}</pre>
           </details>
         </Card>

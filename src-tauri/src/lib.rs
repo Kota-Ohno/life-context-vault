@@ -88,6 +88,7 @@ struct ClaudeDesktopConfigInstallResult {
   backup_path: Option<String>,
   server_name: String,
   already_configured: bool,
+  warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -8294,7 +8295,22 @@ fn claude_desktop_config_path() -> Result<PathBuf, String> {
   }
 }
 
-fn life_context_claude_server_config(app: &AppHandle) -> Result<Value, String> {
+#[cfg(not(target_os = "macos"))]
+fn build_non_macos_key_env() -> (std::collections::HashMap<String, String>, Option<String>) {
+  use std::collections::HashMap;
+  if let Ok(key_file) = std::env::var("LCV_VAULT_KEY_FILE") {
+    let mut env = HashMap::new();
+    env.insert("LCV_VAULT_KEY_FILE".to_string(), key_file);
+    (env, None)
+  } else if std::env::var("LCV_VAULT_DB_KEY").is_ok() {
+    let warning = "LCV_VAULT_DB_KEY は設定ファイルに書き込まれませんでした。claude_desktop_config.json の env ブロックに手動で追加してください。".to_string();
+    (HashMap::new(), Some(warning))
+  } else {
+    (HashMap::new(), None)
+  }
+}
+
+fn life_context_claude_server_config(app: &AppHandle) -> Result<(Value, Option<String>), String> {
   let command = mcp_stdio::resolve_sibling_binary("lcv-mcp");
   if !command.exists() {
     return Err(format!(
@@ -8308,14 +8324,39 @@ fn life_context_claude_server_config(app: &AppHandle) -> Result<Value, String> {
   ))
 }
 
-fn life_context_claude_server_config_for_paths(command: PathBuf, vault_path: PathBuf) -> Value {
-  json!({
-    "type": "stdio",
-    "command": command.display().to_string(),
-    "env": {
-      "LCV_VAULT_DB_PATH": vault_path.display().to_string()
+fn life_context_claude_server_config_for_paths(
+  command: PathBuf,
+  vault_path: PathBuf,
+) -> (Value, Option<String>) {
+  #[cfg(not(target_os = "macos"))]
+  {
+    let (extra_env, warning) = build_non_macos_key_env();
+    let mut env = serde_json::Map::new();
+    env.insert(
+      "LCV_VAULT_DB_PATH".to_string(),
+      Value::String(vault_path.display().to_string()),
+    );
+    for (k, v) in extra_env {
+      env.insert(k, Value::String(v));
     }
-  })
+    let config = json!({
+      "type": "stdio",
+      "command": command.display().to_string(),
+      "env": env
+    });
+    (config, warning)
+  }
+  #[cfg(target_os = "macos")]
+  {
+    let config = json!({
+      "type": "stdio",
+      "command": command.display().to_string(),
+      "env": {
+        "LCV_VAULT_DB_PATH": vault_path.display().to_string()
+      }
+    });
+    (config, None)
+  }
 }
 
 fn merge_claude_desktop_config(
@@ -8339,7 +8380,7 @@ fn install_claude_desktop_config(
   app: AppHandle,
 ) -> Result<ClaudeDesktopConfigInstallResult, String> {
   let config_path = claude_desktop_config_path()?;
-  let server_config = life_context_claude_server_config(&app)?;
+  let (server_config, key_warning) = life_context_claude_server_config(&app)?;
   let existing = if config_path.exists() {
     let raw = fs::read_to_string(&config_path)
       .map_err(|error| format!("failed to read Claude Desktop config: {error}"))?;
@@ -8357,6 +8398,7 @@ fn install_claude_desktop_config(
       backup_path: None,
       server_name: "life-context-vault".to_string(),
       already_configured: true,
+      warning: key_warning,
     });
   }
 
@@ -8397,14 +8439,16 @@ fn install_claude_desktop_config(
     backup_path: backup_path.map(|path| path.display().to_string()),
     server_name: "life-context-vault".to_string(),
     already_configured: false,
+    warning: key_warning,
   })
 }
 
 #[tauri::command]
 fn claude_desktop_config_template(app: AppHandle) -> Result<String, String> {
+  let (server_config, _) = life_context_claude_server_config(&app)?;
   let config = json!({
     "mcpServers": {
-      "life-context-vault": life_context_claude_server_config(&app)?
+      "life-context-vault": server_config
     }
   });
   serde_json::to_string_pretty(&config)
@@ -13252,7 +13296,7 @@ mod tests {
       },
       "theme": "system"
     });
-    let server = life_context_claude_server_config_for_paths(
+    let (server, _) = life_context_claude_server_config_for_paths(
       PathBuf::from("/Applications/Life Context Vault.app/Contents/MacOS/lcv-mcp"),
       PathBuf::from(
         "/Users/example/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3",
@@ -14826,5 +14870,74 @@ mod tests {
       "override sensitivity must be persisted"
     );
     remove_temp_vault(&path);
+  }
+
+  // Serialise all tests that mutate process-global env vars for the
+  // `build_non_macos_key_env` code path.  A `static Mutex` is held for the
+  // entire duration of each scenario; the drop-guard restores the vars even
+  // when an assertion panics, so a failing scenario cannot leave stale state
+  // that corrupts other tests running concurrently.
+  #[cfg(not(target_os = "macos"))]
+  static NON_MACOS_KEY_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+  #[cfg(not(target_os = "macos"))]
+  #[test]
+  fn test_build_non_macos_key_env() {
+    // --- scenario 1: LCV_VAULT_KEY_FILE is set, LCV_VAULT_DB_KEY is absent ---
+    {
+      let _guard = NON_MACOS_KEY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      // A drop-guard struct restores the env vars even on panic.
+      struct EnvGuard;
+      impl Drop for EnvGuard {
+        fn drop(&mut self) {
+          std::env::remove_var("LCV_VAULT_DB_KEY");
+          std::env::remove_var("LCV_VAULT_KEY_FILE");
+        }
+      }
+      let _env_guard = EnvGuard;
+
+      std::env::remove_var("LCV_VAULT_DB_KEY");
+      std::env::set_var("LCV_VAULT_KEY_FILE", "/run/secrets/lcv.key");
+      let (env, warning) = build_non_macos_key_env();
+      assert_eq!(
+        env.get("LCV_VAULT_KEY_FILE").map(String::as_str),
+        Some("/run/secrets/lcv.key"),
+        "key file path must appear in env block"
+      );
+      assert!(
+        !env.contains_key("LCV_VAULT_DB_KEY"),
+        "raw key must not appear in env block"
+      );
+      assert!(warning.is_none(), "no warning when key file is set");
+    }
+
+    // --- scenario 2: only LCV_VAULT_DB_KEY is set (raw key must not leak) ---
+    {
+      let _guard = NON_MACOS_KEY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      struct EnvGuard;
+      impl Drop for EnvGuard {
+        fn drop(&mut self) {
+          std::env::remove_var("LCV_VAULT_DB_KEY");
+          std::env::remove_var("LCV_VAULT_KEY_FILE");
+        }
+      }
+      let _env_guard = EnvGuard;
+
+      std::env::remove_var("LCV_VAULT_KEY_FILE");
+      std::env::set_var("LCV_VAULT_DB_KEY", "0123456789abcdef0123456789abcdef");
+      let (env, warning) = build_non_macos_key_env();
+      assert!(
+        !env.contains_key("LCV_VAULT_DB_KEY"),
+        "raw key must not be written to env block"
+      );
+      assert!(
+        warning.is_some(),
+        "warning must be set when only raw key is present"
+      );
+    }
   }
 }
