@@ -10,6 +10,7 @@ import {
   Archive,
   Check,
   CheckCircle2,
+  CheckSquare,
   FileText,
   Plug,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Square,
   Upload,
   X,
 } from "lucide-react";
@@ -31,6 +33,7 @@ import type {
 } from "../types";
 import { domainLabel, sensitivityLabel } from "../vault";
 import { candidateMemoryStatus, memoryStatusLabel } from "../memoryStatus";
+import { isBatchEligible } from "../batchApproval";
 import { PageHeader } from "../components/PageHeader";
 import { SectionDivider } from "../components/SectionDivider";
 import { Card } from "../components/Card";
@@ -161,6 +164,7 @@ export interface IngestViewProps {
   setEdit: (id: string, value: string) => void;
   toggleSupersede: (candidateId: string, factId: string) => void;
   approve: (candidate: MemoryCandidate) => void;
+  approveBatch: (candidates: MemoryCandidate[]) => Promise<void>;
   reject: (candidate: MemoryCandidate) => void;
   archive: (candidate: MemoryCandidate) => void;
   markSensitive: (candidate: MemoryCandidate) => void;
@@ -198,6 +202,7 @@ export function IngestView({
   setEdit,
   toggleSupersede,
   approve,
+  approveBatch,
   reject,
   archive,
   markSensitive,
@@ -223,6 +228,46 @@ export function IngestView({
   editSourceBody,
 }: IngestViewProps) {
   const [isDragActive, setIsDragActive] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+
+  const eligibleCandidates = candidates.filter(isBatchEligible);
+
+  function toggleSelectionMode() {
+    setSelectionMode((on) => !on);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === eligibleCandidates.length && eligibleCandidates.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(eligibleCandidates.map((c) => c.id)));
+    }
+  }
+
+  async function handleBatchApprove() {
+    const chosen = eligibleCandidates.filter((c) => selectedIds.has(c.id));
+    if (chosen.length === 0) return;
+    const ok = window.confirm(`${chosen.length}件の記憶を承認します。よろしいですか？`);
+    if (!ok) return;
+    await approveBatch(chosen);
+    setSelectedIds(new Set());
+    setSelectionMode(false);
+  }
+
   const pendingCount = candidates.length;
   const documentReadiness = documentIngestionReadiness(
     ocrExtractionAvailable,
@@ -265,6 +310,46 @@ export function IngestView({
         label={pendingCount > 0 ? `確認待ちの記憶 — ${pendingCount}件` : "確認待ちの記憶"}
       />
 
+      {/* Batch selection toolbar */}
+      {candidates.length > 0 && (
+        <div className="qv-ingest__batch-toolbar">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleSelectionMode}
+            aria-pressed={selectionMode}
+          >
+            {selectionMode ? <X size={14} /> : <CheckSquare size={14} />}
+            {selectionMode ? "選択をキャンセル" : "まとめて承認"}
+          </Button>
+
+          {selectionMode && eligibleCandidates.length > 0 && (
+            <>
+              <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
+                {selectedIds.size === eligibleCandidates.length ? (
+                  <CheckSquare size={14} />
+                ) : (
+                  <Square size={14} />
+                )}
+                {selectedIds.size === eligibleCandidates.length ? "すべて解除" : "すべて選択"}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void handleBatchApprove()}
+                disabled={selectedIds.size === 0}
+                aria-label={`選択した${selectedIds.size}件の記憶を承認`}
+              >
+                <Check size={14} />
+                {selectedIds.size > 0
+                  ? `${selectedIds.size}件を承認`
+                  : "記憶を選択してください"}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
       {candidates.length === 0 ? (
         <EmptyState
           title="確認待ちの記憶はありません"
@@ -302,10 +387,36 @@ export function IngestView({
             ].slice(0, 4);
             const selectedSupersedes = supersedes[candidate.id] ?? [];
 
+            const eligible = isBatchEligible(candidate);
+            const isSelected = selectedIds.has(candidate.id);
+
             return (
-              <Card as="article" tone="pending" className="qv-ingest__cand-card" key={candidate.id}>
+              <Card
+                as="article"
+                tone="pending"
+                className={[
+                  "qv-ingest__cand-card",
+                  selectionMode && eligible && isSelected ? "qv-ingest__cand-card--selected" : "",
+                  selectionMode && !eligible ? "qv-ingest__cand-card--ineligible" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={candidate.id}
+              >
                 {/* Meta row */}
                 <div className="qv-ingest__cand-meta">
+                  {/* Batch selection checkbox — only shown in selection mode for eligible candidates */}
+                  {selectionMode && (
+                    <label className="qv-ingest__cand-select" title={eligible ? "選択" : "この記憶は個別に確認が必要です"}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={!eligible}
+                        onChange={() => eligible && toggleSelect(candidate.id)}
+                        aria-label={eligible ? `記憶を選択: ${candidate.proposedFactText.slice(0, 40)}` : "選択不可（個別確認が必要）"}
+                      />
+                    </label>
+                  )}
                   <span className="qv-ingest__cand-domain">{domainLabel(candidate.domain)}</span>
                   <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
                   <span className="qv-ingest__cand-status">
@@ -367,25 +478,33 @@ export function IngestView({
                   </div>
                 )}
 
-                {/* Action row */}
-                <div className="qv-ingest__cand-actions">
-                  <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
-                    <Check size={14} />
-                    この記憶を承認
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
-                    <ShieldAlert size={14} />
-                    要確認にする
-                  </Button>
-                  <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
-                    <Archive size={14} />
-                    あとで
-                  </Button>
-                  <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
-                    <X size={14} />
-                    却下
-                  </Button>
-                </div>
+                {/* Action row — hidden in selection mode; replaced by batch toolbar */}
+                {!selectionMode && (
+                  <div className="qv-ingest__cand-actions">
+                    <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
+                      <Check size={14} />
+                      この記憶を承認
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
+                      <ShieldAlert size={14} />
+                      要確認にする
+                    </Button>
+                    <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
+                      <Archive size={14} />
+                      あとで
+                    </Button>
+                    <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
+                      <X size={14} />
+                      却下
+                    </Button>
+                  </div>
+                )}
+                {selectionMode && !eligible && (
+                  <p className="qv-ingest__cand-ineligible-note">
+                    <ShieldAlert size={13} />
+                    個別に確認が必要です
+                  </p>
+                )}
               </Card>
             );
           })}

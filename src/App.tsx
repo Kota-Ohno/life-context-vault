@@ -1174,6 +1174,27 @@ export function App() {
     apply(next, candidateApprovalNotice(supersedeFactIds.length, invalidatedPackCount));
   }
 
+  async function approveBatch(candidates: MemoryCandidate[]) {
+    // Route each candidate through the existing per-item approve path, one at a time.
+    // This preserves per-candidate classification, audit, supersession, and the
+    // secret_never_send hard-reject gate in approveCandidate / approveNativeCandidate.
+    let approved = 0;
+    let skipped = 0;
+    for (const candidate of candidates) {
+      try {
+        await approve(candidate);
+        approved++;
+      } catch {
+        skipped++;
+      }
+    }
+    if (skipped > 0) {
+      setNotice(`${approved}件の記憶を承認しました。${skipped}件は承認できませんでした。`);
+    } else if (approved > 0) {
+      setNotice(`${approved}件の記憶を承認しました。`);
+    }
+  }
+
   async function reviewCandidateStatus(
     candidate: MemoryCandidate,
     status: CandidateStatus,
@@ -1793,6 +1814,7 @@ export function App() {
               }))
             }
             approve={approve}
+            approveBatch={approveBatch}
             reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "記憶を却下しました。")}
             archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "記憶をあとでに移しました。")}
             markSensitive={(candidate) =>
