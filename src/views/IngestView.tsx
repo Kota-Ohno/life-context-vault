@@ -10,6 +10,7 @@ import {
   Archive,
   Check,
   CheckCircle2,
+  CheckSquare,
   FileText,
   Plug,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Square,
   Upload,
   X,
 } from "lucide-react";
@@ -31,6 +33,7 @@ import type {
 } from "../types";
 import { domainLabel, sensitivityLabel } from "../vault";
 import { candidateMemoryStatus, memoryStatusLabel } from "../memoryStatus";
+import { isBatchEligible } from "../batchApproval";
 import { PageHeader } from "../components/PageHeader";
 import { SectionDivider } from "../components/SectionDivider";
 import { Card } from "../components/Card";
@@ -88,13 +91,13 @@ function documentIngestionReadiness(
     {
       label: "画像 (OCR)",
       state: ocrAvailable ? "ready" : "attention",
-      value: ocrAvailable ? ocrLabel ?? "OCR Provider" : "未設定",
+      value: ocrAvailable ? ocrLabel ?? "OCR変換ツール" : "未設定",
       detail: ocrAvailable ? "ローカル実行" : "接続が必要です",
     },
     {
       label: "旧Office形式",
       state: officeAvailable ? "ready" : "attention",
-      value: officeAvailable ? officeLabel ?? "Office Provider" : "未設定",
+      value: officeAvailable ? officeLabel ?? "Office変換ツール" : "未設定",
       detail: officeAvailable ? "ローカル変換" : "接続が必要です",
     },
   ];
@@ -161,6 +164,7 @@ export interface IngestViewProps {
   setEdit: (id: string, value: string) => void;
   toggleSupersede: (candidateId: string, factId: string) => void;
   approve: (candidate: MemoryCandidate) => void;
+  approveBatch: (candidates: MemoryCandidate[]) => Promise<void>;
   reject: (candidate: MemoryCandidate) => void;
   archive: (candidate: MemoryCandidate) => void;
   markSensitive: (candidate: MemoryCandidate) => void;
@@ -198,6 +202,7 @@ export function IngestView({
   setEdit,
   toggleSupersede,
   approve,
+  approveBatch,
   reject,
   archive,
   markSensitive,
@@ -223,6 +228,46 @@ export function IngestView({
   editSourceBody,
 }: IngestViewProps) {
   const [isDragActive, setIsDragActive] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+
+  const eligibleCandidates = candidates.filter(isBatchEligible);
+
+  function toggleSelectionMode() {
+    setSelectionMode((on) => !on);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === eligibleCandidates.length && eligibleCandidates.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(eligibleCandidates.map((c) => c.id)));
+    }
+  }
+
+  async function handleBatchApprove() {
+    const chosen = eligibleCandidates.filter((c) => selectedIds.has(c.id));
+    if (chosen.length === 0) return;
+    const ok = window.confirm(`${chosen.length}件の記憶を承認します。よろしいですか？`);
+    if (!ok) return;
+    await approveBatch(chosen);
+    setSelectedIds(new Set());
+    setSelectionMode(false);
+  }
+
   const pendingCount = candidates.length;
   const documentReadiness = documentIngestionReadiness(
     ocrExtractionAvailable,
@@ -265,22 +310,62 @@ export function IngestView({
         label={pendingCount > 0 ? `確認待ちの記憶 — ${pendingCount}件` : "確認待ちの記憶"}
       />
 
+      {/* Batch selection toolbar */}
+      {candidates.length > 0 && (
+        <div className="qv-ingest__batch-toolbar">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleSelectionMode}
+            aria-pressed={selectionMode}
+          >
+            {selectionMode ? <X size={14} aria-hidden="true" /> : <CheckSquare size={14} aria-hidden="true" />}
+            {selectionMode ? "選択をキャンセル" : "まとめて承認"}
+          </Button>
+
+          {selectionMode && eligibleCandidates.length > 0 && (
+            <>
+              <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
+                {selectedIds.size === eligibleCandidates.length ? (
+                  <CheckSquare size={14} aria-hidden="true" />
+                ) : (
+                  <Square size={14} aria-hidden="true" />
+                )}
+                {selectedIds.size === eligibleCandidates.length ? "すべて解除" : "すべて選択"}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void handleBatchApprove()}
+                disabled={selectedIds.size === 0}
+                aria-label={`選択した${selectedIds.size}件の記憶を承認`}
+              >
+                <Check size={14} aria-hidden="true" />
+                {selectedIds.size > 0
+                  ? `${selectedIds.size}件を承認`
+                  : "記憶を選択してください"}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
       {candidates.length === 0 ? (
         <EmptyState
           title="確認待ちの記憶はありません"
-          body="Source・メモ・AI会話Captureから記憶を作ると、ここに届きます。"
+          body="取り込み元・メモ・AI会話から記憶を作ると、ここに届きます。"
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="primary" onClick={goHome}>
-                <Sparkles size={15} />
+                <Sparkles size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>
               <Button variant="ghost" onClick={goConnections}>
-                <Plug size={15} />
-                AI会話Captureを設定
+                <Plug size={15} aria-hidden="true" />
+                AI会話連携を設定
               </Button>
               <div className="qv-ingest__trust-note">
-                <ShieldCheck size={14} />
+                <ShieldCheck size={14} aria-hidden="true" />
                 <span>記憶は承認後にAIへ渡せるようになり、確認後だけAIに渡ります。</span>
               </div>
             </div>
@@ -302,10 +387,36 @@ export function IngestView({
             ].slice(0, 4);
             const selectedSupersedes = supersedes[candidate.id] ?? [];
 
+            const eligible = isBatchEligible(candidate);
+            const isSelected = selectedIds.has(candidate.id);
+
             return (
-              <Card as="article" tone="pending" className="qv-ingest__cand-card" key={candidate.id}>
+              <Card
+                as="article"
+                tone="pending"
+                className={[
+                  "qv-ingest__cand-card",
+                  selectionMode && eligible && isSelected ? "qv-ingest__cand-card--selected" : "",
+                  selectionMode && !eligible ? "qv-ingest__cand-card--ineligible" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={candidate.id}
+              >
                 {/* Meta row */}
                 <div className="qv-ingest__cand-meta">
+                  {/* Batch selection checkbox — only shown in selection mode for eligible candidates */}
+                  {selectionMode && (
+                    <label className="qv-ingest__cand-select" title={eligible ? "選択" : "この記憶は個別に確認が必要です"}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={!eligible}
+                        onChange={() => eligible && toggleSelect(candidate.id)}
+                        aria-label={eligible ? `記憶を選択: ${candidate.proposedFactText.slice(0, 40)}` : "選択不可（個別確認が必要）"}
+                      />
+                    </label>
+                  )}
                   <span className="qv-ingest__cand-domain">{domainLabel(candidate.domain)}</span>
                   <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
                   <span className="qv-ingest__cand-status">
@@ -318,7 +429,7 @@ export function IngestView({
 
                 {/* Editable text */}
                 <textarea
-                  aria-label="Candidate text"
+                  aria-label="候補テキスト"
                   className="qv-ingest__cand-text"
                   value={edits[candidate.id] ?? candidate.proposedFactText}
                   onChange={(e) => setEdit(candidate.id, e.target.value)}
@@ -329,7 +440,7 @@ export function IngestView({
                 {/* Conflict warning */}
                 {conflictFactIds.length > 0 && (
                   <div className="qv-ingest__warning-line">
-                    <ShieldAlert size={14} />
+                    <ShieldAlert size={14} aria-hidden="true" />
                     {candidate.conflictReason ?? "既存の記憶と異なる可能性があります。保存前に置き換えるか確認してください。"}
                   </div>
                 )}
@@ -338,7 +449,7 @@ export function IngestView({
                 {replacementOptions.length > 0 && (
                   <div className="qv-ingest__supersede">
                     <div className="qv-ingest__trust-note qv-ingest__trust-note--compact">
-                      <RefreshCw size={13} />
+                      <RefreshCw size={13} aria-hidden="true" />
                       <span>古い記憶を置き換える場合だけ選択します。置き換えた記憶はAIに渡らなくなり、履歴に残ります。</span>
                     </div>
                     <div className="qv-ingest__supersede-options">
@@ -362,30 +473,38 @@ export function IngestView({
                 {/* Sensitive warning */}
                 {candidate.status === "blocked_sensitive" && (
                   <div className="qv-ingest__warning-line">
-                    <ShieldAlert size={14} />
+                    <ShieldAlert size={14} aria-hidden="true" />
                     要確認の記憶です。保存するとAIに渡す前に毎回確認します。
                   </div>
                 )}
 
-                {/* Action row */}
-                <div className="qv-ingest__cand-actions">
-                  <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
-                    <Check size={14} />
-                    この記憶を承認
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
-                    <ShieldAlert size={14} />
-                    要確認にする
-                  </Button>
-                  <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
-                    <Archive size={14} />
-                    あとで
-                  </Button>
-                  <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
-                    <X size={14} />
-                    却下
-                  </Button>
-                </div>
+                {/* Action row — hidden in selection mode; replaced by batch toolbar */}
+                {!selectionMode && (
+                  <div className="qv-ingest__cand-actions">
+                    <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
+                      <Check size={14} aria-hidden="true" />
+                      この記憶を承認
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
+                      <ShieldAlert size={14} aria-hidden="true" />
+                      要確認にする
+                    </Button>
+                    <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
+                      <Archive size={14} aria-hidden="true" />
+                      あとで
+                    </Button>
+                    <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
+                      <X size={14} aria-hidden="true" />
+                      却下
+                    </Button>
+                  </div>
+                )}
+                {selectionMode && !eligible && (
+                  <p className="qv-ingest__cand-ineligible-note">
+                    <ShieldAlert size={13} aria-hidden="true" />
+                    個別に確認が必要です
+                  </p>
+                )}
               </Card>
             );
           })}
@@ -393,7 +512,7 @@ export function IngestView({
       )}
 
       {/* ── Section 2: Sources ────────────────────────────────────── */}
-      <SectionDivider label="取り込み済みSource" />
+      <SectionDivider label="取り込み済み" />
 
       {/* Add source inputs */}
       <div className="qv-ingest__add-row">
@@ -401,14 +520,14 @@ export function IngestView({
         <Card className="qv-ingest__add-card">
           <p className="qv-ingest__add-eyebrow">会話・メモから追加</p>
           <div className="qv-ingest__trust-note">
-            <ShieldCheck size={14} />
+            <ShieldCheck size={14} aria-hidden="true" />
             <span>ここで保存されるのは取り込み元と未承認の記憶です。AIへ渡るのは承認した記憶だけです。</span>
           </div>
           <div className="qv-ingest__form-stack">
             <FieldInput label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
             <FieldTextarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
             <Button variant="primary" onClick={addManualSource}>
-              <Sparkles size={15} />
+              <Sparkles size={15} aria-hidden="true" />
               記憶を生成
             </Button>
           </div>
@@ -425,7 +544,7 @@ export function IngestView({
             onDragOver={handleDropZoneDrag}
             onDrop={handleDropZoneDrop}
           >
-            <Upload size={22} />
+            <Upload size={22} aria-hidden="true" />
             <strong>{isDragActive ? "ここにドロップ" : "ファイルを選択 / ドロップ"}</strong>
             <span className="qv-ingest__drop-label">{sourceLabel}</span>
             <small>1ファイルずつ追加します</small>
@@ -442,7 +561,7 @@ export function IngestView({
           </label>
           {uploadFeedback && (
             <div className={`qv-ingest__upload-feedback qv-ingest__upload-feedback--${uploadFeedback.tone}`}>
-              {uploadFeedback.tone === "ready" ? <CheckCircle2 size={15} /> : <ShieldAlert size={15} />}
+              {uploadFeedback.tone === "ready" ? <CheckCircle2 size={15} aria-hidden="true" /> : <ShieldAlert size={15} aria-hidden="true" />}
               <div>
                 <strong>{uploadFeedback.title}</strong>
                 <span>{uploadFeedback.body}</span>
@@ -450,21 +569,21 @@ export function IngestView({
             </div>
           )}
           <div className="qv-ingest__trust-note">
-            <ShieldCheck size={14} />
+            <ShieldCheck size={14} aria-hidden="true" />
             <span>
-              PDF/OfficeはDesktopでローカル抽出します。
+              PDF/Officeはデスクトップアプリでローカル抽出します。
               {ocrExtractionAvailable
-                ? ` 画像は ${ocrProviderLabel ?? "OCR Provider"} をローカル実行して抽出します。`
-                : " 画像OCRはProvider接続までSource化しません。"}
+                ? ` 画像は ${ocrProviderLabel ?? "OCR変換ツール"} をローカル実行して抽出します。`
+                : " 画像OCRは変換ツール接続まで取り込めません。"}
               {legacyOfficeConversionAvailable
-                ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Legacy Office Provider"} でローカル変換します。`
-                : " 旧Office形式は変換Provider接続までSource化しません。"}
+                ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Office変換ツール"} でローカル変換します。`
+                : " 旧Office形式は変換ツール接続まで取り込めません。"}
             </span>
           </div>
-          <div className="qv-ingest__readiness-grid" aria-label="Document ingestion readiness">
+          <div className="qv-ingest__readiness-grid" aria-label="ドキュメント取り込み状況">
             {documentReadiness.map((item) => (
               <div className={`qv-ingest__readiness-card qv-ingest__readiness-card--${item.state}`} key={item.label}>
-                {item.state === "ready" ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}
+                {item.state === "ready" ? <CheckCircle2 size={13} aria-hidden="true" /> : <ShieldAlert size={13} aria-hidden="true" />}
                 <div>
                   <span>{item.label}</span>
                   <strong>{item.value}</strong>
@@ -478,18 +597,18 @@ export function IngestView({
 
       {/* Source history */}
       <div className="qv-ingest__trust-note qv-ingest__source-lifecycle-note">
-        <Archive size={14} />
-        <span>Sourceを停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
+        <Archive size={14} aria-hidden="true" />
+        <span>取り込み元を停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
       </div>
 
       {sources.length === 0 ? (
         <EmptyState
-          title="まだSourceがありません"
+          title="まだ取り込み元がありません"
           body="メモや文書を追加すると、ここに記録が残ります。"
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="ghost" onClick={goHome}>
-                <FileText size={15} />
+                <FileText size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>
             </div>
@@ -560,27 +679,27 @@ function IngestSourceRow({
         {bodyDraft !== null ? (
           <div className="qv-ingest__source-edit">
             <FieldTextarea
-              label="Source本文"
+              label="取り込み元の原文"
               value={bodyDraft}
               onChange={setBodyDraft}
               placeholder="再抽出したい本文"
             />
             <div className="qv-ingest__trust-note">
-              <RefreshCw size={13} />
+              <RefreshCw size={13} aria-hidden="true" />
               <span>保存すると未承認の記憶を作り直します。承認済みの記憶は再確認待ちになり、AIに渡した内容（記憶）は無効化されます。</span>
             </div>
           </div>
         ) : draft ? (
           <div className="qv-ingest__source-edit">
             <FieldInput
-              label="Sourceタイトル"
+              label="取り込み元のタイトル"
               value={draft.title}
               onChange={(value) => setDraft({ ...draft, title: value })}
               placeholder="根拠として見分けやすい名前"
             />
             <div className="qv-ingest__source-edit-grid">
               <label className="field">
-                <span>Source感度</span>
+                <span>取り込み元の感度</span>
                 <select
                   value={draft.defaultSensitivity}
                   onChange={(event) =>
@@ -631,13 +750,13 @@ function IngestSourceRow({
             </div>
             {confirmBodyPurge && (
               <div className="qv-ingest__purge-confirm" role="status">
-                <strong>このSource本文を消去します</strong>
+                <strong>この取り込み元の原文を消去します</strong>
                 <span>
                   本文は戻せません。確認待ちの記憶 {linkedCandidateCount}件、関連する記憶 {linkedFactCount}件、
                   AIに渡した内容（記憶）{linkedPackCount}件に影響します。
                 </span>
                 <Button variant="quiet" size="sm" onClick={() => setConfirmBodyPurge(false)}>
-                  <X size={13} />
+                  <X size={13} aria-hidden="true" />
                   取消
                 </Button>
               </div>
@@ -659,11 +778,11 @@ function IngestSourceRow({
                 if (saved) setBodyDraft(null);
               }}
             >
-              <RefreshCw size={13} />
+              <RefreshCw size={13} aria-hidden="true" />
               保存して再抽出
             </Button>
             <Button variant="quiet" size="sm" onClick={() => setBodyDraft(null)}>
-              <X size={13} />
+              <X size={13} aria-hidden="true" />
               取消
             </Button>
           </>
@@ -677,11 +796,11 @@ function IngestSourceRow({
                 if (saved) setDraft(null);
               }}
             >
-              <Check size={13} />
+              <Check size={13} aria-hidden="true" />
               保存
             </Button>
             <Button variant="quiet" size="sm" onClick={() => setDraft(null)}>
-              <X size={13} />
+              <X size={13} aria-hidden="true" />
               取消
             </Button>
           </>
@@ -698,7 +817,7 @@ function IngestSourceRow({
                 })
               }
             >
-              <Settings size={13} />
+              <Settings size={13} aria-hidden="true" />
               編集
             </Button>
             {source.deletionState === "active" && source.body && (
@@ -707,7 +826,7 @@ function IngestSourceRow({
                 size="sm"
                 onClick={() => setBodyDraft(source.body)}
               >
-                <RefreshCw size={13} />
+                <RefreshCw size={13} aria-hidden="true" />
                 本文編集
               </Button>
             )}
@@ -720,7 +839,7 @@ function IngestSourceRow({
             size="sm"
             onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
           >
-            <Archive size={13} />
+            <Archive size={13} aria-hidden="true" />
             使用停止
           </Button>
         )}
@@ -730,7 +849,7 @@ function IngestSourceRow({
             size="sm"
             onClick={() => changeSourceLifecycle(source.id, "restore")}
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={13} aria-hidden="true" />
             復元
           </Button>
         )}
@@ -747,7 +866,7 @@ function IngestSourceRow({
               changeSourceLifecycle(source.id, "purge_body");
             }}
           >
-            <X size={13} />
+            <X size={13} aria-hidden="true" />
             {confirmBodyPurge ? "確認して本文消去" : "本文消去"}
           </Button>
         )}

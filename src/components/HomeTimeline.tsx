@@ -12,6 +12,7 @@ import { BoundaryRule } from "./BoundaryRule";
 import { Tag } from "./Tag";
 import { Seal } from "./Seal";
 import { Button } from "./Button";
+import { ONBOARDING_STEPS } from "../onboarding";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export interface HomeTimelineProps {
   state: VaultState;
   goSources: () => void;
   goConnections: () => void;
+  goRequests: () => void;
   seedDemo: () => void;
   onApprovePending?: (packId: string) => void;
   onApproveStanding?: (packId: string, clientId: string) => void;
@@ -221,6 +223,8 @@ function TimelineEmpty({
   pendingCandidateCount,
   goSources,
   goConnections,
+  goRequests,
+  hasConnectedSession,
   seedDemo,
 }: {
   scope: Scope;
@@ -228,10 +232,13 @@ function TimelineEmpty({
   pendingCandidateCount: number;
   goSources: () => void;
   goConnections: () => void;
+  goRequests: () => void;
+  hasConnectedSession: boolean;
   seedDemo: () => void;
 }) {
   // Zero-facts onboarding branch: vault has no active facts yet.
   if (factCount === 0) {
+    const STEP_ICONS = ["①", "②", "③"] as const;
     return (
       <div className="qv-tl-empty">
         <p className="qv-tl-empty__kana" aria-hidden="true">◇</p>
@@ -241,8 +248,24 @@ function TimelineEmpty({
         <p className="qv-tl-empty__body">
           情報を追加して承認すると、AIに渡せる文脈パックが作られます。
         </p>
+
+        {/* 3-step onboarding flow */}
+        <ol className="qv-onboarding-steps" aria-label="はじめかたのステップ">
+          {ONBOARDING_STEPS.map((step, i) => (
+            <li key={step.key} className="qv-onboarding-step">
+              <span className="qv-onboarding-step__icon" aria-hidden="true">
+                {STEP_ICONS[i]}
+              </span>
+              <div className="qv-onboarding-step__content">
+                <strong className="qv-onboarding-step__title">{step.title}</strong>
+                <span className="qv-onboarding-step__body">{step.body}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+
         <p className="qv-tl-empty__trust">
-          承認した文脈だけがAIに渡ります。保存前にMemory Inboxで確認できます。
+          承認した文脈だけがAIに渡ります。保存前に取り込みで確認できます。
         </p>
         <div className="qv-tl-empty__actions">
           {pendingCandidateCount > 0 ? (
@@ -276,9 +299,15 @@ function TimelineEmpty({
         AIクライアントを接続して最初のリクエストを受け取ると、ここに履歴が表示されます。
       </p>
       <div className="qv-tl-empty__actions">
-        <Button variant="primary" size="sm" onClick={goConnections}>
-          AIを接続する
-        </Button>
+        {hasConnectedSession ? (
+          <Button variant="primary" size="sm" onClick={goRequests}>
+            テストリクエストを作成する
+          </Button>
+        ) : (
+          <Button variant="primary" size="sm" onClick={goConnections}>
+            AIを接続する
+          </Button>
+        )}
         <Button variant="quiet" size="sm" onClick={goSources}>
           情報を追加する
         </Button>
@@ -313,6 +342,7 @@ export function HomeTimeline({
   state,
   goSources,
   goConnections,
+  goRequests,
   seedDemo,
   onApprovePending,
   onApproveStanding,
@@ -350,7 +380,7 @@ export function HomeTimeline({
           />
         ))}
         <span className="qv-tl-scoperow__count" aria-live="polite">
-          {SCOPE_LABELS[scope]}渡したFact{" "}
+          {SCOPE_LABELS[scope]}渡した記憶{" "}
           <b>{total}件</b>
           {pending > 0 && (
             <>
@@ -368,6 +398,8 @@ export function HomeTimeline({
           pendingCandidateCount={pendingCandidateCount}
           goSources={goSources}
           goConnections={goConnections}
+          goRequests={goRequests}
+          hasConnectedSession={state.connectorSessions.some((s) => s.status === "connected")}
           seedDemo={seedDemo}
         />
       ) : (

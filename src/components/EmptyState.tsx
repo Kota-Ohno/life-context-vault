@@ -11,7 +11,7 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <Sparkles size={26} />
+      <Sparkles size={26} aria-hidden="true" />
       <h3>{title}</h3>
       <p>{body}</p>
       {action}

@@ -68,11 +68,17 @@ function renderTimeline(
   {
     goSources = vi.fn(),
     goConnections = vi.fn(),
+    goRequests = vi.fn(),
     seedDemo = vi.fn(),
-  }: { goSources?: () => void; goConnections?: () => void; seedDemo?: () => void } = {},
+  }: {
+    goSources?: () => void;
+    goConnections?: () => void;
+    goRequests?: () => void;
+    seedDemo?: () => void;
+  } = {},
 ): string {
   return renderToStaticMarkup(
-    createElement(HomeTimeline, { state, goSources, goConnections, seedDemo }),
+    createElement(HomeTimeline, { state, goSources, goConnections, goRequests, seedDemo }),
   );
 }
 

@@ -27,7 +27,7 @@ const TIER_RANK: Record<SensitivityTier, number> = {
   secret_never_send: 4,
 };
 
-export function sensitivityRank(t: SensitivityTier): number {
+function sensitivityRank(t: SensitivityTier): number {
   return TIER_RANK[t];
 }
 

@@ -2120,49 +2120,6 @@ export function purgeExpiredPassiveCaptures(
   };
 }
 
-export function proposeMemoryFromConnector(
-  state: VaultState,
-  input: {
-    clientId: string;
-    clientKind: ConnectorKind;
-    clientName: string;
-    text: string;
-  }
-): VaultState {
-  const source: RawSource = {
-    id: newId("src"),
-    kind: "mcp_proposal",
-    title: `${input.clientName} memory proposal`,
-    origin: input.clientKind === "chatgpt" || input.clientKind === "claude_remote" ? "remote_relay" : "local_mcp",
-    body: sanitizeSecretMaterial(input.text).text,
-    createdAt: nowIso(),
-    capturedAt: nowIso(),
-    defaultSensitivity: classifySensitivity(input.text).tier,
-    processingStatus: "ready",
-    deletionState: "active"
-  };
-  const candidates = annotateCandidateConflicts(state, extractCandidates(source));
-  return {
-    ...state,
-    sources: [source, ...state.sources],
-    candidates: [...candidates, ...state.candidates],
-    connectorSessions: touchConnector(state.connectorSessions, input.clientId),
-    auditEvents: [
-      audit("memory_proposed", "source", source.id, source.defaultSensitivity, {
-        clientId: input.clientId,
-        clientKind: input.clientKind,
-        candidateCount: candidates.length
-      }),
-      ...candidates.map((candidate) =>
-        audit("candidate_generated", "candidate", candidate.id, candidate.detectedSensitivity, {
-          sourceId: source.id
-        })
-      ),
-      ...state.auditEvents
-    ]
-  };
-}
-
 export function generateLocalAnswer(pack: ContextPack): string {
   const contextLines = pack.items.map((item) => `- ${item.itemText}`);
   const hasContext = contextLines.length > 0;

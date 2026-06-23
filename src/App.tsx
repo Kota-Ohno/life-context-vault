@@ -1,12 +1,12 @@
 import {
-  Activity,
+
   Archive,
-  ArrowRight,
+
   Bell,
   Check,
   CheckCircle2,
   Clipboard,
-  CircleDot,
+
   Clock,
   Download,
   EyeOff,
@@ -15,10 +15,9 @@ import {
   Inbox,
   Lock,
   MessageSquare,
-  PauseCircle,
-  PlayCircle,
+
   Plug,
-  Radio,
+
   RefreshCw,
   Search,
   Send,
@@ -72,13 +71,11 @@ import {
   saveNativeRuntimePreferences,
   setNativeDeliveryNotificationsEnabled
 } from "./nativeStorage";
-import { detectLang, Lang, t } from "./i18n";
 import { formatVaultError } from "./lib/formatVaultError";
 import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
 import { EmptyState } from "./components/EmptyState";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
 import { HomeTimeline } from "./components/HomeTimeline";
@@ -112,7 +109,6 @@ import {
 } from "./sourceUpload";
 import {
   addSourceWithCandidates,
-  addPassiveCaptureEvent,
   approveCandidate,
   attachLocalAnswer,
   buildContextPackForRequest,
@@ -381,18 +377,6 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
-  const [lang, setLang] = useState<Lang>(() => {
-    const stored = typeof localStorage !== "undefined" ? localStorage.getItem("lcv-lang") : null;
-    if (stored === "en" || stored === "ja") return stored;
-    return detectLang();
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("lcv-lang", lang);
-    } catch {
-      /* localStorage unavailable; language stays in-memory for this session */
-    }
-  }, [lang]);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
@@ -403,13 +387,6 @@ export function App() {
   const [activePackId, setActivePackId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [manualCopyPayload, setManualCopyPayload] = useState<ManualCopyPayload | null>(null);
-  const [captureClient, setCaptureClient] = useState<ConnectorKind>("chatgpt");
-  const [captureConversationId, setCaptureConversationId] = useState("demo-thread");
-  const [captureText, setCaptureText] = useState("");
-  const [captureExtensionId, setCaptureExtensionId] = useState("");
-  const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
-  const [captureHostInstallResult, setCaptureHostInstallResult] =
-    useState<any | null>(null);
   const [confirmAllCapturePurge, setConfirmAllCapturePurge] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");
@@ -568,7 +545,7 @@ export function App() {
       .catch((error) => {
         console.warn("Native vault save failed", error);
         setNotice(
-          "Vaultの保存に失敗しました。変更が反映されていない可能性があります。Settings や Audit で状態をご確認ください。"
+          "Vaultの保存に失敗しました。変更が反映されていない可能性があります。設定や監査ログで状態をご確認ください。"
         );
       });
     return () => {
@@ -612,7 +589,7 @@ export function App() {
           setActivePackId(
             snapshot.state.contextPacks.find((pack) => pack.requestId === pendingRequest.id)?.id ?? null
           );
-          setNotice(`${pendingRequest.clientName}からContext Requestを受信しました。Requestsで確認できます。`);
+          setNotice(`${pendingRequest.clientName}からAI要求を受信しました。AI要求一覧で確認できます。`);
         } else {
           setNotice("外部AI接続からのVault更新を同期しました。");
         }
@@ -757,19 +734,19 @@ export function App() {
       {
         kind: "manual_note",
         origin: "manual_entry",
-        title: manualTitle || "Manual note",
+        title: manualTitle || "手動メモ",
         body: manualBody
       },
-      "Sourceを保存し、Memory Inboxに記憶を追加しました。"
+      "取り込み元を保存し、取り込みに記憶を追加しました。"
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
         kind: "manual_note",
         origin: "manual_entry",
-        title: manualTitle || "Manual note",
+        title: manualTitle || "手動メモ",
         body: manualBody
       });
-      apply(next, "Sourceを保存し、Memory Inboxに記憶を追加しました。");
+      apply(next, "取り込み元を保存し、取り込みに記憶を追加しました。");
       setView("sources");
     }
     if (addStatus === "failed") return;
@@ -805,13 +782,13 @@ export function App() {
             setNativeRevision(added.updatedAt);
             setState(added.state);
             setNotice(
-              `${file.name} を保留中Sourceとして保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
+              `${file.name} を保留中取り込み元として保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
             );
             setView("sources");
             return;
           }
         } catch (error) {
-          setNotice(formatVaultError(error, "保留中Sourceの保存に失敗しました。"));
+          setNotice(formatVaultError(error, "保留中の取り込み元の保存に失敗しました。"));
         }
       }
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
@@ -827,7 +804,7 @@ export function App() {
         setUploadFeedback({
           tone: "attention",
           title: "ファイルを読めませんでした",
-          body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、Manual sourceに貼り付けてください。"
+          body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、「会話・メモから追加」に貼り付けてください。"
         });
         return;
       }
@@ -836,7 +813,7 @@ export function App() {
         setUploadFeedback({
           tone: "attention",
           title: "テキストとして読めませんでした",
-          body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないためSource化していません。"
+          body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないため取り込めませんでした。"
         });
         return;
       }
@@ -866,7 +843,7 @@ export function App() {
           body:
             error instanceof Error
               ? error.message
-              : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合はManual sourceに貼り付けてください。"
+              : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合は「会話・メモから追加」に貼り付けてください。"
         });
         return;
       }
@@ -879,7 +856,7 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} をSourceとして保存し、Memory Inboxに記憶を追加しました。${extractionDetail}`
+      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -888,7 +865,7 @@ export function App() {
         title: file.name,
         body: text
       });
-      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに記憶を追加しました。${extractionDetail}`);
+      apply(next, `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`);
       setView("sources");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
@@ -916,7 +893,7 @@ export function App() {
       setView("sources");
       return "saved";
     } catch (error) {
-      setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
+      setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
       return "failed";
     }
   }
@@ -924,7 +901,7 @@ export function App() {
   async function changeSourceLifecycle(sourceId: string, action: SourceLifecycleAction) {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return;
     }
     if (nativePath) {
@@ -938,7 +915,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSourceを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元を更新できませんでした。"));
         return;
       }
     }
@@ -953,11 +930,11 @@ export function App() {
     const sourceId = event ? passiveCaptureSourceId(event) : null;
     const source = sourceId ? state.sources.find((item) => item.id === sourceId) : null;
     if (!event || !source) {
-      setNotice("Capture履歴に紐づくSourceが見つかりませんでした。");
+      setNotice("キャプチャ履歴に紐づく取り込み元が見つかりませんでした。");
       return;
     }
     if (source.deletionState === "purged") {
-      setNotice("このCapture本文はすでに消去済みです。");
+      setNotice("このキャプチャ本文はすでに消去済みです。");
       return;
     }
     await changeSourceLifecycle(source.id, "purge_body");
@@ -968,12 +945,12 @@ export function App() {
       .filter((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "purged");
     if (sourceIds.length === 0) {
       setConfirmAllCapturePurge(false);
-      setNotice("消去できるCapture本文はありません。");
+      setNotice("消去できるキャプチャ本文はありません。");
       return;
     }
     if (!confirmAllCapturePurge) {
       setConfirmAllCapturePurge(true);
-      setNotice(`${sourceIds.length}件のCapture本文を消去する前に、画面の影響表示を確認してください。`);
+      setNotice(`${sourceIds.length}件のキャプチャ本文を消去する前に、画面の影響表示を確認してください。`);
       return;
     }
 
@@ -992,12 +969,12 @@ export function App() {
           nativeRevisionRef.current = latestRevision;
           setNativeRevision(latestRevision);
           setState(latestState);
-          setNotice(`${sourceIds.length}件のCapture本文を消去しました。`);
+          setNotice(`${sourceIds.length}件のキャプチャ本文を消去しました。`);
         }
         setConfirmAllCapturePurge(false);
         return;
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでCapture本文を消去できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreでキャプチャ本文を消去できませんでした。"));
         return;
       }
     }
@@ -1006,18 +983,18 @@ export function App() {
       (current, sourceId) => updateSourceLifecycle(current, sourceId, "purge_body"),
       state
     );
-    apply(next, `${sourceIds.length}件のCapture本文を消去しました。`);
+    apply(next, `${sourceIds.length}件のキャプチャ本文を消去しました。`);
     setConfirmAllCapturePurge(false);
   }
 
   async function editSourceMetadata(sourceId: string, input: SourceMetadataUpdate): Promise<boolean> {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return false;
     }
     if (!input.title.trim()) {
-      setNotice("Sourceタイトルを入力してください。");
+      setNotice("取り込み元のタイトルを入力してください。");
       return false;
     }
     if (nativePath) {
@@ -1031,7 +1008,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
         return false;
       }
     }
@@ -1045,15 +1022,15 @@ export function App() {
   async function editSourceBody(sourceId: string, input: SourceBodyUpdate): Promise<boolean> {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return false;
     }
     if (source.deletionState !== "active") {
-      setNotice("停止または消去されたSource本文は編集できません。先に復元してください。");
+      setNotice("停止または消去された取り込み元の原文は編集できません。先に復元してください。");
       return false;
     }
     if (!input.body.trim()) {
-      setNotice("Source本文を入力してください。");
+      setNotice("取り込み元の原文を入力してください。");
       return false;
     }
     if (nativePath) {
@@ -1071,7 +1048,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSource本文を保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元の原文を保存できませんでした。"));
         return false;
       }
     }
@@ -1102,7 +1079,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでFactを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで記憶を更新できませんでした。"));
         return;
       }
     }
@@ -1123,7 +1100,7 @@ export function App() {
       return false;
     }
     if (input.sensitivity === "secret_never_send") {
-      setNotice("Secretは記憶として保存できません。Sourceまたは記憶を削除してください。");
+      setNotice("非公開の情報は記憶として保存できません。取り込み元または記憶を削除してください。");
       return false;
     }
     if (nativePath) {
@@ -1137,7 +1114,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでFactを保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで記憶を保存できませんでした。"));
         return false;
       }
     }
@@ -1181,7 +1158,7 @@ export function App() {
       }
     }
     if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
-      setNotice("削除または消去されたSource由来の記憶は承認できません。Sourceを復元するか、新しいSourceとして追加してください。");
+      setNotice("削除または消去された取り込み元由来の記憶は承認できません。取り込み元を復元するか、新しい取り込み元として追加してください。");
       return;
     }
     const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
@@ -1192,6 +1169,27 @@ export function App() {
       return nextSelections;
     });
     apply(next, candidateApprovalNotice(supersedeFactIds.length, invalidatedPackCount));
+  }
+
+  async function approveBatch(candidates: MemoryCandidate[]) {
+    // Route each candidate through the existing per-item approve path, one at a time.
+    // This preserves per-candidate classification, audit, supersession, and the
+    // secret_never_send hard-reject gate in approveCandidate / approveNativeCandidate.
+    let approved = 0;
+    let skipped = 0;
+    for (const candidate of candidates) {
+      try {
+        await approve(candidate);
+        approved++;
+      } catch {
+        skipped++;
+      }
+    }
+    if (skipped > 0) {
+      setNotice(`${approved}件の記憶を承認しました。${skipped}件は承認できませんでした。`);
+    } else if (approved > 0) {
+      setNotice(`${approved}件の記憶を承認しました。`);
+    }
   }
 
   async function reviewCandidateStatus(
@@ -1230,7 +1228,7 @@ export function App() {
       try {
         const built = await createNativeContextPackRequest({
           clientId: requestClientId,
-          clientName: client?.clientName ?? "Unknown AI",
+          clientName: client?.clientName ?? "不明なAI",
           taskText: question,
           purpose: "普段使うAIへの回答文脈",
           approvalMode: "explicit_sensitive"
@@ -1239,27 +1237,29 @@ export function App() {
           nativeRevisionRef.current = built.updatedAt;
           setNativeRevision(built.updatedAt);
           setState(built.state);
-          setNotice("Vault CoreでContext Requestを受け取り、短命のAIに渡す内容（記憶）を生成しました。");
+          setNotice("Vault CoreでAI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
+          setQuestion("");
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを生成できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を生成できませんでした。"));
         return;
       }
     }
     const requested = createContextPackRequest(state, {
       clientId: requestClientId,
-      clientName: client?.clientName ?? "Unknown AI",
+      clientName: client?.clientName ?? "不明なAI",
       taskText: question,
       purpose: "普段使うAIへの回答文脈",
       approvalMode: "explicit_sensitive"
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
-    apply(built.state, "Context Requestを受け取り、短命のAIに渡す内容（記憶）を生成しました。");
+    apply(built.state, "AI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
     setActiveRequestId(requested.request.id);
     setActivePackId(built.pack?.id ?? null);
+    setQuestion("");
   }
 
   function generateAnswer(pack: ContextPack) {
@@ -1296,7 +1296,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を更新できませんでした。"));
         return;
       }
     }
@@ -1328,7 +1328,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
         return;
       }
     }
@@ -1373,7 +1373,7 @@ export function App() {
             }
           }
         } catch (error) {
-          setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
+          setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
           return;
         }
       } else {
@@ -1427,7 +1427,7 @@ export function App() {
         payloadText,
         createdAt: new Date().toISOString()
       });
-      setNotice("Clipboardに書き込めませんでした。下の手動コピー欄から選択してコピーしてください。");
+      setNotice("クリップボードに書き込めませんでした。下の手動コピー欄から選択してコピーしてください。");
     }
   }
 
@@ -1445,7 +1445,7 @@ export function App() {
       })
     );
     setManualCopyPayload(null);
-    setNotice("手動コピー済みとしてAuditに記録しました。");
+    setNotice("手動コピー済みとして監査ログに記録しました。");
   }
 
   async function denyActiveRequest() {
@@ -1459,15 +1459,15 @@ export function App() {
           setState(updated.state);
           setActivePackId(updated.packId);
           setActiveRequestId(updated.requestId ?? activeRequestId);
-          setNotice("このContext Requestを拒否しました。");
+          setNotice("このAI要求を拒否しました。");
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Requestを拒否できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAI要求を拒否できませんでした。"));
         return;
       }
     }
-    apply(denyContextPackRequest(state, activeRequestId), "このContext Requestを拒否しました。");
+    apply(denyContextPackRequest(state, activeRequestId), "このAI要求を拒否しました。");
   }
 
   function updatePolicy(
@@ -1510,11 +1510,11 @@ export function App() {
           nativeRevisionRef.current = updated.updatedAt;
           setNativeRevision(updated.updatedAt);
           setState(updated.state);
-          setNotice(enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+          setNotice(enabled ? "自動配信を有効にしました。" : "自動配信を無効にしました。");
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Standing delivery設定を保存できませんでした。"));
+        setNotice(formatVaultError(error, "自動配信設定を保存できませんでした。"));
         return;
       }
     }
@@ -1522,7 +1522,7 @@ export function App() {
     // approvePackForAi (called synchronously right after setStandingDelivery)
     // also applies a state update from the same stale closure on this path.
     setState((prev) => updateAccessPolicy(prev, clientId, { standingDeliveryEnabled: enabled }));
-    setNotice(enabled ? "Standing deliveryを有効にしました。" : "Standing deliveryを無効にしました。");
+    setNotice(enabled ? "自動配信を有効にしました。" : "自動配信を無効にしました。");
   }
 
   function setStandingDelivery(clientId: string, enabled: boolean) {
@@ -1535,7 +1535,7 @@ export function App() {
       setNotice(message);
       return true;
     } catch {
-      setNotice("Clipboardに書き込めませんでした。表示された内容を手動でコピーしてください。");
+      setNotice("クリップボードに書き込めませんでした。表示された内容を手動でコピーしてください。");
       return false;
     }
   }
@@ -1646,9 +1646,9 @@ export function App() {
     try {
       const status = await getLoginItemStatus();
       setLoginItemStatus(status);
-      setNotice(status ? "Login Itemの状態を更新しました。" : "Desktop appでのみLogin Itemを管理できます。");
+      setNotice(status ? "ログイン時起動の状態を更新しました。" : "デスクトップアプリでのみログイン時起動を管理できます。");
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの状態確認に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の状態確認に失敗しました。"));
     }
   }
 
@@ -1660,10 +1660,10 @@ export function App() {
       setNotice(
         status?.enabled
           ? "ログイン時にLife Context Vaultが起動するようにしました。"
-          : "Login Itemを有効にできませんでした。"
+          : "ログイン時起動を有効にできませんでした。"
       );
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの有効化に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の有効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -1675,9 +1675,9 @@ export function App() {
     try {
       const status = await uninstallLoginItem();
       setLoginItemStatus(status);
-      setNotice("Login Itemを無効にしました。");
+      setNotice("ログイン時起動を無効にしました。");
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの無効化に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の無効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -1691,7 +1691,7 @@ export function App() {
       const result = await installClaudeDesktopConfig();
       setClaudeInstallResult(result);
       if (!result) {
-        setNotice("Desktop appでのみClaude Desktop設定をインストールできます。");
+        setNotice("このアプリでのみClaude Desktop設定をインストールできます。");
       } else if (result.alreadyConfigured) {
         const base = "Claude Desktop設定はすでに最新です。";
         setNotice(result.warning ? `${base} ／ ${result.warning}` : base);
@@ -1736,8 +1736,6 @@ export function App() {
       <Rail
         view={view}
         setView={setView}
-        lang={lang}
-        setLang={setLang}
         candidateCount={activeCandidates.length}
         requestCount={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
         reviewFactCount={reviewFacts.length}
@@ -1748,22 +1746,22 @@ export function App() {
         <header className="topbar">
           {!VIEWS_WITH_OWN_HEADER.has(view) && (
             <div>
-              <p className="eyebrow">User-owned life context</p>
+              <p className="eyebrow">あなたの生活背景</p>
               <h2>{titleForView(view)}</h2>
             </div>
           )}
           <div className="topbar-actions">
             {nativePath && (
               <button className="secondary-button" onClick={refreshFromNative} type="button">
-                <RefreshCw size={16} />
-                Sync
+                <RefreshCw size={16} aria-hidden="true" />
+                同期
               </button>
             )}
             {notice && (
               <div className="notice" role="status" aria-live="polite">
                 <span>{notice}</span>
                 <button aria-label="通知を閉じる" onClick={() => setNotice("")} type="button">
-                  <X size={14} />
+                  <X size={14} aria-hidden="true" />
                 </button>
               </div>
             )}
@@ -1775,6 +1773,7 @@ export function App() {
             state={state}
             goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
+            goRequests={() => setView("requests")}
             seedDemo={seedDemo}
             onApprovePending={(packId) => {
               const pack = state.contextPacks.find((p) => p.id === packId);
@@ -1815,6 +1814,7 @@ export function App() {
               }))
             }
             approve={approve}
+            approveBatch={approveBatch}
             reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "記憶を却下しました。")}
             archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "記憶をあとでに移しました。")}
             markSensitive={(candidate) =>
@@ -1855,6 +1855,7 @@ export function App() {
               enableLoginItem={enableLoginItem}
               disableLoginItem={disableLoginItem}
               goRequests={() => setView("requests")}
+              hasActiveConnection={state.connectorSessions.some((s) => s.status === "connected")}
             />
             {state.accessPolicies.length > 0 && (
               <div className="qv-connect" style={{ paddingTop: 0 }}>
@@ -1948,7 +1949,6 @@ export function App() {
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
-            goInbox={() => setView("sources")}
             goSources={() => setView("sources")}
           />
         )}
@@ -2080,10 +2080,10 @@ function ContextRequestsView({
       </label>
       <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
       <button className="primary-button" onClick={buildPack} type="button">
-        <Sparkles size={16} />
+        <Sparkles size={16} aria-hidden="true" />
         {buttonLabel}
       </button>
-      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認とAuditを通します。</p>
+      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認と監査ログを通します。</p>
     </div>
   );
   const packPanelRef = useRef<HTMLDivElement | null>(null);
@@ -2101,13 +2101,13 @@ function ContextRequestsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">AI confirmation inbox</p>
+            <p className="eyebrow">AIへの送信確認</p>
             <h3>AIへ返す前の確認待ち</h3>
           </div>
-          <Send size={18} />
+          <Send size={18} aria-hidden="true" />
         </div>
         <div className={actionableRequests.length > 0 ? "request-inbox-summary attention" : "request-inbox-summary"}>
-          {actionableRequests.length > 0 ? <ShieldAlert size={18} /> : <ShieldCheck size={18} />}
+          {actionableRequests.length > 0 ? <ShieldAlert size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
           <div>
             <strong>{requestQueueTitle}</strong>
             <span>{requestQueueBody}</span>
@@ -2135,22 +2135,27 @@ function ContextRequestsView({
           {requests.length === 0 && (
             <EmptyState
               title="まだAI要求はありません"
-              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
+              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこの取り込みで確認できます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
             />
+          )}
+          {requests.length === 0 && (
+            <p className="qv-inbox-hint">
+              Claude Desktopを再起動し、何か質問してみてください。要求はここに表示されます。MCPを使わない場合は下で「AIに渡す内容（記憶）」を作成できます。
+            </p>
           )}
         </div>
         {showCopyFallbackStarter ? (
           <div className="copy-fallback-starter">
             <div className="panel-heading compact-heading">
               <div>
-                <p className="eyebrow">コピーFallback</p>
+                <p className="eyebrow">コピー送信</p>
                 <h3>MCPなしでAIに渡す内容（記憶）を作る</h3>
               </div>
-              <Clipboard size={18} />
+              <Clipboard size={18} aria-hidden="true" />
             </div>
             <div className="trust-note">
-              <ShieldCheck size={16} />
-              <span>ここで作ったPackも、確認画面で許可またはコピーするまでAIには渡りません。</span>
+              <ShieldCheck size={16} aria-hidden="true" />
+              <span>ここで作った記憶も、確認画面で許可またはコピーするまでAIには渡りません。</span>
             </div>
             {requestComposer("確認用にAIに渡す内容（記憶）を作成")}
           </div>
@@ -2165,7 +2170,7 @@ function ContextRequestsView({
       <div className="panel context-pack-panel" ref={packPanelRef}>
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">AI-bound preview</p>
+            <p className="eyebrow">AI送信プレビュー</p>
             <h3>この内容だけAIへ渡す</h3>
           </div>
           {currentRequest && <Badge>{currentRequest.clientName}</Badge>}
@@ -2173,7 +2178,7 @@ function ContextRequestsView({
         {currentPack && (
           <>
             <div className="pack-summary top-pack-summary">
-              <Badge>{currentPack.riskLevel} risk</Badge>
+              <Badge>{currentPack.riskLevel} リスク</Badge>
               <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
               <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
             </div>
@@ -2184,7 +2189,7 @@ function ContextRequestsView({
                 onClick={() => approvePackForAi(currentPack)}
                 type="button"
               >
-                <CheckCircle2 size={16} />
+                <CheckCircle2 size={16} aria-hidden="true" />
                 {currentDeliveryState?.requiresApproval ? "この内容だけAIへ許可" : "この内容だけAIへ返す"}
               </button>
               <button
@@ -2193,7 +2198,7 @@ function ContextRequestsView({
                 onClick={() => copyPackForAi(currentPack)}
                 type="button"
               >
-                <Clipboard size={16} />
+                <Clipboard size={16} aria-hidden="true" />
                 {aiReady ? "ChatGPT/Claude用にコピー" : "確認してコピー"}
               </button>
               <button
@@ -2202,11 +2207,11 @@ function ContextRequestsView({
                 onClick={() => generateAnswer(currentPack)}
                 type="button"
               >
-                <Check size={16} />
+                <Check size={16} aria-hidden="true" />
                 ローカル回答を下書き
               </button>
               <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 AIへ渡さず拒否
               </button>
             </div>
@@ -2225,7 +2230,7 @@ function ContextRequestsView({
         ) : (
           <div className="context-pack">
             <div className={aiReady ? "pack-delivery ready" : "pack-delivery attention"}>
-              {aiReady ? <CheckCircle2 size={18} /> : <Clock size={18} />}
+              {aiReady ? <CheckCircle2 size={18} aria-hidden="true" /> : <Clock size={18} aria-hidden="true" />}
               <div>
                 <strong>{packDeliveryTitle(currentDeliveryState)}</strong>
                 <span>
@@ -2234,12 +2239,12 @@ function ContextRequestsView({
               </div>
             </div>
             <div className="pack-scope-summary">
-              <ShieldCheck size={16} />
+              <ShieldCheck size={16} aria-hidden="true" />
               <span>
-                {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
+                {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠の抜粋だけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
-            <div className="pack-boundary-receipt-grid" aria-label="Context Pack delivery boundary">
+            <div className="pack-boundary-receipt-grid" aria-label="AIに渡した内容（記憶）配信境界">
               {boundaryReceiptItems.map((item) => (
                 <div className={`pack-boundary-receipt ${item.tone}`} key={item.label}>
                   <span>{item.label}</span>
@@ -2251,13 +2256,13 @@ function ContextRequestsView({
             {activeManualCopyPayload && (
               <div className="manual-copy-panel">
                 <div className="trust-note">
-                  <Clipboard size={16} />
+                  <Clipboard size={16} aria-hidden="true" />
                   <span>
-                    Clipboardに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
+                    クリップボードに書き込めない環境です。下の送信内容を選択してAIへ貼り付け、完了後に監査ログへ記録します。
                   </span>
                 </div>
                 <label className="field manual-copy-field">
-                  <span>AIへ貼り付けるContext Pack payload</span>
+                  <span>AIへ貼り付けるペイロード</span>
                   <textarea
                     readOnly
                     value={activeManualCopyPayload.payloadText}
@@ -2270,11 +2275,11 @@ function ContextRequestsView({
                     onClick={() => recordManualCopyDelivery(activeManualCopyPayload.packId)}
                     type="button"
                   >
-                    <CheckCircle2 size={16} />
-                    手動コピー済みとしてAudit記録
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                    手動コピー済みとして監査ログ記録
                   </button>
                   <button className="secondary-button" onClick={clearManualCopyPayload} type="button">
-                    <X size={16} />
+                    <X size={16} aria-hidden="true" />
                     閉じる
                   </button>
                 </div>
@@ -2282,7 +2287,7 @@ function ContextRequestsView({
             )}
             {currentPack.warnings.map((warning) => (
               <div className="warning-line" key={warning.message}>
-                <ShieldAlert size={16} />
+                <ShieldAlert size={16} aria-hidden="true" />
                 {warning.message}
               </div>
             ))}
@@ -2302,7 +2307,7 @@ function ContextRequestsView({
                       onClick={() => changePackItemVisibility(currentPack, item.factId, false)}
                       type="button"
                     >
-                      <EyeOff size={16} />
+                      <EyeOff size={16} aria-hidden="true" />
                       このAIには渡さない
                     </button>
                   </div>
@@ -2311,7 +2316,7 @@ function ContextRequestsView({
               {currentPack.items.length === 0 && <p className="muted">使える承認済みの記憶がまだありません。</p>}
             </div>
             <div className="source-snippet-list">
-              <strong>AIへ渡る根拠snippet</strong>
+              <strong>AIへ渡る根拠の抜粋</strong>
               {currentPack.sourceSnippets && currentPack.sourceSnippets.length > 0 ? (
                 currentPack.sourceSnippets.slice(0, 5).map((snippet) => (
                   <div className="source-snippet" key={snippet.id}>
@@ -2326,10 +2331,10 @@ function ContextRequestsView({
               ) : (
                 <div className="source-snippet empty">
                   <div>
-                    <span>今回はSource snippetを送信しません</span>
-                    <Badge>0 snippets</Badge>
+                    <span>今回は取り込み元のスニペットを送信しません</span>
+                    <Badge>0 件の抜粋</Badge>
                   </div>
-                  <p>Raw Source本文や高感度SourceタイトルはAIへ渡しません。上の記憶の本文と理由だけがPack本文に含まれます。</p>
+                  <p>取り込み元の原文や高感度タイトルはAIへ渡しません。上の記憶の本文と理由だけが含まれます。</p>
                   <small>出典確認が必要な場合は、Sourcesで元データとポリシーを確認できます。</small>
                 </div>
               )}
@@ -2356,7 +2361,7 @@ function ContextRequestsView({
                       onClick={() => changePackItemVisibility(currentPack, exclusion.referencedId, true)}
                       type="button"
                     >
-                      <RefreshCw size={16} />
+                      <RefreshCw size={16} aria-hidden="true" />
                       戻す
                     </button>
                   </div>
@@ -2388,7 +2393,6 @@ function SearchView({
   searchMode,
   searchError,
   nativePath,
-  goInbox,
   goSources
 }: {
   query: string;
@@ -2407,7 +2411,6 @@ function SearchView({
   searchMode: SearchMode;
   searchError: string | null;
   nativePath: string | null;
-  goInbox: () => void;
   goSources: () => void;
 }) {
   const modeCopy = searchModeCopy(searchMode, Boolean(nativePath));
@@ -2427,7 +2430,7 @@ function SearchView({
       <div className="memory-inventory-panel">
         <div className="panel-heading compact-heading">
           <div>
-            <p className="eyebrow">Memory inventory</p>
+            <p className="eyebrow">記憶の一覧</p>
             <h3>AIが使える保存済みの記憶</h3>
           </div>
           <Badge>{inventory.active} AIに渡す記憶</Badge>
@@ -2439,7 +2442,7 @@ function SearchView({
           <Metric label="履歴/期限切れ" value={inventory.history} />
         </div>
         <div className={inventory.needsReview > 0 ? "trust-note attention-note" : "trust-note"}>
-          <ShieldCheck size={16} />
+          <ShieldCheck size={16} aria-hidden="true" />
           <span>
             AIに渡す記憶になるのはActiveな記憶だけです。再確認待ち、非表示、削除済み、期限切れ、置き換え済みの記憶はAIに渡しません。
           </span>
@@ -2447,12 +2450,12 @@ function SearchView({
         {!hasAnyFact && (
           <div className="action-row inventory-actions">
             <button className="primary-button" onClick={goSources} type="button">
-              <FileText size={16} />
-              Sourceを追加
+              <FileText size={16} aria-hidden="true" />
+              取り込み元を追加
             </button>
-            <button className="secondary-button" onClick={goInbox} type="button">
-              <Inbox size={16} />
-              Inboxを確認
+            <button className="secondary-button" onClick={goSources} type="button">
+              <Inbox size={16} aria-hidden="true" />
+              取り込みを確認
             </button>
           </div>
         )}
@@ -2461,14 +2464,14 @@ function SearchView({
         <div className="memory-review-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Needs review</p>
+              <p className="eyebrow">確認が必要</p>
               <h3>AIに使う前に確認が必要な記憶</h3>
             </div>
             <Badge>{reviewFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <ShieldAlert size={16} />
-            <span>Sourceが停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
+            <ShieldAlert size={16} aria-hidden="true" />
+            <span>取り込み元が停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
           </div>
           <div className="domain-list">
             {reviewFacts.map((fact) => (
@@ -2487,7 +2490,7 @@ function SearchView({
       <div className="search-controls">
         <Input label="検索" value={query} onChange={setQuery} placeholder="背景、期限、契約、制約など" />
         <label>
-          <span>Domain</span>
+          <span>ドメイン</span>
           <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value as LifeContextDomain | "all")}>
             {domainOptions.map((domain) => (
               <option value={domain} key={domain}>
@@ -2497,7 +2500,7 @@ function SearchView({
           </select>
         </label>
         <label>
-          <span>Sensitivity</span>
+          <span>感度</span>
           <select value={sensitivityFilter} onChange={(event) => setSensitivityFilter(event.target.value as SensitivityTier | "all")}>
             {sensitivityOptions.map((sensitivity) => (
               <option value={sensitivity} key={sensitivity}>
@@ -2532,13 +2535,13 @@ function SearchView({
         <div className="memory-review-panel excluded-facts-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Outside AI context</p>
+              <p className="eyebrow">AIに渡さない</p>
               <h3>AIに渡す記憶から外れている記憶</h3>
             </div>
             <Badge>{filteredExcludedFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <EyeOff size={16} />
+            <EyeOff size={16} aria-hidden="true" />
             <span>非表示、削除済みの記憶です。AIに使う必要が戻ったものだけ、明示的にAIに渡す記憶へ戻します。</span>
           </div>
           <div className="domain-list">
@@ -2558,13 +2561,13 @@ function SearchView({
         <div className="memory-review-panel version-history-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Version history</p>
+              <p className="eyebrow">変更履歴</p>
               <h3>置き換え済みの記憶</h3>
             </div>
             <Badge>{supersededFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <RefreshCw size={16} />
+            <RefreshCw size={16} aria-hidden="true" />
             <span>ここにある記憶は履歴として残っていますが、通常の検索結果やAIに渡す記憶には入りません。</span>
           </div>
           <div className="domain-list">
@@ -2641,22 +2644,22 @@ function SettingsView({
             <p className="eyebrow">バックアップ</p>
             <h3>暗号化バックアップ</h3>
           </div>
-          <Lock size={18} />
+          <Lock size={18} aria-hidden="true" />
         </div>
         <div className="form-stack">
           <Input label="パスフレーズ" value={passphrase} onChange={setPassphrase} placeholder="12文字以上・3種類以上の文字を含める" type="password" />
           <div className="trust-note attention-note">
-            <ShieldAlert size={16} />
+            <ShieldAlert size={16} aria-hidden="true" />
             <span>バックアップにはVault内の生活コンテキスト全体が入ります。推測されにくい長いパスフレーズを使い、共有や保管場所に注意してください。</span>
           </div>
           <button className="primary-button" onClick={exportBackup} type="button">
-            <Download size={16} />
+            <Download size={16} aria-hidden="true" />
             バックアップを作成
           </button>
           <Textarea label="バックアップJSON" value={backupText} onChange={setBackupText} placeholder="復元する場合はここに貼り付け" />
           <div className="restore-actions">
             <button className="secondary-button" onClick={previewRestoreBackup} type="button">
-              <Search size={16} />
+              <Search size={16} aria-hidden="true" />
               復元プレビュー
             </button>
             <button
@@ -2665,7 +2668,7 @@ function SettingsView({
               onClick={restoreBackup}
               type="button"
             >
-              <Upload size={16} />
+              <Upload size={16} aria-hidden="true" />
               現在のVaultを置き換える
             </button>
           </div>
@@ -2674,13 +2677,13 @@ function SettingsView({
               <div className="restore-preview-grid">
                 <Metric label="元データ" value={restorePreview.counts.sources} />
                 <Metric label="保存済みの記憶" value={restorePreview.counts.facts} />
-                <Metric label="Inboxの記憶" value={restorePreview.counts.candidates} />
+                <Metric label="取り込み候補" value={restorePreview.counts.candidates} />
                 <Metric label="AIに渡した内容（記憶）" value={restorePreview.counts.packs} />
                 <Metric label="依頼" value={restorePreview.counts.requests} />
-                <Metric label="Capture" value={restorePreview.counts.captureEvents} />
+                <Metric label="キャプチャ" value={restorePreview.counts.captureEvents} />
                 <Metric label="AI接続" value={restorePreview.counts.connectorSessions} />
-                <Metric label="Policy" value={restorePreview.counts.policies} />
-                <Metric label="Audit" value={restorePreview.counts.auditEvents} />
+                <Metric label="ポリシー" value={restorePreview.counts.policies} />
+                <Metric label="監査" value={restorePreview.counts.auditEvents} />
               </div>
               <div className="restore-receipt-grid">
                 <div>
@@ -2721,12 +2724,12 @@ function SettingsView({
                 </div>
               </div>
               <div className="trust-note attention-note">
-                <ShieldAlert size={16} />
+                <ShieldAlert size={16} aria-hidden="true" />
                 <span>
                   復元すると現在のVault全体をこのバックアップで置き換えます。内容の最高感度は{restorePreview.sensitivitySummary}です。
                   {restorePreview.newestSourceAt ? ` 最新Source: ${formatDateTime(restorePreview.newestSourceAt)}。` : ""}
-                  {restorePreview.oldestAuditAt ? ` Auditは${formatDateTime(restorePreview.oldestAuditAt)}以降を含みます。` : ""}
-                  {restorePreview.expiredCaptureCount > 0 ? ` TTL切れCaptureが${restorePreview.expiredCaptureCount}件あります。` : ""}
+                  {restorePreview.oldestAuditAt ? ` 監査ログは${formatDateTime(restorePreview.oldestAuditAt)}以降を含みます。` : ""}
+                  {restorePreview.expiredCaptureCount > 0 ? ` TTL切れキャプチャが${restorePreview.expiredCaptureCount}件あります。` : ""}
                 </span>
               </div>
               <Input
@@ -2751,8 +2754,8 @@ function SettingsView({
         </div>
         <div className="form-stack">
           <div className="trust-note">
-            <ShieldCheck size={16} />
-            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
+            <ShieldCheck size={16} aria-hidden="true" />
+            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文は取り込み元と確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {legacyOfficeProviderCandidates.length > 0 ? (
             <div className="table-list">
@@ -2774,7 +2777,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Check size={16} />
+                    <Check size={16} aria-hidden="true" />
                     このコマンドを使う
                   </button>
                 </div>
@@ -2782,7 +2785,7 @@ function SettingsView({
             </div>
           ) : (
             <div className="trust-note">
-              <ShieldAlert size={16} />
+              <ShieldAlert size={16} aria-hidden="true" />
               <span>LibreOfficeはまだ見つかっていません。インストール後にこの画面を開き直すか、下の変換コマンドへローカル変換コマンドを直接入力してください。</span>
             </div>
           )}
@@ -2800,7 +2803,7 @@ function SettingsView({
                     onClick={() => copyText(guide.installCommand, `${guide.label}のLibreOfficeインストールコマンドをコピーしました。`)}
                     type="button"
                   >
-                    <Clipboard size={16} />
+                    <Clipboard size={16} aria-hidden="true" />
                     コピー
                   </button>
                   <button
@@ -2814,7 +2817,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Settings size={16} />
+                    <Settings size={16} aria-hidden="true" />
                     パスを反映
                   </button>
                 </div>
@@ -2851,7 +2854,7 @@ function SettingsView({
               }
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               LibreOffice引数
             </button>
             <button
@@ -2865,7 +2868,7 @@ function SettingsView({
               }
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               設定を消す
             </button>
           </div>
@@ -2877,12 +2880,12 @@ function SettingsView({
             <p className="eyebrow">保存先</p>
             <h3>Vault保存先</h3>
           </div>
-          <Lock size={18} />
+          <Lock size={18} aria-hidden="true" />
         </div>
         <div className="table-list">
           <div className="table-row">
             <div>
-              <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "Browser localStorage"}</strong>
+              <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "ブラウザ保存"}</strong>
               <span>
                 {nativePath
                   ? `${nativePath} / Vault鍵はOSの安全な資格情報ストアで管理 / 最終同期: ${nativeRevision ? new Date(nativeRevision).toLocaleString() : "未保存"}`
@@ -2903,7 +2906,7 @@ function SettingsView({
         </div>
         <div className="form-stack">
           <div className="trust-note">
-            <ShieldCheck size={16} />
+            <ShieldCheck size={16} aria-hidden="true" />
             <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {ocrProviderCandidates.length > 0 ? (
@@ -2926,7 +2929,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Check size={16} />
+                    <Check size={16} aria-hidden="true" />
                     このコマンドを使う
                   </button>
                 </div>
@@ -2934,7 +2937,7 @@ function SettingsView({
             </div>
           ) : (
             <div className="trust-note">
-              <ShieldAlert size={16} />
+              <ShieldAlert size={16} aria-hidden="true" />
               <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のOCRコマンドへローカルOCRコマンドを直接入力してください。</span>
             </div>
           )}
@@ -2952,7 +2955,7 @@ function SettingsView({
                     onClick={() => copyText(guide.installCommand, `${guide.label}のOCRインストールコマンドをコピーしました。`)}
                     type="button"
                   >
-                    <Clipboard size={16} />
+                    <Clipboard size={16} aria-hidden="true" />
                     コピー
                   </button>
                   <button
@@ -2966,7 +2969,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Settings size={16} />
+                    <Settings size={16} aria-hidden="true" />
                     パスを反映
                   </button>
                 </div>
@@ -2997,7 +3000,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout" })}
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               基本引数
             </button>
             <button
@@ -3005,7 +3008,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout -l jpn+eng" })}
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               日本語+英語
             </button>
             <button
@@ -3013,7 +3016,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrCommand: "", ocrArgs: "{input}", ocrTimeoutSeconds: 30 })}
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               設定を消す
             </button>
           </div>
@@ -3044,18 +3047,19 @@ function SettingsView({
           >
             {runtimePreferences.deliveryNotificationsEnabled ? (
               <>
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 通知を無効にする
               </>
             ) : (
               <>
-                <Bell size={16} />
+                <Bell size={16} aria-hidden="true" />
                 通知を有効にする
               </>
             )}
           </button>
         </div>
       </div>
+      {import.meta.env.DEV && (
       <div className="panel">
         <div className="panel-heading">
           <div>
@@ -3065,15 +3069,15 @@ function SettingsView({
         </div>
         <div className="action-column">
           <button className="secondary-button" onClick={seedDemo} type="button">
-            <Sparkles size={16} />
+            <Sparkles size={16} aria-hidden="true" />
             デモデータ投入
           </button>
           <div className="danger-zone">
             <div className="trust-note attention-note">
-              <ShieldAlert size={16} />
-              <span>Vaultをクリアすると、Sources、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
+              <ShieldAlert size={16} aria-hidden="true" />
+              <span>Vaultをクリアすると、取り込み元、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
-            <div className="clear-impact-list" aria-label="Vault clear impact">
+            <div className="clear-impact-list" aria-label="消去の影響">
               {clearImpactSections.map((section) => (
                 <div className={`restore-receipt ${section.tone}`} key={section.label}>
                   <strong>{section.label}</strong>
@@ -3094,12 +3098,13 @@ function SettingsView({
               onClick={clearVault}
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               Vaultをクリア
             </button>
           </div>
         </div>
       </div>
+      )}
     </section>
   );
 }
@@ -3124,7 +3129,7 @@ function auditReceiptTitle(event: AuditEvent): string {
     return `${client}へ${channel}で渡しました`;
   }
   if (event.eventType === "context_pack_confirmed") return `${client}が取得できる状態にしました`;
-  if (event.eventType === "context_pack_denied") return `${client}へのContext Requestを拒否しました`;
+  if (event.eventType === "context_pack_denied") return `${client}へのAI要求を拒否しました`;
   return `${client}へAIに渡す内容（記憶）を送信不可にしました`;
 }
 
@@ -3143,14 +3148,14 @@ export function auditReceiptBody(event: AuditEvent): string {
     typeof excludedCount === "number" ? `${excludedCount}件を除外` : null,
     ttl ? `有効期限は約${Math.max(1, Math.round(ttl / 60))}分` : null
   ].filter(Boolean);
-  const summary = pieces.length > 0 ? pieces.join("、") : "AIに渡した内容（記憶）の本文はAuditに保存していません";
-  return `${summary}。Raw Source本文と確認待ちの記憶は含めていません。`;
+  const summary = pieces.length > 0 ? pieces.join("、") : "AIに渡した内容（記憶）の本文は監査ログに保存していません";
+  return `${summary}。取り込み元の原文と確認待ちの記憶は含めていません。`;
 }
 
 function deliveryChannelLabel(channel: string): string {
   if (channel === "clipboard_copy") return "コピー";
 
-  return channel || "Context Pack";
+  return channel || "AIに渡した内容（記憶）";
 }
 
 function isKnownLifeDomain(value: string): value is LifeContextDomain {
@@ -3159,25 +3164,25 @@ function isKnownLifeDomain(value: string): value is LifeContextDomain {
 
 function auditEventLabel(event: AuditEvent): string {
   const labels: Partial<Record<AuditEvent["eventType"], string>> = {
-    context_pack_requested: "Context Pack要求",
-    context_pack_generated: "Context Pack生成",
-    context_pack_updated: "Context Pack更新",
-    context_pack_confirmed: "Context Pack承認",
-    context_pack_delivered: "Context Pack配達",
-    context_pack_denied: "Context Request拒否",
+    context_pack_requested: "AI要求",
+    context_pack_generated: "送信内容生成",
+    context_pack_updated: "送信内容更新",
+    context_pack_confirmed: "送信内容承認",
+    context_pack_delivered: "送信内容配信",
+    context_pack_denied: "AI要求拒否",
     candidate_generated: "候補生成",
     candidate_reviewed: "候補レビュー",
     fact_created: "記憶作成",
     fact_updated: "記憶更新",
-    source_added: "Source追加",
-    source_updated: "Source更新",
-    source_deleted: "Source停止",
-    source_restored: "Source復元",
-    source_purged: "Source本文消去",
-    passive_capture_recorded: "Passive Capture記録",
-    passive_capture_purged: "Passive Capture消去",
-    policy_updated: "Policy更新",
-    memory_proposed: "Memory提案"
+    source_added: "ソース追加",
+    source_updated: "ソース更新",
+    source_deleted: "ソース停止",
+    source_restored: "ソース復元",
+    source_purged: "ソース本文消去",
+    passive_capture_recorded: "キャプチャ記録",
+    passive_capture_purged: "キャプチャ消去",
+    policy_updated: "ポリシー更新",
+    memory_proposed: "記憶提案"
   };
   return labels[event.eventType] ?? event.eventType;
 }
@@ -3191,7 +3196,7 @@ function auditCompactMetadata(event: AuditEvent): string {
     client ? `AI: ${client}` : null,
     status ? `状態: ${status}` : null,
     typeof itemCount === "number" ? `記憶: ${itemCount}` : null,
-    typeof invalidated === "number" ? `失効Pack: ${invalidated}` : null
+    typeof invalidated === "number" ? `失効した記憶: ${invalidated}` : null
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "本文なしの監査メタデータ";
 }
@@ -3239,7 +3244,7 @@ function FactRow({
             />
             <div className="fact-edit-grid">
               <label className="field">
-                <span>Domain</span>
+                <span>ドメイン</span>
                 <select
                   value={draft.domain}
                   onChange={(event) => setDraft({ ...draft, domain: event.target.value as LifeContextDomain })}
@@ -3252,7 +3257,7 @@ function FactRow({
                 </select>
               </label>
               <label className="field">
-                <span>Sensitivity</span>
+                <span>感度</span>
                 <select
                   value={draft.sensitivity}
                   onChange={(event) => setDraft({ ...draft, sensitivity: event.target.value as SensitivityTier })}
@@ -3302,11 +3307,11 @@ function FactRow({
                 }}
                 type="button"
               >
-                <Check size={16} />
+                <Check size={16} aria-hidden="true" />
                 保存
               </button>
               <button className="secondary-button" onClick={() => setDraft(null)} type="button">
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 取消
               </button>
             </>
@@ -3325,7 +3330,7 @@ function FactRow({
               }
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               編集
             </button>
           )
@@ -3333,15 +3338,15 @@ function FactRow({
         {variant === "review" && changeFactLifecycle && (
           <>
             <button className="primary-button" onClick={() => changeFactLifecycle(fact.id, "keep_active")} type="button">
-              <CheckCircle2 size={16} />
+              <CheckCircle2 size={16} aria-hidden="true" />
               保持
             </button>
             <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
-              <EyeOff size={16} />
+              <EyeOff size={16} aria-hidden="true" />
               非表示
             </button>
             <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
-              <Trash2 size={16} />
+              <Trash2 size={16} aria-hidden="true" />
               削除
             </button>
           </>
@@ -3349,18 +3354,18 @@ function FactRow({
         {variant === "active" && changeFactLifecycle && (
           <>
             <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
-              <EyeOff size={16} />
+              <EyeOff size={16} aria-hidden="true" />
               非表示
             </button>
             <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
-              <Trash2 size={16} />
+              <Trash2 size={16} aria-hidden="true" />
               削除
             </button>
           </>
         )}
         {variant === "excluded" && changeFactLifecycle && (
           <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "restore")} type="button">
-            <RefreshCw size={16} />
+            <RefreshCw size={16} aria-hidden="true" />
             AIに渡す記憶へ戻す
           </button>
         )}
@@ -3376,7 +3381,7 @@ export function factSourceNames(
   if (fact.sourceIds.length === 0) return "出典なし";
   const visibleNames = fact.sourceIds
     .slice(0, 2)
-    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Source未検出");
+    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "取り込み元が見つかりません");
   const hiddenCount = fact.sourceIds.length - visibleNames.length;
   return hiddenCount > 0 ? [...visibleNames, `+${hiddenCount}`].join(", ") : visibleNames.join(", ");
 }
@@ -3452,7 +3457,7 @@ export function homeAiBoundarySections({
       detail:
         activeFactCount > 0
           ? "記憶だけがAIに渡す記憶になります。"
-          : "Sourceや記憶だけではAIに渡る文脈になりません。",
+          : "取り込み元や記憶だけではAIに渡る文脈になりません。",
       tone: activeFactCount > 0 ? "ready" : "attention"
     },
     {
@@ -3460,7 +3465,7 @@ export function homeAiBoundarySections({
       value: `${reviewCandidateCount} candidates`,
       detail:
         reviewCandidateCount > 0
-          ? "Inboxで保存するまで、記憶はAIの確定文脈に使いません。"
+          ? "取り込みで保存するまで、記憶はAIの確定文脈に使いません。"
           : "確認待ちの記憶はありません。",
       tone: reviewCandidateCount > 0 ? "attention" : "ready"
     },
@@ -3469,19 +3474,19 @@ export function homeAiBoundarySections({
       value: `${actionableRequestCount} requests`,
       detail:
         actionableRequestCount > 0
-          ? "承認、返却、またはコピー操作まではPack本文を外部AIへ返しません。"
-          : "いま確認待ちのContext Requestはありません。",
+          ? "承認、返却、またはコピー操作までは記憶の内容を外部AIへ返しません。"
+          : "いま確認待ちのAI要求はありません。",
       tone: actionableRequestCount > 0 ? "attention" : "ready"
     },
     {
-      label: "AIへ返せるPack",
+      label: "AIへ返せる記憶",
       value: `${deliverablePackCount} ready`,
       detail:
         expiredPackCount > 0
-          ? `${expiredPackCount}件の期限切れPackはAIへ返せません。`
+          ? `${expiredPackCount}件の期限切れの記憶はAIへ返せません。`
           : deliverablePackCount > 0
-            ? "期限内の確認済みPackだけが取得可能です。"
-            : "取得可能なPackはありません。必要な時に作成します。",
+            ? "期限内の確認済みの記憶だけが取得可能です。"
+            : "取得可能な記憶はありません。必要な時に作成します。",
       tone: deliverablePackCount > 0 ? "attention" : "ready"
     }
   ];
@@ -3512,20 +3517,20 @@ export function contextPackBoundaryReceipt(
   const deliveryState = contextPackDeliveryState(pack, request, nowMs);
   const waitingDetail =
     pack.confirmationStatus === "not_required"
-      ? "返却またはコピーするまでPack本文は外部AIへ返しません。"
-      : "承認するまでPack本文は外部AIへ返しません。";
+      ? "返却またはコピーするまで記憶の内容は外部AIへ返しません。"
+      : "承認するまで記憶の内容は外部AIへ返しません。";
   const excludedReasons = Array.from(new Set(pack.excludedItems.map((item) => exclusionReasonLabel(item.reason))));
   const exclusionDetail =
     excludedReasons.length > 0
       ? `${excludedReasons.slice(0, 3).join("、")}${excludedReasons.length > 3 ? "など" : ""}で除外しています。`
-      : "Raw Source本文、確認待ちの記憶、削除済み/期限切れの記憶は送信対象にしていません。";
+      : "取り込み元の原文、確認待ちの記憶、削除済み/期限切れの記憶は送信対象にしていません。";
 
   return [
     {
       label: "AIに渡る",
       tone: pack.items.length > 0 || snippetCount > 0 ? "ready" : "attention",
-      value: `${pack.items.length} 件の記憶 / ${snippetCount} snippets`,
-      detail: `${clientName}へ渡るのは承認済みの記憶と最小snippetだけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
+      value: `${pack.items.length} 件の記憶 / ${snippetCount} 件の抜粋`,
+      detail: `${clientName}へ渡るのは承認済みの記憶と最小の抜粋だけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
     },
     {
       label: "AIに渡らない",
@@ -3536,17 +3541,17 @@ export function contextPackBoundaryReceipt(
     {
       label: "有効期限",
       tone: minutesLeft === null || minutesLeft > 0 ? "ready" : "attention",
-      value: minutesLeft === null ? "短命Pack" : minutesLeft > 0 ? `約${minutesLeft}分` : "期限切れ",
-      detail: "期限切れ後は外部AIが同じPack本文を再取得できません。"
+      value: minutesLeft === null ? "短命の記憶" : minutesLeft > 0 ? `約${minutesLeft}分` : "期限切れ",
+      detail: "期限切れ後は外部AIが同じ記憶の内容を再取得できません。"
     },
     {
       label: "確認状態",
       tone: deliveryState.canDeliver ? "ready" : "attention",
       value: deliveryState.expired ? "期限切れ" : packConfirmationLabel(pack.confirmationStatus),
       detail: deliveryState.expired
-        ? "期限切れのため、外部AIへPack本文を返しません。"
+        ? "期限切れのため、外部AIへ記憶の内容を返しません。"
         : deliveryState.canDeliver
-          ? "承認済みのため、外部AIはこのPack境界内だけを取得できます。"
+          ? "承認済みのため、外部AIはこの記憶の範囲内だけを取得できます。"
           : waitingDetail
     }
   ];
@@ -3662,15 +3667,15 @@ function packDeliveryTitle(state: ContextPackDeliveryState | null): string {
 
 function packDeliveryBody(state: ContextPackDeliveryState | null): string {
   if (state?.expired) {
-    return "この短命のAIに渡す内容（記憶）は期限切れです。再度AIに渡す内容（記憶）を作成すると、現在のPolicyで確認できます。";
+    return "この短命のAIに渡す内容（記憶）は期限切れです。再度AIに渡す内容（記憶）を作成すると、現在のポリシーで確認できます。";
   }
   if (state?.canDeliver) {
     return "外部AIはget_request_statusで、このAIに渡す内容（記憶）だけを取得できます。";
   }
   if (state?.awaitingReturn) {
-    return "確認不要ですが、返却またはコピーするまで外部AIにはPack本文を返しません。";
+    return "確認不要ですが、返却またはコピーするまで外部AIには記憶の内容を返しません。";
   }
-  return "承認するまで、外部AIにはPack本文を返しません。";
+  return "承認するまで、外部AIには記憶の内容を返しません。";
 }
 
 function requestStatusLabel(status: ContextPackRequest["status"]): string {
@@ -3737,12 +3742,12 @@ function sourceLifecycleNotice(
   invalidatedPackCount: number
 ): string {
   if (action === "restore") {
-    return `Sourceを復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
+    return `取り込み元を復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
   }
   if (action === "purge_body") {
-    return `Source本文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `取り込み元の原文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
-  return `Sourceを使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 type RestoreRecordCounts = RestorePreview["counts"];
@@ -3816,23 +3821,23 @@ function restoreReceiptSections(input: {
 }): RestorePreview["receiptSections"] {
   return [
     {
-      label: "Source本文",
+      label: "取り込み元の原文",
       value: `${input.counts.sources}件 / ${formatFileSize(input.sourceBodyBytes)}`,
       detail:
         input.promotedSourceCount > 0
-          ? `${input.promotedSourceCount}件は長期保存Sourceです。復元しても自動でAIへ送信されません。`
-          : "保存されたSource本文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
+          ? `${input.promotedSourceCount}件は長期保存取り込み元です。復元しても自動でAIへ送信されません。`
+          : "保存された取り込み元の原文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
       tone: input.counts.sources > 0 ? "attention" : "ready"
     },
     {
       label: "承認済みの記憶",
       value: `${input.counts.facts}件`,
-      detail: "ユーザ承認済みの記憶として戻ります。確認待ちの記憶はInboxに残り、承認済みとしては使われません。",
+      detail: "ユーザ承認済みの記憶として戻ります。確認待ちの記憶は取り込みに残り、承認済みとしては使われません。",
       tone: input.counts.facts > 0 ? "ready" : "attention"
     },
     {
-      label: "AI接続とPolicy",
-      value: `${input.activeConnectorCount} active / ${input.counts.policies} policies`,
+      label: "AI接続とポリシー",
+      value: `${input.activeConnectorCount}件のアクティブ接続 / ${input.counts.policies}件のポリシー`,
       detail:
         input.pairedConnectorCount > 0
           ? `${input.pairedConnectorCount}件のペアリング済み接続メタデータを含みます。復元後に接続状態を確認してください。`
@@ -3840,20 +3845,20 @@ function restoreReceiptSections(input: {
       tone: input.pairedConnectorCount > 0 ? "attention" : "ready"
     },
     {
-      label: "Capture履歴",
+      label: "キャプチャ履歴",
       value: `${input.counts.captureEvents}件`,
       detail:
         input.expiredCaptureCount > 0
-          ? `TTL切れCaptureが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
-          : "Passive Captureイベントを含みます。承認前の記憶はAI回答に使いません。",
+          ? `TTL切れキャプチャが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
+          : "パッシブキャプチャイベントを含みます。承認前の記憶はAI回答に使いません。",
       tone: input.expiredCaptureCount > 0 ? "attention" : "ready"
     },
     {
-      label: "Auditレシート",
+      label: "監査レシート",
       value: `${input.counts.auditEvents}件`,
       detail:
         input.highestSensitivity === "secret_never_send"
-          ? "最高感度に非公開データを含みます。AIに渡す内容（記憶）の境界とPolicyを確認してください。"
+          ? "最高感度に非公開データを含みます。AIに渡す内容（記憶）の境界とポリシーを確認してください。"
           : "AIに渡った事実の本文ではなく、配達先・件数・感度などの監査メタデータです。",
       tone: input.highestSensitivity === "secret_never_send" ? "attention" : "ready"
     }
@@ -3886,21 +3891,21 @@ function restoreAiBoundarySummary(state: VaultState): {
 function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySummary>): RestorePreview["aiBoundarySections"] {
   return [
     {
-      label: "取得可能Pack",
+      label: "取得可能な記憶",
       value: `${input.deliverablePackCount}件`,
       detail:
         input.deliverablePackCount > 0
-          ? "復元後も期限内の確認済みPackがあります。Requestsで内容と期限を確認してください。"
+          ? "復元後も期限内の確認済みの記憶があります。AI要求一覧で内容と期限を確認してください。"
           : "復元後すぐ外部AIへ返せる内容（記憶）はありません。必要なら新しくAIに渡す内容（記憶）を作成します。",
       tone: input.deliverablePackCount > 0 ? "attention" : "ready"
     },
     {
-      label: "期限切れPack",
+      label: "期限切れの記憶",
       value: `${input.expiredPackCount}件`,
       detail:
         input.expiredPackCount > 0
-          ? "期限切れPackは復元されても外部AIへ返せません。履歴としてRequests/Auditで確認できます。"
-          : "短命Packの期限切れによる復元後の整理対象はありません。",
+          ? "期限切れの記憶は復元されても外部AIへ返せません。履歴としてAI要求/監査ログで確認できます。"
+          : "短命の記憶の期限切れによる復元後の整理対象はありません。",
       tone: input.expiredPackCount > 0 ? "attention" : "ready"
     },
     {
@@ -3908,8 +3913,8 @@ function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySum
       value: `${input.pendingRequestCount}件`,
       detail:
         input.pendingRequestCount > 0
-          ? "復元後に確認待ちまたは返却待ちRequestがあります。送信前にRequestsで再確認してください。"
-          : "復元後に即対応が必要なContext Requestはありません。",
+          ? "復元後に確認待ちまたは返却待ちAI要求があります。送信前にAI要求一覧で再確認してください。"
+          : "復元後に即対応が必要なAI要求はありません。",
       tone: input.pendingRequestCount > 0 ? "attention" : "ready"
     },
     {
@@ -3917,7 +3922,7 @@ function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySum
       value: `${input.pairedConnectorCount}件`,
       detail:
         input.pairedConnectorCount > 0
-          ? "ペアリング済み接続メタデータを含みます。復元後にConnectionsで接続状態とPolicyを確認してください。"
+          ? "ペアリング済み接続メタデータを含みます。復元後に接続ページで接続状態とポリシーを確認してください。"
           : "ペアリング済み接続メタデータは含まれていません。",
       tone: input.pairedConnectorCount > 0 ? "attention" : "ready"
     }
@@ -3937,38 +3942,38 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
   return [
     {
       label: "生活コンテキスト",
-      value: `${counts.sources} Sources / ${counts.facts} Facts / ${counts.candidates} Inbox`,
+      value: `${counts.sources}件のソース / ${counts.facts}件の記憶 / ${counts.candidates}件の取り込み候補`,
       detail:
         sourceBodyBytes > 0
-          ? `${formatFileSize(sourceBodyBytes)}のSource本文を含む保存データを削除します。本文内容はここには表示しません。`
-          : "保存済みSource本文はありません。記憶とInboxの記憶も空になります。",
+          ? `${formatFileSize(sourceBodyBytes)}の取り込み元の原文を含む保存データを削除します。本文内容はここには表示しません。`
+          : "保存済みの取り込み元の原文はありません。記憶と取り込み候補も空になります。",
       tone: hasSavedContext ? "attention" : "ready"
     },
     {
       label: "AI境界",
-      value: `${counts.requests} Requests / ${counts.packs} Packs`,
+      value: `${counts.requests}件のAI要求 / ${counts.packs}件の送信内容`,
       detail:
         hasAiBoundaryRecords
-          ? `${aiBoundary.deliverablePackCount}件の取得可能Pack、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れPackのローカル履歴を削除します。`
+          ? `${aiBoundary.deliverablePackCount}件の取得可能な記憶、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れの記憶のローカル履歴を削除します。`
           : "AI要求とAIに渡した内容（記憶）はありません。",
       tone: hasAiBoundaryRecords ? "attention" : "ready"
     },
     {
-      label: "AI接続とPolicy",
-      value: `${counts.connectorSessions} Connections / ${counts.policies} Policies`,
+      label: "AI接続とポリシー",
+      value: `${counts.connectorSessions}件の接続 / ${counts.policies}件のポリシー`,
       detail:
         hasConnectorPolicy
           ? `${aiBoundary.pairedConnectorCount}件のペアリング済み接続メタデータを含めて削除します。外部サービス側の設定は別途確認してください。`
-          : "接続メタデータとPolicyはありません。",
+          : "接続メタデータとポリシーはありません。",
       tone: hasConnectorPolicy ? "attention" : "ready"
     },
     {
-      label: "Audit / Capture",
-      value: `${counts.auditEvents} Audit / ${counts.captureEvents} Captures`,
+      label: "監査 / キャプチャ",
+      value: `監査 ${counts.auditEvents}件 / キャプチャ ${counts.captureEvents}件`,
       detail:
         hasAuditCapture
-          ? "保存・承認・AI配達・Captureのローカル監査履歴を削除します。AIへ渡した過去の本文はAuditには保存されていません。"
-          : "AuditとCapture履歴はありません。",
+          ? "保存・承認・AI配信・キャプチャのローカル監査履歴を削除します。AIへ渡した過去の本文は監査ログには保存されていません。"
+          : "監査とキャプチャ履歴はありません。",
       tone: hasAuditCapture ? "attention" : "ready"
     }
   ];
@@ -3981,25 +3986,25 @@ function restoreOverwriteSections(
   return [
     {
       label: "生活コンテキスト",
-      value: `${currentCounts.sources} Sources / ${currentCounts.facts} Facts -> ${nextCounts.sources} Sources / ${nextCounts.facts} Facts`,
-      detail: "現在のSource、記憶、Inboxの記憶はバックアップ側の内容へ置き換わります。",
+      value: `${currentCounts.sources}件のソース / ${currentCounts.facts}件の記憶 -> ${nextCounts.sources}件のソース / ${nextCounts.facts}件の記憶`,
+      detail: "現在のソース、記憶、取り込み候補はバックアップ側の内容へ置き換わります。",
       tone: currentCounts.sources + currentCounts.facts > 0 ? "attention" : "ready"
     },
     {
-      label: "Context Requests",
-      value: `${currentCounts.requests} Requests / ${currentCounts.packs} Packs -> ${nextCounts.requests} Requests / ${nextCounts.packs} Packs`,
-      detail: "確認待ちRequest、生成済みPack、TTL情報もバックアップ側へ戻ります。",
+      label: "AI要求",
+      value: `${currentCounts.requests}件のAI要求 / ${currentCounts.packs}件の送信内容 -> ${nextCounts.requests}件のAI要求 / ${nextCounts.packs}件の送信内容`,
+      detail: "確認待ちAI要求、生成済み送信内容、TTL情報もバックアップ側へ戻ります。",
       tone: currentCounts.requests + currentCounts.packs > 0 ? "attention" : "ready"
     },
     {
       label: "AI接続設定",
-      value: `${currentCounts.connectorSessions} Connections / ${currentCounts.policies} Policies -> ${nextCounts.connectorSessions} Connections / ${nextCounts.policies} Policies`,
-      detail: "Claude、ChatGPT、ブラウザCapture、コピーFallbackの接続メタデータとPolicyが置き換わります。",
+      value: `${currentCounts.connectorSessions}件の接続 / ${currentCounts.policies}件のポリシー -> ${nextCounts.connectorSessions}件の接続 / ${nextCounts.policies}件のポリシー`,
+      detail: "Claude、ChatGPT、ブラウザキャプチャ、コピー経由の接続メタデータとポリシーが置き換わります。",
       tone: "attention"
     },
     {
-      label: "監査とCapture",
-      value: `${currentCounts.auditEvents} Audit / ${currentCounts.captureEvents} Captures -> ${nextCounts.auditEvents} Audit / ${nextCounts.captureEvents} Captures`,
+      label: "監査とキャプチャ",
+      value: `${currentCounts.auditEvents}件の監査 / ${currentCounts.captureEvents}件のキャプチャ -> ${nextCounts.auditEvents}件の監査 / ${nextCounts.captureEvents}件のキャプチャ`,
       detail: "何を保存したか、どのAIへ渡したかの履歴もバックアップ側の履歴に置き換わります。",
       tone: currentCounts.auditEvents + currentCounts.captureEvents > 0 ? "attention" : "ready"
     }
@@ -4111,7 +4116,7 @@ export function homeCaptureSafetySummary(
       tone: "ready",
       title: "許可サイトだけをローカルで記憶化中",
       body:
-        "Captureは確認待ちの記憶を作るだけです。承認とAI送信は、Memory InboxとAIに渡した内容（記憶）の確認を通ります。",
+        "AI会話連携は確認待ちの記憶を作るだけです。承認とAI送信は、取り込みとAIに渡した内容（記憶）の確認を通ります。",
       allowedSitesLabel,
       lastCaptureLabel,
       lastPreview,
@@ -4121,9 +4126,9 @@ export function homeCaptureSafetySummary(
 
   return {
     tone: "attention",
-    title: "Passive Captureは停止中",
+    title: "受動キャプチャは停止中",
     body:
-      "停止中はブラウザ拡張や手動Captureから書き込みません。必要なときだけ開始できます。",
+      "停止中はブラウザ拡張や手動キャプチャから書き込みません。必要なときだけ開始できます。",
     allowedSitesLabel,
     lastCaptureLabel,
     lastPreview,
@@ -4148,14 +4153,14 @@ function connectorKindLabel(kind: ConnectorKind): string {
     claude_remote: "Claude",
     gemini: "Gemini",
     codex: "Codex",
-    generic_mcp: "MCP client",
-    copy_fallback: "Copy fallback"
+    generic_mcp: "MCP クライアント",
+    copy_fallback: "コピー経由"
   };
   return labels[kind];
 }
 
 function capturePreviewText(source?: VaultState["sources"][number]): string {
-  if (!source) return "紐づくSourceが見つかりません。";
+  if (!source) return "紐づく取り込み元が見つかりません。";
   if (source.deletionState === "purged") return "本文は消去済みです。記憶は確認待ちになります。";
   const text = source.body.replace(/\s+/g, " ").trim();
   if (!text) return "本文は空です。";
@@ -4173,7 +4178,7 @@ function captureEventStatusLabel(
 }
 
 function sourceMetadataNotice(invalidatedPackCount: number): string {
-  return `Sourceを更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function sourceBodyNotice(
@@ -4181,7 +4186,7 @@ function sourceBodyNotice(
   affectedFactCount: number,
   invalidatedPackCount: number
 ): string {
-  return `Source本文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元の原文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function unsupportedFileFeedback(
@@ -4198,15 +4203,15 @@ function unsupportedFileFeedback(
   if (reason === "native_required") {
     return {
       tone: "attention",
-      title: "Desktop appで開いてください",
-      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewではSource化せず、Desktop appのローカルVault Coreで抽出してください。`
+      title: "デスクトップアプリで開いてください",
+      body: `${file.name} はPDF/Office抽出が必要です。ブラウザプレビューでは取り込めません。デスクトップアプリのローカルVault Coreで抽出してください。`
     };
   }
   if (reason === "ocr_required") {
     return {
       tone: "attention",
       title: "画像OCRはまだ未接続です",
-      body: `${file.name} は画像として検出しました。SettingsのLocal OCRで検出機能を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+      body: `${file.name} は画像として検出しました。設定のローカルOCRで検出機能を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容を「会話・メモから追加」に貼り付けてください。`
     };
   }
   if (reason === "legacy_office") {
@@ -4219,7 +4224,7 @@ function unsupportedFileFeedback(
   return {
     tone: "attention",
     title: "まだ対応していない形式です",
-    body: `${file.name} はSource化しませんでした。対応形式は ${SUPPORTED_SOURCE_LABEL} です。`
+    body: `${file.name} は取り込めませんでした。対応形式は ${SUPPORTED_SOURCE_LABEL} です。`
   };
 }
 
@@ -4293,26 +4298,26 @@ export function documentIngestionReadiness(
     {
       label: "PDF / DOCX等",
       state: "ready",
-      value: "Desktopでローカル抽出",
-      detail: "本文はSourceとInboxの記憶になり、承認とAI送信は別確認です。"
+      value: "デスクトップアプリでローカル抽出",
+      detail: "本文は取り込み元と取り込み候補になり、承認とAI送信は別確認です。"
     },
     {
       label: "画像OCR",
       state: ocrExtractionAvailable ? "ready" : "attention",
-      value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR Provider"} 接続済み` : "Provider未接続",
+      value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR変換ツール"} 接続済み` : "変換ツール未接続",
       detail: ocrExtractionAvailable
         ? "画像はこの端末のOCRだけで抽出します。"
-        : "画像はSource化せず、SettingsでLocal OCRを設定するまで手入力を使います。"
+        : "画像は取り込めません。設定でローカルOCRを設定するまで手入力を使います。"
     },
     {
       label: "旧DOC / XLS / PPT",
       state: legacyOfficeConversionAvailable ? "ready" : "attention",
       value: legacyOfficeConversionAvailable
-        ? `${legacyOfficeProviderLabel ?? "Legacy Office Provider"} 接続済み`
-        : "変換Provider未接続",
+        ? `${legacyOfficeProviderLabel ?? "Office変換ツール"} 接続済み`
+        : "変換ツール未接続",
       detail: legacyOfficeConversionAvailable
         ? "旧Officeはこの端末で新形式へ変換してから抽出します。"
-        : "旧OfficeはSource化せず、SettingsでLibreOffice等を設定してから追加します。"
+        : "旧Officeは取り込めません。設定でLibreOffice等を設定してから追加します。"
     }
   ];
 }
@@ -4324,7 +4329,7 @@ function normalizedOcrTimeout(value: number, defaultValue = 30): number {
 
 function ocrProviderLabelFromCommand(command: string): string {
   const trimmed = command.trim();
-  if (!trimmed) return "OCR Provider";
+  if (!trimmed) return "OCR変換ツール";
   return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
 }
 
@@ -4461,10 +4466,10 @@ function factStatusLabel(status: ApprovedFact["status"]): string {
 
 function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: number): string {
   if (action === "keep_active" || action === "restore") {
-    return "記憶を保持し、AIに渡す記憶へ戻しました。";
+    return "記憶を保持し、AIへ渡す対象へ戻しました。";
   }
   if (action === "hide") {
-    return `記憶をAIに渡す記憶から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `記憶をAIへ渡す対象から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
   if (action === "delete") {
     return `記憶を削除済みにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
@@ -4512,7 +4517,7 @@ function searchModeCopy(
   if (mode === "native_fts") {
     return {
       title: "Vault Core FTSで検索中",
-      body: "暗号化SQLiteの記憶だけを検索します。確認待ちの記憶とRaw Source本文は結果に含めません。",
+      body: "暗号化SQLiteの記憶だけを検索します。確認待ちの記憶と取り込み元の原文は結果に含めません。",
       tone: "ready"
     };
   }
@@ -4562,13 +4567,13 @@ function makeCaptureSetupCommand(extensionId: string): string {
 
 function titleForView(view: View): string {
   return {
-    home: "Life Context Home",
-    sources: "Sources",
-    connections: "AI Connections",
-    requests: "Context Requests",
-    search: "Search",
-    audit: "Audit",
-    settings: "Settings"
+    home: "ホーム",
+    sources: "取り込み",
+    connections: "接続",
+    requests: "AI要求",
+    search: "検索",
+    audit: "監査ログ",
+    settings: "設定"
   }[view];
 }
 

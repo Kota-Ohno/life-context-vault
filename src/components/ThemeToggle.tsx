@@ -41,7 +41,7 @@ export function ThemeToggle() {
       aria-label={theme === "dark" ? "ライトモードに切替" : "ダークモードに切替"}
       title={theme === "dark" ? "ライトモード" : "ダークモード"}
     >
-      {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+      {theme === "dark" ? <Sun size={15} aria-hidden="true" /> : <Moon size={15} aria-hidden="true" />}
       <span>表示</span>
     </button>
   );
