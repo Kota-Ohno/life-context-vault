@@ -1610,6 +1610,163 @@ describe("vault flow", () => {
     };
     expect(canSendContextPackToAi(degradedState, confirmedPack)).toBe(false);
   });
+
+  it("retrieval re-validation: zero-touch pack blocked when confidence now below raised per-client bar", () => {
+    // A fact classified at medium confidence; policy bar raised to "high" before the
+    // zero-touch pack is confirmed → confirmation must be cancelled (sensitivity_policy).
+    // In TS, contextPackPolicyViolation fires at confirmContextPack time for not_required packs.
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const stateWithMediumBar: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_bar",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "medium" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? {
+              ...p,
+              standingDeliveryEnabled: true,
+              requiresApprovalAbove: "sensitive" as const,
+              zeroTouchConfidenceBar: "medium" as const // medium bar → medium confidence passes
+            }
+          : p
+      )
+    };
+    const requested = createContextPackRequest(stateWithMediumBar, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "What is my name?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    // Pack is zero-touch at build time: medium confidence meets the medium bar.
+    expect(built.pack?.confirmationStatus).toBe("not_required");
+
+    // Simulate the bar being raised to "high" before the user confirms the pack.
+    const tightenedState: VaultState = {
+      ...built.state,
+      accessPolicies: built.state.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, zeroTouchConfidenceBar: "high" as const }
+          : p
+      )
+    };
+    // Confirming now must fail: medium confidence is below the raised "high" bar.
+    const afterConfirm = confirmContextPack(tightenedState, built.pack!.id);
+    const pack = afterConfirm.contextPacks.find((p) => p.id === built.pack!.id)!;
+    expect(pack.confirmationStatus).toBe("cancelled");
+  });
+
+  it("retrieval re-validation: user-confirmed pack is NOT blocked by raised per-client zero-touch bar", () => {
+    // A pack that went through user confirmation (always_review path) must remain deliverable
+    // even if the zero-touch bar is later raised — a human already reviewed it.
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    // Disable standingDeliveryEnabled so the approval mode is always_review → pending_user_confirmation.
+    const stateForConfirmed: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_confirmed_bar",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: true,
+          sensitivityConfidence: "medium" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: false } // force always_review → pending_user_confirmation
+          : p
+      )
+    };
+    const requested = createContextPackRequest(stateForConfirmed, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "What is my name?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    // Without standingDeliveryEnabled, pack requires user confirmation.
+    expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+    // User confirms it.
+    const confirmedState = confirmContextPack(built.state, built.pack!.id);
+    const confirmedPack = confirmedState.contextPacks.find((p) => p.id === built.pack!.id)!;
+    expect(confirmedPack.confirmationStatus).toBe("confirmed");
+    expect(canSendContextPackToAi(confirmedState, confirmedPack)).toBe(true);
+
+    // Now set a high zero-touch bar on the policy — confirmed packs must remain deliverable.
+    const tightenedState: VaultState = {
+      ...confirmedState,
+      accessPolicies: confirmedState.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, zeroTouchConfidenceBar: "high" as const }
+          : p
+      )
+    };
+    // Confirmed pack: confirmationStatus is "confirmed", not "not_required", so the
+    // zero-touch bar re-check must NOT fire — pack stays deliverable.
+    expect(canSendContextPackToAi(tightenedState, confirmedPack)).toBe(true);
+  });
+
+  it("pack-build secret filter: editing a candidate with injected secret excludes fact from pack", () => {
+    // Set up a source with a benign candidate.
+    let state = addSourceWithCandidates(createEmptyVault(), {
+      kind: "manual_note",
+      origin: "manual_entry",
+      title: "Notes",
+      body: "I prefer mornings for meetings."
+    });
+    const candidate = state.candidates[0];
+
+    // Approve the candidate with EDITED text that injects a secret.
+    // classifySensitivity detects "password=..." → secret_never_send.
+    const editedWithSecret = "password=SuperSecret123 I prefer mornings.";
+    state = approveCandidate(state, candidate.id, editedWithSecret);
+    const secretFact = state.facts[0];
+    // Confirm the secret was detected at approve time.
+    expect(secretFact.sensitivity).toBe("secret_never_send");
+
+    // Build a pack — secret facts are filtered from ranking before the build loop
+    // (rankFactsForTask excludes secret_never_send), so they never reach pack items.
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "What time do I prefer for meetings?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+
+    // The secret fact must NEVER appear in pack items — this is the security property.
+    expect(built.pack?.items.some((item) => item.factId === secretFact.id)).toBe(false);
+    // The pack should have no items at all (the only fact is secret and was filtered out).
+    expect(built.pack?.items).toHaveLength(0);
+  });
 });
 
 function savePackForTest(state: ReturnType<typeof createEmptyVault>, pack: ReturnType<typeof buildContextPack>) {
