@@ -88,13 +88,13 @@ function documentIngestionReadiness(
     {
       label: "画像 (OCR)",
       state: ocrAvailable ? "ready" : "attention",
-      value: ocrAvailable ? ocrLabel ?? "OCR Provider" : "未設定",
+      value: ocrAvailable ? ocrLabel ?? "OCR変換ツール" : "未設定",
       detail: ocrAvailable ? "ローカル実行" : "接続が必要です",
     },
     {
       label: "旧Office形式",
       state: officeAvailable ? "ready" : "attention",
-      value: officeAvailable ? officeLabel ?? "Office Provider" : "未設定",
+      value: officeAvailable ? officeLabel ?? "Office変換ツール" : "未設定",
       detail: officeAvailable ? "ローカル変換" : "接続が必要です",
     },
   ];
@@ -268,7 +268,7 @@ export function IngestView({
       {candidates.length === 0 ? (
         <EmptyState
           title="確認待ちの記憶はありません"
-          body="Source・メモ・AI会話Captureから記憶を作ると、ここに届きます。"
+          body="取り込み元・メモ・AI会話から記憶を作ると、ここに届きます。"
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="primary" onClick={goHome}>
@@ -277,7 +277,7 @@ export function IngestView({
               </Button>
               <Button variant="ghost" onClick={goConnections}>
                 <Plug size={15} />
-                AI会話Captureを設定
+                AI会話連携を設定
               </Button>
               <div className="qv-ingest__trust-note">
                 <ShieldCheck size={14} />
@@ -393,7 +393,7 @@ export function IngestView({
       )}
 
       {/* ── Section 2: Sources ────────────────────────────────────── */}
-      <SectionDivider label="取り込み済みSource" />
+      <SectionDivider label="取り込み済み" />
 
       {/* Add source inputs */}
       <div className="qv-ingest__add-row">
@@ -454,11 +454,11 @@ export function IngestView({
             <span>
               PDF/OfficeはDesktopでローカル抽出します。
               {ocrExtractionAvailable
-                ? ` 画像は ${ocrProviderLabel ?? "OCR Provider"} をローカル実行して抽出します。`
-                : " 画像OCRはProvider接続までSource化しません。"}
+                ? ` 画像は ${ocrProviderLabel ?? "OCR変換ツール"} をローカル実行して抽出します。`
+                : " 画像OCRは変換ツール接続まで取り込めません。"}
               {legacyOfficeConversionAvailable
-                ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Legacy Office Provider"} でローカル変換します。`
-                : " 旧Office形式は変換Provider接続までSource化しません。"}
+                ? ` 旧Office形式は ${legacyOfficeProviderLabel ?? "Office変換ツール"} でローカル変換します。`
+                : " 旧Office形式は変換ツール接続まで取り込めません。"}
             </span>
           </div>
           <div className="qv-ingest__readiness-grid" aria-label="Document ingestion readiness">
@@ -479,12 +479,12 @@ export function IngestView({
       {/* Source history */}
       <div className="qv-ingest__trust-note qv-ingest__source-lifecycle-note">
         <Archive size={14} />
-        <span>Sourceを停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
+        <span>取り込み元を停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
       </div>
 
       {sources.length === 0 ? (
         <EmptyState
-          title="まだSourceがありません"
+          title="まだ取り込み元がありません"
           body="メモや文書を追加すると、ここに記録が残ります。"
           action={
             <div className="qv-ingest__empty-actions">
@@ -560,7 +560,7 @@ function IngestSourceRow({
         {bodyDraft !== null ? (
           <div className="qv-ingest__source-edit">
             <FieldTextarea
-              label="Source本文"
+              label="取り込み元の原文"
               value={bodyDraft}
               onChange={setBodyDraft}
               placeholder="再抽出したい本文"
@@ -573,14 +573,14 @@ function IngestSourceRow({
         ) : draft ? (
           <div className="qv-ingest__source-edit">
             <FieldInput
-              label="Sourceタイトル"
+              label="取り込み元のタイトル"
               value={draft.title}
               onChange={(value) => setDraft({ ...draft, title: value })}
               placeholder="根拠として見分けやすい名前"
             />
             <div className="qv-ingest__source-edit-grid">
               <label className="field">
-                <span>Source感度</span>
+                <span>取り込み元の感度</span>
                 <select
                   value={draft.defaultSensitivity}
                   onChange={(event) =>
@@ -631,7 +631,7 @@ function IngestSourceRow({
             </div>
             {confirmBodyPurge && (
               <div className="qv-ingest__purge-confirm" role="status">
-                <strong>このSource本文を消去します</strong>
+                <strong>この取り込み元の原文を消去します</strong>
                 <span>
                   本文は戻せません。確認待ちの記憶 {linkedCandidateCount}件、関連する記憶 {linkedFactCount}件、
                   AIに渡した内容（記憶）{linkedPackCount}件に影響します。

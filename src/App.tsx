@@ -740,7 +740,7 @@ export function App() {
         title: manualTitle || "Manual note",
         body: manualBody
       },
-      "Sourceを保存し、取り込みに記憶を追加しました。"
+      "取り込み元を保存し、取り込みに記憶を追加しました。"
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -749,7 +749,7 @@ export function App() {
         title: manualTitle || "Manual note",
         body: manualBody
       });
-      apply(next, "Sourceを保存し、取り込みに記憶を追加しました。");
+      apply(next, "取り込み元を保存し、取り込みに記憶を追加しました。");
       setView("sources");
     }
     if (addStatus === "failed") return;
@@ -785,7 +785,7 @@ export function App() {
             setNativeRevision(added.updatedAt);
             setState(added.state);
             setNotice(
-              `${file.name} を保留中Sourceとして保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
+              `${file.name} を保留中取り込み元として保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
             );
             setView("sources");
             return;
@@ -816,7 +816,7 @@ export function App() {
         setUploadFeedback({
           tone: "attention",
           title: "テキストとして読めませんでした",
-          body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないためSource化していません。"
+          body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないため取り込めませんでした。"
         });
         return;
       }
@@ -859,7 +859,7 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} をSourceとして保存し、取り込みに記憶を追加しました。${extractionDetail}`
+      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -868,7 +868,7 @@ export function App() {
         title: file.name,
         body: text
       });
-      apply(next, `${file.name} をSourceとして保存し、取り込みに記憶を追加しました。${extractionDetail}`);
+      apply(next, `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`);
       setView("sources");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
@@ -896,7 +896,7 @@ export function App() {
       setView("sources");
       return "saved";
     } catch (error) {
-      setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
+      setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
       return "failed";
     }
   }
@@ -904,7 +904,7 @@ export function App() {
   async function changeSourceLifecycle(sourceId: string, action: SourceLifecycleAction) {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return;
     }
     if (nativePath) {
@@ -918,7 +918,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSourceを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元を更新できませんでした。"));
         return;
       }
     }
@@ -933,7 +933,7 @@ export function App() {
     const sourceId = event ? passiveCaptureSourceId(event) : null;
     const source = sourceId ? state.sources.find((item) => item.id === sourceId) : null;
     if (!event || !source) {
-      setNotice("Capture履歴に紐づくSourceが見つかりませんでした。");
+      setNotice("Capture履歴に紐づく取り込み元が見つかりませんでした。");
       return;
     }
     if (source.deletionState === "purged") {
@@ -993,11 +993,11 @@ export function App() {
   async function editSourceMetadata(sourceId: string, input: SourceMetadataUpdate): Promise<boolean> {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return false;
     }
     if (!input.title.trim()) {
-      setNotice("Sourceタイトルを入力してください。");
+      setNotice("取り込み元のタイトルを入力してください。");
       return false;
     }
     if (nativePath) {
@@ -1011,7 +1011,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSourceを保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
         return false;
       }
     }
@@ -1025,15 +1025,15 @@ export function App() {
   async function editSourceBody(sourceId: string, input: SourceBodyUpdate): Promise<boolean> {
     const source = state.sources.find((item) => item.id === sourceId);
     if (!source) {
-      setNotice("Sourceが見つかりませんでした。");
+      setNotice("取り込み元が見つかりませんでした。");
       return false;
     }
     if (source.deletionState !== "active") {
-      setNotice("停止または消去されたSource本文は編集できません。先に復元してください。");
+      setNotice("停止または消去された取り込み元の原文は編集できません。先に復元してください。");
       return false;
     }
     if (!input.body.trim()) {
-      setNotice("Source本文を入力してください。");
+      setNotice("取り込み元の原文を入力してください。");
       return false;
     }
     if (nativePath) {
@@ -1051,7 +1051,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでSource本文を保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで取り込み元の原文を保存できませんでした。"));
         return false;
       }
     }
@@ -1103,7 +1103,7 @@ export function App() {
       return false;
     }
     if (input.sensitivity === "secret_never_send") {
-      setNotice("Secretは記憶として保存できません。Sourceまたは記憶を削除してください。");
+      setNotice("Secretは記憶として保存できません。取り込み元または記憶を削除してください。");
       return false;
     }
     if (nativePath) {
@@ -1161,7 +1161,7 @@ export function App() {
       }
     }
     if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
-      setNotice("削除または消去されたSource由来の記憶は承認できません。Sourceを復元するか、新しいSourceとして追加してください。");
+      setNotice("削除または消去された取り込み元由来の記憶は承認できません。取り込み元を復元するか、新しい取り込み元として追加してください。");
       return;
     }
     const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
@@ -1225,7 +1225,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを生成できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を生成できませんでした。"));
         return;
       }
     }
@@ -1276,7 +1276,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を更新できませんでした。"));
         return;
       }
     }
@@ -1308,7 +1308,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
         return;
       }
     }
@@ -1353,7 +1353,7 @@ export function App() {
             }
           }
         } catch (error) {
-          setNotice(formatVaultError(error, "Vault CoreでContext Packを承認できませんでした。"));
+          setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
           return;
         }
       } else {
@@ -1443,7 +1443,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでContext Requestを拒否できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAI要求を拒否できませんでした。"));
         return;
       }
     }
@@ -2217,7 +2217,7 @@ function ContextRequestsView({
                 {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
-            <div className="pack-boundary-receipt-grid" aria-label="Context Pack delivery boundary">
+            <div className="pack-boundary-receipt-grid" aria-label="AIに渡した内容（記憶）配信境界">
               {boundaryReceiptItems.map((item) => (
                 <div className={`pack-boundary-receipt ${item.tone}`} key={item.label}>
                   <span>{item.label}</span>
@@ -2235,7 +2235,7 @@ function ContextRequestsView({
                   </span>
                 </div>
                 <label className="field manual-copy-field">
-                  <span>AIへ貼り付けるContext Pack payload</span>
+                  <span>AIへ貼り付けるペイロード</span>
                   <textarea
                     readOnly
                     value={activeManualCopyPayload.payloadText}
@@ -2304,10 +2304,10 @@ function ContextRequestsView({
               ) : (
                 <div className="source-snippet empty">
                   <div>
-                    <span>今回はSource snippetを送信しません</span>
+                    <span>今回は取り込み元のスニペットを送信しません</span>
                     <Badge>0 snippets</Badge>
                   </div>
-                  <p>Raw Source本文や高感度SourceタイトルはAIへ渡しません。上の記憶の本文と理由だけがPack本文に含まれます。</p>
+                  <p>取り込み元の原文や高感度タイトルはAIへ渡しません。上の記憶の本文と理由だけが含まれます。</p>
                   <small>出典確認が必要な場合は、Sourcesで元データとポリシーを確認できます。</small>
                 </div>
               )}
@@ -2426,7 +2426,7 @@ function SearchView({
           <div className="action-row inventory-actions">
             <button className="primary-button" onClick={goSources} type="button">
               <FileText size={16} />
-              Sourceを追加
+              取り込み元を追加
             </button>
             <button className="secondary-button" onClick={goInbox} type="button">
               <Inbox size={16} />
@@ -2446,7 +2446,7 @@ function SearchView({
           </div>
           <div className="trust-note">
             <ShieldAlert size={16} />
-            <span>Sourceが停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
+            <span>取り込み元が停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
           </div>
           <div className="domain-list">
             {reviewFacts.map((fact) => (
@@ -2730,7 +2730,7 @@ function SettingsView({
         <div className="form-stack">
           <div className="trust-note">
             <ShieldCheck size={16} />
-            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
+            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文は取り込み元と確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {legacyOfficeProviderCandidates.length > 0 ? (
             <div className="table-list">
@@ -3049,7 +3049,7 @@ function SettingsView({
           <div className="danger-zone">
             <div className="trust-note attention-note">
               <ShieldAlert size={16} />
-              <span>Vaultをクリアすると、Sources、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
+              <span>Vaultをクリアすると、取り込み元、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
             <div className="clear-impact-list" aria-label="Vault clear impact">
               {clearImpactSections.map((section) => (
@@ -3122,13 +3122,13 @@ export function auditReceiptBody(event: AuditEvent): string {
     ttl ? `有効期限は約${Math.max(1, Math.round(ttl / 60))}分` : null
   ].filter(Boolean);
   const summary = pieces.length > 0 ? pieces.join("、") : "AIに渡した内容（記憶）の本文は監査ログに保存していません";
-  return `${summary}。Raw Source本文と確認待ちの記憶は含めていません。`;
+  return `${summary}。取り込み元の原文と確認待ちの記憶は含めていません。`;
 }
 
 function deliveryChannelLabel(channel: string): string {
   if (channel === "clipboard_copy") return "コピー";
 
-  return channel || "Context Pack";
+  return channel || "AIに渡した内容（記憶）";
 }
 
 function isKnownLifeDomain(value: string): value is LifeContextDomain {
@@ -3496,7 +3496,7 @@ export function contextPackBoundaryReceipt(
   const exclusionDetail =
     excludedReasons.length > 0
       ? `${excludedReasons.slice(0, 3).join("、")}${excludedReasons.length > 3 ? "など" : ""}で除外しています。`
-      : "Raw Source本文、確認待ちの記憶、削除済み/期限切れの記憶は送信対象にしていません。";
+      : "取り込み元の原文、確認待ちの記憶、削除済み/期限切れの記憶は送信対象にしていません。";
 
   return [
     {
@@ -3715,12 +3715,12 @@ function sourceLifecycleNotice(
   invalidatedPackCount: number
 ): string {
   if (action === "restore") {
-    return `Sourceを復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
+    return `取り込み元を復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
   }
   if (action === "purge_body") {
-    return `Source本文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `取り込み元の原文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
-  return `Sourceを使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 type RestoreRecordCounts = RestorePreview["counts"];
@@ -3794,12 +3794,12 @@ function restoreReceiptSections(input: {
 }): RestorePreview["receiptSections"] {
   return [
     {
-      label: "Source本文",
+      label: "取り込み元の原文",
       value: `${input.counts.sources}件 / ${formatFileSize(input.sourceBodyBytes)}`,
       detail:
         input.promotedSourceCount > 0
-          ? `${input.promotedSourceCount}件は長期保存Sourceです。復元しても自動でAIへ送信されません。`
-          : "保存されたSource本文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
+          ? `${input.promotedSourceCount}件は長期保存取り込み元です。復元しても自動でAIへ送信されません。`
+          : "保存された取り込み元の原文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
       tone: input.counts.sources > 0 ? "attention" : "ready"
     },
     {
@@ -3918,8 +3918,8 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
       value: `${counts.sources}件のソース / ${counts.facts}件の記憶 / ${counts.candidates}件の取り込み候補`,
       detail:
         sourceBodyBytes > 0
-          ? `${formatFileSize(sourceBodyBytes)}のSource本文を含む保存データを削除します。本文内容はここには表示しません。`
-          : "保存済みSource本文はありません。記憶と取り込み候補も空になります。",
+          ? `${formatFileSize(sourceBodyBytes)}の取り込み元の原文を含む保存データを削除します。本文内容はここには表示しません。`
+          : "保存済みの取り込み元の原文はありません。記憶と取り込み候補も空になります。",
       tone: hasSavedContext ? "attention" : "ready"
     },
     {
@@ -4089,7 +4089,7 @@ export function homeCaptureSafetySummary(
       tone: "ready",
       title: "許可サイトだけをローカルで記憶化中",
       body:
-        "Captureは確認待ちの記憶を作るだけです。承認とAI送信は、取り込みとAIに渡した内容（記憶）の確認を通ります。",
+        "AI会話連携は確認待ちの記憶を作るだけです。承認とAI送信は、取り込みとAIに渡した内容（記憶）の確認を通ります。",
       allowedSitesLabel,
       lastCaptureLabel,
       lastPreview,
@@ -4133,7 +4133,7 @@ function connectorKindLabel(kind: ConnectorKind): string {
 }
 
 function capturePreviewText(source?: VaultState["sources"][number]): string {
-  if (!source) return "紐づくSourceが見つかりません。";
+  if (!source) return "紐づく取り込み元が見つかりません。";
   if (source.deletionState === "purged") return "本文は消去済みです。記憶は確認待ちになります。";
   const text = source.body.replace(/\s+/g, " ").trim();
   if (!text) return "本文は空です。";
@@ -4151,7 +4151,7 @@ function captureEventStatusLabel(
 }
 
 function sourceMetadataNotice(invalidatedPackCount: number): string {
-  return `Sourceを更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function sourceBodyNotice(
@@ -4159,7 +4159,7 @@ function sourceBodyNotice(
   affectedFactCount: number,
   invalidatedPackCount: number
 ): string {
-  return `Source本文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元の原文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function unsupportedFileFeedback(
@@ -4177,7 +4177,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "Desktop appで開いてください",
-      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewではSource化せず、Desktop appのローカルVault Coreで抽出してください。`
+      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewでは取り込めません。Desktop appのローカルVault Coreで抽出してください。`
     };
   }
   if (reason === "ocr_required") {
@@ -4197,7 +4197,7 @@ function unsupportedFileFeedback(
   return {
     tone: "attention",
     title: "まだ対応していない形式です",
-    body: `${file.name} はSource化しませんでした。対応形式は ${SUPPORTED_SOURCE_LABEL} です。`
+    body: `${file.name} は取り込めませんでした。対応形式は ${SUPPORTED_SOURCE_LABEL} です。`
   };
 }
 
@@ -4277,20 +4277,20 @@ export function documentIngestionReadiness(
     {
       label: "画像OCR",
       state: ocrExtractionAvailable ? "ready" : "attention",
-      value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR Provider"} 接続済み` : "Provider未接続",
+      value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR変換ツール"} 接続済み` : "変換ツール未接続",
       detail: ocrExtractionAvailable
         ? "画像はこの端末のOCRだけで抽出します。"
-        : "画像はSource化せず、SettingsでLocal OCRを設定するまで手入力を使います。"
+        : "画像は取り込めません。SettingsでLocal OCRを設定するまで手入力を使います。"
     },
     {
       label: "旧DOC / XLS / PPT",
       state: legacyOfficeConversionAvailable ? "ready" : "attention",
       value: legacyOfficeConversionAvailable
-        ? `${legacyOfficeProviderLabel ?? "Legacy Office Provider"} 接続済み`
-        : "変換Provider未接続",
+        ? `${legacyOfficeProviderLabel ?? "Office変換ツール"} 接続済み`
+        : "変換ツール未接続",
       detail: legacyOfficeConversionAvailable
         ? "旧Officeはこの端末で新形式へ変換してから抽出します。"
-        : "旧OfficeはSource化せず、SettingsでLibreOffice等を設定してから追加します。"
+        : "旧Officeは取り込めません。SettingsでLibreOffice等を設定してから追加します。"
     }
   ];
 }
@@ -4302,7 +4302,7 @@ function normalizedOcrTimeout(value: number, defaultValue = 30): number {
 
 function ocrProviderLabelFromCommand(command: string): string {
   const trimmed = command.trim();
-  if (!trimmed) return "OCR Provider";
+  if (!trimmed) return "OCR変換ツール";
   return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;
 }
 
@@ -4490,7 +4490,7 @@ function searchModeCopy(
   if (mode === "native_fts") {
     return {
       title: "Vault Core FTSで検索中",
-      body: "暗号化SQLiteの記憶だけを検索します。確認待ちの記憶とRaw Source本文は結果に含めません。",
+      body: "暗号化SQLiteの記憶だけを検索します。確認待ちの記憶と取り込み元の原文は結果に含めません。",
       tone: "ready"
     };
   }

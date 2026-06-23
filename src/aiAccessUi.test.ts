@@ -84,8 +84,8 @@ describe("AI access UI safety", () => {
 
     expect(disconnected.find((item) => item.label === "PDF / DOCX等")?.state).toBe("ready");
     expect(disconnected.find((item) => item.label === "画像OCR")?.state).toBe("attention");
-    expect(disconnected.find((item) => item.label === "画像OCR")?.detail).toContain("Source化せず");
-    expect(disconnected.find((item) => item.label === "旧DOC / XLS / PPT")?.detail).toContain("Source化せず");
+    expect(disconnected.find((item) => item.label === "画像OCR")?.detail).toContain("取り込めません");
+    expect(disconnected.find((item) => item.label === "旧DOC / XLS / PPT")?.detail).toContain("取り込めません");
 
     const connected = documentIngestionReadiness(true, "Tesseract OCR", true, "LibreOffice");
 
@@ -778,7 +778,7 @@ describe("AI access UI safety", () => {
 
     expect(body).toContain("契約・保険、書類・証明の文脈");
     expect(body).toContain("2件の記憶");
-    expect(body).toContain("Raw Source本文と確認待ちの記憶は含めていません");
+    expect(body).toContain("取り込み元の原文と確認待ちの記憶は含めていません");
   });
 
 });
