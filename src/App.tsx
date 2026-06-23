@@ -1,12 +1,12 @@
 import {
-  Activity,
+
   Archive,
-  ArrowRight,
+
   Bell,
   Check,
   CheckCircle2,
   Clipboard,
-  CircleDot,
+
   Clock,
   Download,
   EyeOff,
@@ -15,10 +15,9 @@ import {
   Inbox,
   Lock,
   MessageSquare,
-  PauseCircle,
-  PlayCircle,
+
   Plug,
-  Radio,
+
   RefreshCw,
   Search,
   Send,
@@ -2491,7 +2490,7 @@ function SearchView({
       <div className="search-controls">
         <Input label="検索" value={query} onChange={setQuery} placeholder="背景、期限、契約、制約など" />
         <label>
-          <span>Domain</span>
+          <span>ドメイン</span>
           <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value as LifeContextDomain | "all")}>
             {domainOptions.map((domain) => (
               <option value={domain} key={domain}>
@@ -2501,7 +2500,7 @@ function SearchView({
           </select>
         </label>
         <label>
-          <span>Sensitivity</span>
+          <span>感度</span>
           <select value={sensitivityFilter} onChange={(event) => setSensitivityFilter(event.target.value as SensitivityTier | "all")}>
             {sensitivityOptions.map((sensitivity) => (
               <option value={sensitivity} key={sensitivity}>
@@ -3245,7 +3244,7 @@ function FactRow({
             />
             <div className="fact-edit-grid">
               <label className="field">
-                <span>Domain</span>
+                <span>ドメイン</span>
                 <select
                   value={draft.domain}
                   onChange={(event) => setDraft({ ...draft, domain: event.target.value as LifeContextDomain })}
@@ -3258,7 +3257,7 @@ function FactRow({
                 </select>
               </label>
               <label className="field">
-                <span>Sensitivity</span>
+                <span>感度</span>
                 <select
                   value={draft.sensitivity}
                   onChange={(event) => setDraft({ ...draft, sensitivity: event.target.value as SensitivityTier })}

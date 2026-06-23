@@ -85,11 +85,6 @@ export async function loadNativeVaultSnapshot(): Promise<NativeVaultSnapshot | n
   };
 }
 
-export async function loadNativeVault(): Promise<VaultState | null> {
-  const snapshot = await loadNativeVaultSnapshot();
-  return snapshot?.state ?? null;
-}
-
 export async function saveNativeVault(
   state: VaultState,
   expectedUpdatedAt: string | null
