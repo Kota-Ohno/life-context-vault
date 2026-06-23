@@ -1,55 +1,62 @@
 import type { CandidateStatus, FactStatus } from "./types";
 
-export type MemoryStatus =
-  | { type: "candidate"; status: CandidateStatus }
-  | { type: "fact"; status: FactStatus };
+// UI-only unification: candidate and Fact are one "記憶" concept to the user,
+// distinguished by a status chip. The engine keeps them as separate entities.
+export type MemoryStatusKey =
+  | "pending"
+  | "approved"
+  | "blocked"
+  | "superseded"
+  | "expired"
+  | "hidden"
+  | "removed"
+  | "rejected";
 
-export const candidateMemoryStatus = (status: CandidateStatus): MemoryStatus => ({
-  type: "candidate",
-  status,
-});
-
-export const factMemoryStatus = (status: FactStatus): MemoryStatus => ({
-  type: "fact",
-  status,
-});
-
-export const memoryStatusLabel = (status: MemoryStatus): string => {
-  if (status.type === "candidate") {
-    switch (status.status) {
-      case "new":
-      case "needs_user_detail":
-        return "確認待ち";
-      case "approved":
-      case "edited_and_approved":
-        return "承認済み";
-      case "blocked_sensitive":
-        return "非公開";
-      case "rejected":
-      case "archived":
-        // These are not explicitly required by the test, but map logically
-        return "却下";
-      default:
-        const _exhaustive: never = status.status;
-        return _exhaustive;
-    }
-  } else {
-    switch (status.status) {
-      case "active":
-        return "承認済み";
-      case "needs_review":
-        return "確認待ち";
-      case "superseded":
-        return "置き換え済み";
-      case "expired":
-        return "期限切れ";
-      case "user_hidden":
-        return "非表示";
-      case "deleted":
-        return "削除済み";
-      default:
-        const _exhaustive: never = status.status;
-        return _exhaustive;
-    }
+export function candidateMemoryStatus(s: CandidateStatus): MemoryStatusKey {
+  switch (s) {
+    case "new":
+    case "needs_user_detail":
+      return "pending";
+    case "approved":
+    case "edited_and_approved":
+      return "approved";
+    case "blocked_sensitive":
+      return "blocked";
+    case "rejected":
+      return "rejected";
+    case "archived":
+      return "removed";
   }
+}
+
+export function factMemoryStatus(s: FactStatus): MemoryStatusKey {
+  switch (s) {
+    case "active":
+      return "approved";
+    case "needs_review":
+      return "pending";
+    case "superseded":
+      return "superseded";
+    case "expired":
+      return "expired";
+    case "user_hidden":
+      return "hidden";
+    case "deleted":
+      return "removed";
+  }
+}
+
+const STATUS_LABELS: Record<MemoryStatusKey, string> = {
+  pending: "確認待ち",
+  approved: "承認済み",
+  blocked: "非公開",
+  superseded: "置き換え済み",
+  expired: "期限切れ",
+  hidden: "非表示",
+  removed: "削除済み",
+  rejected: "却下",
 };
+
+export function memoryStatusLabel(key: MemoryStatusKey): string {
+  return STATUS_LABELS[key];
+}
