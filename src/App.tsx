@@ -1100,7 +1100,7 @@ export function App() {
       return false;
     }
     if (input.sensitivity === "secret_never_send") {
-      setNotice("Secretは記憶として保存できません。取り込み元または記憶を削除してください。");
+      setNotice("非公開の情報は記憶として保存できません。取り込み元または記憶を削除してください。");
       return false;
     }
     if (nativePath) {
@@ -1646,9 +1646,9 @@ export function App() {
     try {
       const status = await getLoginItemStatus();
       setLoginItemStatus(status);
-      setNotice(status ? "Login Itemの状態を更新しました。" : "デスクトップアプリでのみLogin Itemを管理できます。");
+      setNotice(status ? "ログイン時起動の状態を更新しました。" : "デスクトップアプリでのみログイン時起動を管理できます。");
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの状態確認に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の状態確認に失敗しました。"));
     }
   }
 
@@ -1660,10 +1660,10 @@ export function App() {
       setNotice(
         status?.enabled
           ? "ログイン時にLife Context Vaultが起動するようにしました。"
-          : "Login Itemを有効にできませんでした。"
+          : "ログイン時起動を有効にできませんでした。"
       );
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの有効化に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の有効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -1675,9 +1675,9 @@ export function App() {
     try {
       const status = await uninstallLoginItem();
       setLoginItemStatus(status);
-      setNotice("Login Itemを無効にしました。");
+      setNotice("ログイン時起動を無効にしました。");
     } catch (error) {
-      setNotice(formatVaultError(error, "Login Itemの無効化に失敗しました。"));
+      setNotice(formatVaultError(error, "ログイン時起動の無効化に失敗しました。"));
       void getLoginItemStatus().then(setLoginItemStatus).catch(() => undefined);
     } finally {
       setLoginItemBusy(false);
@@ -4204,7 +4204,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "デスクトップアプリで開いてください",
-      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewでは取り込めません。デスクトップアプリのローカルVault Coreで抽出してください。`
+      body: `${file.name} はPDF/Office抽出が必要です。ブラウザプレビューでは取り込めません。デスクトップアプリのローカルVault Coreで抽出してください。`
     };
   }
   if (reason === "ocr_required") {
