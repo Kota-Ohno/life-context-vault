@@ -77,7 +77,6 @@ import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
 import { SensitivityBadge } from "./components/SensitivityBadge";
 import { EmptyState } from "./components/EmptyState";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { Rail } from "./components/Rail";
 import { QVGallery } from "./components/_gallery";
 import { HomeTimeline } from "./components/HomeTimeline";
@@ -111,7 +110,6 @@ import {
 } from "./sourceUpload";
 import {
   addSourceWithCandidates,
-  addPassiveCaptureEvent,
   approveCandidate,
   attachLocalAnswer,
   buildContextPackForRequest,
@@ -1756,7 +1754,7 @@ export function App() {
           <div className="topbar-actions">
             {nativePath && (
               <button className="secondary-button" onClick={refreshFromNative} type="button">
-                <RefreshCw size={16} />
+                <RefreshCw size={16} aria-hidden="true" />
                 Sync
               </button>
             )}
@@ -1764,7 +1762,7 @@ export function App() {
               <div className="notice" role="status" aria-live="polite">
                 <span>{notice}</span>
                 <button aria-label="通知を閉じる" onClick={() => setNotice("")} type="button">
-                  <X size={14} />
+                  <X size={14} aria-hidden="true" />
                 </button>
               </div>
             )}
@@ -1776,6 +1774,7 @@ export function App() {
             state={state}
             goSources={() => setView("sources")}
             goConnections={() => setView("connections")}
+            goRequests={() => setView("requests")}
             seedDemo={seedDemo}
             onApprovePending={(packId) => {
               const pack = state.contextPacks.find((p) => p.id === packId);
@@ -1951,7 +1950,6 @@ export function App() {
             searchMode={searchMode}
             searchError={searchError}
             nativePath={nativePath}
-            goInbox={() => setView("sources")}
             goSources={() => setView("sources")}
           />
         )}
@@ -2083,7 +2081,7 @@ function ContextRequestsView({
       </label>
       <Textarea label="質問" value={question} onChange={setQuestion} placeholder="例: 今週の計画を生活背景込みで手伝って" />
       <button className="primary-button" onClick={buildPack} type="button">
-        <Sparkles size={16} />
+        <Sparkles size={16} aria-hidden="true" />
         {buttonLabel}
       </button>
       <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認とAuditを通します。</p>
@@ -2107,10 +2105,10 @@ function ContextRequestsView({
             <p className="eyebrow">AI confirmation inbox</p>
             <h3>AIへ返す前の確認待ち</h3>
           </div>
-          <Send size={18} />
+          <Send size={18} aria-hidden="true" />
         </div>
         <div className={actionableRequests.length > 0 ? "request-inbox-summary attention" : "request-inbox-summary"}>
-          {actionableRequests.length > 0 ? <ShieldAlert size={18} /> : <ShieldCheck size={18} />}
+          {actionableRequests.length > 0 ? <ShieldAlert size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
           <div>
             <strong>{requestQueueTitle}</strong>
             <span>{requestQueueBody}</span>
@@ -2154,10 +2152,10 @@ function ContextRequestsView({
                 <p className="eyebrow">コピーFallback</p>
                 <h3>MCPなしでAIに渡す内容（記憶）を作る</h3>
               </div>
-              <Clipboard size={18} />
+              <Clipboard size={18} aria-hidden="true" />
             </div>
             <div className="trust-note">
-              <ShieldCheck size={16} />
+              <ShieldCheck size={16} aria-hidden="true" />
               <span>ここで作った記憶も、確認画面で許可またはコピーするまでAIには渡りません。</span>
             </div>
             {requestComposer("確認用にAIに渡す内容（記憶）を作成")}
@@ -2192,7 +2190,7 @@ function ContextRequestsView({
                 onClick={() => approvePackForAi(currentPack)}
                 type="button"
               >
-                <CheckCircle2 size={16} />
+                <CheckCircle2 size={16} aria-hidden="true" />
                 {currentDeliveryState?.requiresApproval ? "この内容だけAIへ許可" : "この内容だけAIへ返す"}
               </button>
               <button
@@ -2201,7 +2199,7 @@ function ContextRequestsView({
                 onClick={() => copyPackForAi(currentPack)}
                 type="button"
               >
-                <Clipboard size={16} />
+                <Clipboard size={16} aria-hidden="true" />
                 {aiReady ? "ChatGPT/Claude用にコピー" : "確認してコピー"}
               </button>
               <button
@@ -2210,11 +2208,11 @@ function ContextRequestsView({
                 onClick={() => generateAnswer(currentPack)}
                 type="button"
               >
-                <Check size={16} />
+                <Check size={16} aria-hidden="true" />
                 ローカル回答を下書き
               </button>
               <button className="danger-button" disabled={requestClosed} onClick={denyActiveRequest} type="button">
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 AIへ渡さず拒否
               </button>
             </div>
@@ -2233,7 +2231,7 @@ function ContextRequestsView({
         ) : (
           <div className="context-pack">
             <div className={aiReady ? "pack-delivery ready" : "pack-delivery attention"}>
-              {aiReady ? <CheckCircle2 size={18} /> : <Clock size={18} />}
+              {aiReady ? <CheckCircle2 size={18} aria-hidden="true" /> : <Clock size={18} aria-hidden="true" />}
               <div>
                 <strong>{packDeliveryTitle(currentDeliveryState)}</strong>
                 <span>
@@ -2242,7 +2240,7 @@ function ContextRequestsView({
               </div>
             </div>
             <div className="pack-scope-summary">
-              <ShieldCheck size={16} />
+              <ShieldCheck size={16} aria-hidden="true" />
               <span>
                 {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠の抜粋だけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
@@ -2259,7 +2257,7 @@ function ContextRequestsView({
             {activeManualCopyPayload && (
               <div className="manual-copy-panel">
                 <div className="trust-note">
-                  <Clipboard size={16} />
+                  <Clipboard size={16} aria-hidden="true" />
                   <span>
                     クリップボードに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
                   </span>
@@ -2278,11 +2276,11 @@ function ContextRequestsView({
                     onClick={() => recordManualCopyDelivery(activeManualCopyPayload.packId)}
                     type="button"
                   >
-                    <CheckCircle2 size={16} />
+                    <CheckCircle2 size={16} aria-hidden="true" />
                     手動コピー済みとしてAudit記録
                   </button>
                   <button className="secondary-button" onClick={clearManualCopyPayload} type="button">
-                    <X size={16} />
+                    <X size={16} aria-hidden="true" />
                     閉じる
                   </button>
                 </div>
@@ -2290,7 +2288,7 @@ function ContextRequestsView({
             )}
             {currentPack.warnings.map((warning) => (
               <div className="warning-line" key={warning.message}>
-                <ShieldAlert size={16} />
+                <ShieldAlert size={16} aria-hidden="true" />
                 {warning.message}
               </div>
             ))}
@@ -2310,7 +2308,7 @@ function ContextRequestsView({
                       onClick={() => changePackItemVisibility(currentPack, item.factId, false)}
                       type="button"
                     >
-                      <EyeOff size={16} />
+                      <EyeOff size={16} aria-hidden="true" />
                       このAIには渡さない
                     </button>
                   </div>
@@ -2364,7 +2362,7 @@ function ContextRequestsView({
                       onClick={() => changePackItemVisibility(currentPack, exclusion.referencedId, true)}
                       type="button"
                     >
-                      <RefreshCw size={16} />
+                      <RefreshCw size={16} aria-hidden="true" />
                       戻す
                     </button>
                   </div>
@@ -2396,7 +2394,6 @@ function SearchView({
   searchMode,
   searchError,
   nativePath,
-  goInbox,
   goSources
 }: {
   query: string;
@@ -2415,7 +2412,6 @@ function SearchView({
   searchMode: SearchMode;
   searchError: string | null;
   nativePath: string | null;
-  goInbox: () => void;
   goSources: () => void;
 }) {
   const modeCopy = searchModeCopy(searchMode, Boolean(nativePath));
@@ -2447,7 +2443,7 @@ function SearchView({
           <Metric label="履歴/期限切れ" value={inventory.history} />
         </div>
         <div className={inventory.needsReview > 0 ? "trust-note attention-note" : "trust-note"}>
-          <ShieldCheck size={16} />
+          <ShieldCheck size={16} aria-hidden="true" />
           <span>
             AIに渡す記憶になるのはActiveな記憶だけです。再確認待ち、非表示、削除済み、期限切れ、置き換え済みの記憶はAIに渡しません。
           </span>
@@ -2455,11 +2451,11 @@ function SearchView({
         {!hasAnyFact && (
           <div className="action-row inventory-actions">
             <button className="primary-button" onClick={goSources} type="button">
-              <FileText size={16} />
+              <FileText size={16} aria-hidden="true" />
               取り込み元を追加
             </button>
-            <button className="secondary-button" onClick={goInbox} type="button">
-              <Inbox size={16} />
+            <button className="secondary-button" onClick={goSources} type="button">
+              <Inbox size={16} aria-hidden="true" />
               取り込みを確認
             </button>
           </div>
@@ -2475,7 +2471,7 @@ function SearchView({
             <Badge>{reviewFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <ShieldAlert size={16} />
+            <ShieldAlert size={16} aria-hidden="true" />
             <span>取り込み元が停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
           </div>
           <div className="domain-list">
@@ -2546,7 +2542,7 @@ function SearchView({
             <Badge>{filteredExcludedFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <EyeOff size={16} />
+            <EyeOff size={16} aria-hidden="true" />
             <span>非表示、削除済みの記憶です。AIに使う必要が戻ったものだけ、明示的にAIに渡す記憶へ戻します。</span>
           </div>
           <div className="domain-list">
@@ -2572,7 +2568,7 @@ function SearchView({
             <Badge>{supersededFacts.length}件</Badge>
           </div>
           <div className="trust-note">
-            <RefreshCw size={16} />
+            <RefreshCw size={16} aria-hidden="true" />
             <span>ここにある記憶は履歴として残っていますが、通常の検索結果やAIに渡す記憶には入りません。</span>
           </div>
           <div className="domain-list">
@@ -2649,22 +2645,22 @@ function SettingsView({
             <p className="eyebrow">バックアップ</p>
             <h3>暗号化バックアップ</h3>
           </div>
-          <Lock size={18} />
+          <Lock size={18} aria-hidden="true" />
         </div>
         <div className="form-stack">
           <Input label="パスフレーズ" value={passphrase} onChange={setPassphrase} placeholder="12文字以上・3種類以上の文字を含める" type="password" />
           <div className="trust-note attention-note">
-            <ShieldAlert size={16} />
+            <ShieldAlert size={16} aria-hidden="true" />
             <span>バックアップにはVault内の生活コンテキスト全体が入ります。推測されにくい長いパスフレーズを使い、共有や保管場所に注意してください。</span>
           </div>
           <button className="primary-button" onClick={exportBackup} type="button">
-            <Download size={16} />
+            <Download size={16} aria-hidden="true" />
             バックアップを作成
           </button>
           <Textarea label="バックアップJSON" value={backupText} onChange={setBackupText} placeholder="復元する場合はここに貼り付け" />
           <div className="restore-actions">
             <button className="secondary-button" onClick={previewRestoreBackup} type="button">
-              <Search size={16} />
+              <Search size={16} aria-hidden="true" />
               復元プレビュー
             </button>
             <button
@@ -2673,7 +2669,7 @@ function SettingsView({
               onClick={restoreBackup}
               type="button"
             >
-              <Upload size={16} />
+              <Upload size={16} aria-hidden="true" />
               現在のVaultを置き換える
             </button>
           </div>
@@ -2729,7 +2725,7 @@ function SettingsView({
                 </div>
               </div>
               <div className="trust-note attention-note">
-                <ShieldAlert size={16} />
+                <ShieldAlert size={16} aria-hidden="true" />
                 <span>
                   復元すると現在のVault全体をこのバックアップで置き換えます。内容の最高感度は{restorePreview.sensitivitySummary}です。
                   {restorePreview.newestSourceAt ? ` 最新Source: ${formatDateTime(restorePreview.newestSourceAt)}。` : ""}
@@ -2759,7 +2755,7 @@ function SettingsView({
         </div>
         <div className="form-stack">
           <div className="trust-note">
-            <ShieldCheck size={16} />
+            <ShieldCheck size={16} aria-hidden="true" />
             <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文は取り込み元と確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {legacyOfficeProviderCandidates.length > 0 ? (
@@ -2782,7 +2778,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Check size={16} />
+                    <Check size={16} aria-hidden="true" />
                     このコマンドを使う
                   </button>
                 </div>
@@ -2790,7 +2786,7 @@ function SettingsView({
             </div>
           ) : (
             <div className="trust-note">
-              <ShieldAlert size={16} />
+              <ShieldAlert size={16} aria-hidden="true" />
               <span>LibreOfficeはまだ見つかっていません。インストール後にこの画面を開き直すか、下の変換コマンドへローカル変換コマンドを直接入力してください。</span>
             </div>
           )}
@@ -2808,7 +2804,7 @@ function SettingsView({
                     onClick={() => copyText(guide.installCommand, `${guide.label}のLibreOfficeインストールコマンドをコピーしました。`)}
                     type="button"
                   >
-                    <Clipboard size={16} />
+                    <Clipboard size={16} aria-hidden="true" />
                     コピー
                   </button>
                   <button
@@ -2822,7 +2818,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Settings size={16} />
+                    <Settings size={16} aria-hidden="true" />
                     パスを反映
                   </button>
                 </div>
@@ -2859,7 +2855,7 @@ function SettingsView({
               }
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               LibreOffice引数
             </button>
             <button
@@ -2873,7 +2869,7 @@ function SettingsView({
               }
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               設定を消す
             </button>
           </div>
@@ -2885,12 +2881,12 @@ function SettingsView({
             <p className="eyebrow">保存先</p>
             <h3>Vault保存先</h3>
           </div>
-          <Lock size={18} />
+          <Lock size={18} aria-hidden="true" />
         </div>
         <div className="table-list">
           <div className="table-row">
             <div>
-              <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "Browser localStorage"}</strong>
+              <strong>{nativePath ? "暗号化SQLite + OS Keychain" : "ブラウザ保存"}</strong>
               <span>
                 {nativePath
                   ? `${nativePath} / Vault鍵はOSの安全な資格情報ストアで管理 / 最終同期: ${nativeRevision ? new Date(nativeRevision).toLocaleString() : "未保存"}`
@@ -2911,7 +2907,7 @@ function SettingsView({
         </div>
         <div className="form-stack">
           <div className="trust-note">
-            <ShieldCheck size={16} />
+            <ShieldCheck size={16} aria-hidden="true" />
             <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {ocrProviderCandidates.length > 0 ? (
@@ -2934,7 +2930,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Check size={16} />
+                    <Check size={16} aria-hidden="true" />
                     このコマンドを使う
                   </button>
                 </div>
@@ -2942,7 +2938,7 @@ function SettingsView({
             </div>
           ) : (
             <div className="trust-note">
-              <ShieldAlert size={16} />
+              <ShieldAlert size={16} aria-hidden="true" />
               <span>Tesseract OCRはまだ見つかっていません。インストール後にこの画面を開き直すか、下のOCRコマンドへローカルOCRコマンドを直接入力してください。</span>
             </div>
           )}
@@ -2960,7 +2956,7 @@ function SettingsView({
                     onClick={() => copyText(guide.installCommand, `${guide.label}のOCRインストールコマンドをコピーしました。`)}
                     type="button"
                   >
-                    <Clipboard size={16} />
+                    <Clipboard size={16} aria-hidden="true" />
                     コピー
                   </button>
                   <button
@@ -2974,7 +2970,7 @@ function SettingsView({
                     }
                     type="button"
                   >
-                    <Settings size={16} />
+                    <Settings size={16} aria-hidden="true" />
                     パスを反映
                   </button>
                 </div>
@@ -3005,7 +3001,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout" })}
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               基本引数
             </button>
             <button
@@ -3013,7 +3009,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrArgs: "{input} stdout -l jpn+eng" })}
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               日本語+英語
             </button>
             <button
@@ -3021,7 +3017,7 @@ function SettingsView({
               onClick={() => updateRuntimePreference({ ocrCommand: "", ocrArgs: "{input}", ocrTimeoutSeconds: 30 })}
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               設定を消す
             </button>
           </div>
@@ -3052,12 +3048,12 @@ function SettingsView({
           >
             {runtimePreferences.deliveryNotificationsEnabled ? (
               <>
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 通知を無効にする
               </>
             ) : (
               <>
-                <Bell size={16} />
+                <Bell size={16} aria-hidden="true" />
                 通知を有効にする
               </>
             )}
@@ -3074,12 +3070,12 @@ function SettingsView({
         </div>
         <div className="action-column">
           <button className="secondary-button" onClick={seedDemo} type="button">
-            <Sparkles size={16} />
+            <Sparkles size={16} aria-hidden="true" />
             デモデータ投入
           </button>
           <div className="danger-zone">
             <div className="trust-note attention-note">
-              <ShieldAlert size={16} />
+              <ShieldAlert size={16} aria-hidden="true" />
               <span>Vaultをクリアすると、取り込み元、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
             <div className="clear-impact-list" aria-label="Vault clear impact">
@@ -3103,7 +3099,7 @@ function SettingsView({
               onClick={clearVault}
               type="button"
             >
-              <X size={16} />
+              <X size={16} aria-hidden="true" />
               Vaultをクリア
             </button>
           </div>
@@ -3312,11 +3308,11 @@ function FactRow({
                 }}
                 type="button"
               >
-                <Check size={16} />
+                <Check size={16} aria-hidden="true" />
                 保存
               </button>
               <button className="secondary-button" onClick={() => setDraft(null)} type="button">
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
                 取消
               </button>
             </>
@@ -3335,7 +3331,7 @@ function FactRow({
               }
               type="button"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
               編集
             </button>
           )
@@ -3343,15 +3339,15 @@ function FactRow({
         {variant === "review" && changeFactLifecycle && (
           <>
             <button className="primary-button" onClick={() => changeFactLifecycle(fact.id, "keep_active")} type="button">
-              <CheckCircle2 size={16} />
+              <CheckCircle2 size={16} aria-hidden="true" />
               保持
             </button>
             <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
-              <EyeOff size={16} />
+              <EyeOff size={16} aria-hidden="true" />
               非表示
             </button>
             <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
-              <Trash2 size={16} />
+              <Trash2 size={16} aria-hidden="true" />
               削除
             </button>
           </>
@@ -3359,18 +3355,18 @@ function FactRow({
         {variant === "active" && changeFactLifecycle && (
           <>
             <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "hide")} type="button">
-              <EyeOff size={16} />
+              <EyeOff size={16} aria-hidden="true" />
               非表示
             </button>
             <button className="danger-button" onClick={() => changeFactLifecycle(fact.id, "delete")} type="button">
-              <Trash2 size={16} />
+              <Trash2 size={16} aria-hidden="true" />
               削除
             </button>
           </>
         )}
         {variant === "excluded" && changeFactLifecycle && (
           <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "restore")} type="button">
-            <RefreshCw size={16} />
+            <RefreshCw size={16} aria-hidden="true" />
             AIに渡す記憶へ戻す
           </button>
         )}

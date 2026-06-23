@@ -22,6 +22,7 @@ export interface HomeTimelineProps {
   state: VaultState;
   goSources: () => void;
   goConnections: () => void;
+  goRequests: () => void;
   seedDemo: () => void;
   onApprovePending?: (packId: string) => void;
   onApproveStanding?: (packId: string, clientId: string) => void;
@@ -222,6 +223,8 @@ function TimelineEmpty({
   pendingCandidateCount,
   goSources,
   goConnections,
+  goRequests,
+  hasConnectedSession,
   seedDemo,
 }: {
   scope: Scope;
@@ -229,6 +232,8 @@ function TimelineEmpty({
   pendingCandidateCount: number;
   goSources: () => void;
   goConnections: () => void;
+  goRequests: () => void;
+  hasConnectedSession: boolean;
   seedDemo: () => void;
 }) {
   // Zero-facts onboarding branch: vault has no active facts yet.
@@ -294,9 +299,15 @@ function TimelineEmpty({
         AIクライアントを接続して最初のリクエストを受け取ると、ここに履歴が表示されます。
       </p>
       <div className="qv-tl-empty__actions">
-        <Button variant="primary" size="sm" onClick={goConnections}>
-          AIを接続する
-        </Button>
+        {hasConnectedSession ? (
+          <Button variant="primary" size="sm" onClick={goRequests}>
+            テストリクエストを作成する
+          </Button>
+        ) : (
+          <Button variant="primary" size="sm" onClick={goConnections}>
+            AIを接続する
+          </Button>
+        )}
         <Button variant="quiet" size="sm" onClick={goSources}>
           情報を追加する
         </Button>
@@ -331,6 +342,7 @@ export function HomeTimeline({
   state,
   goSources,
   goConnections,
+  goRequests,
   seedDemo,
   onApprovePending,
   onApproveStanding,
@@ -386,6 +398,8 @@ export function HomeTimeline({
           pendingCandidateCount={pendingCandidateCount}
           goSources={goSources}
           goConnections={goConnections}
+          goRequests={goRequests}
+          hasConnectedSession={state.connectorSessions.some((s) => s.status === "connected")}
           seedDemo={seedDemo}
         />
       ) : (
