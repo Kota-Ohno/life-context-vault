@@ -30,6 +30,7 @@ import type {
   VaultState,
 } from "../types";
 import { domainLabel, sensitivityLabel } from "../vault";
+import { candidateMemoryStatus, memoryStatusLabel } from "../memoryStatus";
 import { PageHeader } from "../components/PageHeader";
 import { SectionDivider } from "../components/SectionDivider";
 import { Card } from "../components/Card";
@@ -280,7 +281,7 @@ export function IngestView({
               </Button>
               <div className="qv-ingest__trust-note">
                 <ShieldCheck size={14} />
-                <span>候補は承認後にFactになり、Context Pack確認後だけAIに渡ります。</span>
+                <span>記憶は承認後にAIへ渡せるようになり、確認後だけAIに渡ります。</span>
               </div>
             </div>
           }
@@ -307,7 +308,9 @@ export function IngestView({
                 <div className="qv-ingest__cand-meta">
                   <span className="qv-ingest__cand-domain">{domainLabel(candidate.domain)}</span>
                   <SensitivityBadge sensitivity={candidate.detectedSensitivity} />
-                  <span className="qv-ingest__cand-conf">{candidate.confidence}</span>
+                  <span className="qv-ingest__cand-status">
+                    {memoryStatusLabel(candidateMemoryStatus(candidate.status))}
+                  </span>
                   {conflictFactIds.length > 0 && (
                     <span className="qv-ingest__conflict-tag">衝突候補</span>
                   )}
@@ -336,7 +339,7 @@ export function IngestView({
                   <div className="qv-ingest__supersede">
                     <div className="qv-ingest__trust-note qv-ingest__trust-note--compact">
                       <RefreshCw size={13} />
-                      <span>古いFactを置き換える場合だけ選択します。置き換えたFactはContext Packから外れ、履歴に残ります。</span>
+                      <span>古い記憶を置き換える場合だけ選択します。置き換えた記憶はAIに渡らなくなり、履歴に残ります。</span>
                     </div>
                     <div className="qv-ingest__supersede-options">
                       {replacementOptions.map((fact) => (
@@ -360,7 +363,7 @@ export function IngestView({
                 {candidate.status === "blocked_sensitive" && (
                   <div className="qv-ingest__warning-line">
                     <ShieldAlert size={14} />
-                    センシティブ候補です。保存するとContext Pack使用時に確認対象になります。
+                    要確認の記憶です。保存するとAIに渡す前に毎回確認します。
                   </div>
                 )}
 
@@ -368,7 +371,7 @@ export function IngestView({
                 <div className="qv-ingest__cand-actions">
                   <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
                     <Check size={14} />
-                    {selectedSupersedes.length > 0 ? "置き換えて保存" : "保存"}
+                    この記憶を承認
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
                     <ShieldAlert size={14} />
@@ -399,7 +402,7 @@ export function IngestView({
           <p className="qv-ingest__add-eyebrow">会話・メモから追加</p>
           <div className="qv-ingest__trust-note">
             <ShieldCheck size={14} />
-            <span>ここで保存されるのはSourceと未承認候補です。AIへ渡るのは承認したFactから作るContext Packだけです。</span>
+            <span>ここで保存されるのは取り込み元と未承認の記憶です。AIへ渡るのは承認した記憶だけです。</span>
           </div>
           <div className="qv-ingest__form-stack">
             <FieldInput label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
@@ -564,7 +567,7 @@ function IngestSourceRow({
             />
             <div className="qv-ingest__trust-note">
               <RefreshCw size={13} />
-              <span>保存すると未承認候補を再生成します。既存のApprovedFactは再確認待ちになり、関連Context Packは無効化されます。</span>
+              <span>保存すると未承認の記憶を作り直します。承認済みの記憶は再確認待ちになり、AIに渡した内容（記憶）は無効化されます。</span>
             </div>
           </div>
         ) : draft ? (
@@ -631,7 +634,7 @@ function IngestSourceRow({
                 <strong>このSource本文を消去します</strong>
                 <span>
                   本文は戻せません。未承認候補 {linkedCandidateCount}件、関連Fact {linkedFactCount}件、
-                  関連Context Pack {linkedPackCount}件に影響します。
+                  AIに渡した内容（記憶）{linkedPackCount}件に影響します。
                 </span>
                 <Button variant="quiet" size="sm" onClick={() => setConfirmBodyPurge(false)}>
                   <X size={13} />
