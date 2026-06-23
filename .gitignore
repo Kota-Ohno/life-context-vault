@@ -9,3 +9,8 @@ deploy/relay/compose.env
 
 # SDD subagent scratch (briefs, reports, diffs, progress ledger)
 .superpowers/
+
+# Session/tool scratch
+.playwright-mcp/
+.serena/
+.takt/

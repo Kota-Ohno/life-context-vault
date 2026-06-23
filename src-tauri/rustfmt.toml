@@ -1,6 +1,0 @@
-# The Rust tree is intentionally 2-space indented (matches the repo-wide 2-space
-# convention; see CLAUDE.md "Conventions"). Pin rustfmt to 2-space so
-# `cargo fmt --check` (run by `npm run product:check`) passes without a
-# repo-wide reformat.
-edition = "2021"
-tab_spaces = 2
