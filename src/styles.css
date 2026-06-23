@@ -3472,23 +3472,6 @@ button:focus-visible {
   opacity: 0.8;
 }
 
-.lang-toggle {
-  align-self: center;
-  margin-top: 0.5rem;
-  background: transparent;
-  border: 1px solid rgba(125, 125, 125, 0.3);
-  border-radius: 6px;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  color: inherit;
-}
-
-.lang-toggle:hover {
-  background: rgba(125, 125, 125, 0.1);
-}
-
 /* ============================================================
    QV Design System — base components (A2)
    All rules prefixed .qv- to avoid collisions with legacy CSS.
@@ -4112,8 +4095,7 @@ button:focus-visible {
   gap: var(--space-1);
 }
 
-.qv-rail__settings-btn,
-.qv-rail__lang-btn {
+.qv-rail__settings-btn {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -4127,13 +4109,11 @@ button:focus-visible {
   transition: background var(--motion-fast), color var(--motion-fast);
 }
 
-.qv-rail__settings-btn:hover,
-.qv-rail__lang-btn:hover {
+.qv-rail__settings-btn:hover {
   background: var(--bg-sunken);
   color: var(--ink);
 }
-.qv-rail__settings-btn:focus-visible,
-.qv-rail__lang-btn:focus-visible {
+.qv-rail__settings-btn:focus-visible {
   outline: 2px solid var(--focus-ring, var(--pine));
   outline-offset: 2px;
 }
