@@ -1494,7 +1494,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Standing delivery設定を保存できませんでした。"));
+        setNotice(formatVaultError(error, "自動配信設定を保存できませんでした。"));
         return;
       }
     }
@@ -4099,7 +4099,7 @@ export function homeCaptureSafetySummary(
 
   return {
     tone: "attention",
-    title: "Passive Captureは停止中",
+    title: "受動キャプチャは停止中",
     body:
       "停止中はブラウザ拡張や手動Captureから書き込みません。必要なときだけ開始できます。",
     allowedSitesLabel,
