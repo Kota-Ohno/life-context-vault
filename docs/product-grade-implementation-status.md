@@ -80,62 +80,8 @@ Last updated: 2026-06-13
   - `request_context_pack`, `propose_memory`, and `get_request_status` now use shared Rust Vault Core APIs
 - Added Connections UI setup guidance for Claude Desktop-style MCP configuration.
 - Added top-bar native Vault Sync action so the app can reload MCP-written requests or memory proposals while open.
-- Added OAuth-capable HTTP MCP relay and local Vault Agent:
-  - `POST /mcp` accepts MCP JSON-RPC over HTTP and validates Streamable HTTP `Content-Type`, `Accept`, and `MCP-Protocol-Version` headers
-  - fulfilled MCP `initialize` responses issue memory-only `MCP-Session-Id` values, later POSTs validate client-bound sessions, and `DELETE /mcp` terminates sessions
-  - `GET /health`
-  - `GET /.well-known/oauth-protected-resource`
-  - `GET /.well-known/oauth-authorization-server`
-  - `POST /oauth/register`
-  - Authorization Code + PKCE endpoints at `/oauth/authorize`, `/oauth/approve`, and `/oauth/token`
-  - ChatGPT-style CIMD public-client `client_id` URLs are accepted only for allowlisted public HTTPS metadata hosts and only after cheap OAuth request validation, metadata fetch, and document validation; unsafe URLs, non-allowlisted hosts, mismatched `redirect_uri`, and token exchange client id mismatches are rejected
-  - device pairing endpoints at `/pairing/start` and `/pairing/status`
-  - local Agent WebSocket endpoint at `/agent/ws`
-  - `lcv-agent` forwards paired relay requests to the local encrypted `lcv-mcp` sidecar
-  - minimum OAuth scopes are mapped per exposed MCP tool
-  - static bearer token fallback remains for local development
-  - loopback bind by default
-  - OAuth dynamic client registrations are persisted in a relay state store
-  - CIMD clients do not create DCR rows; the Relay uses the verified CIMD URL as the OAuth client id and still requires PKCE S256 plus resource binding
-  - recent relay request audit metadata is persisted without MCP bodies or Context Pack bodies
-  - `GET /relay/state` exposes metadata-only relay status for local Control Center and smoke checks, including MCP session metadata without request bodies
-- Added Relay state retention controls:
-  - request metadata is pruned by both maximum count and default 30-day retention
-  - OAuth client registrations remain durable by default but can be expired through `LCV_RELAY_CLIENT_RETENTION_DAYS` or `LCV_RELAY_CLIENT_RETENTION_SECONDS`
-  - relay state persistence keeps metadata-only backup generations using `LCV_RELAY_STATE_BACKUP_COUNT`, defaulting to 3 and allowing 0 to disable backups
-  - `/relay/state` exposes retention settings without exposing MCP bodies, Raw Sources, Vault content, or Context Pack bodies
-- Added guarded Hosted Relay deployment initialization:
-  - `npm run hosted-relay:init` generates `deploy/relay/relay.env` and `deploy/relay/compose.env` from user-provided public host, ACME email, and tenant id
-  - generated Relay secrets are random, written with private file permissions, and never printed to the terminal
-  - the initializer refuses accidental overwrites unless `--force` is passed, supports `--dry-run`, and immediately runs the hosted Relay config checker
-  - product release checks now validate both the initializer syntax and a dry-run generated config
-- Added Relay tenant isolation controls:
-  - loopback development defaults to `LCV_RELAY_TENANT_ID=local`
-  - non-loopback binds require explicit `LCV_RELAY_TENANT_ID`
-  - persisted relay state stores the tenant id and refuses to load if configured for a different tenant
-  - legacy tenantless local relay state migrates to the configured tenant on load
-  - `/health` and `/relay/state` expose tenant id as operational metadata without exposing Vault or Context Pack bodies
-- Added short-lived Relay Context Pack handoff cache:
-  - `POST /relay/handoff` accepts signed, already confirmed MCP responses for approved Context Packs
-  - handoff responses are memory-only, TTL-bound, and default to 10 minutes
-  - the Relay accepts only fulfilled `ContextPack only` MCP responses
-  - accepted handoffs are canonicalized before memory caching so stray Raw Source, Vault snapshot, unapproved Candidate, or tool-result fields cannot ride along with an otherwise valid signed payload
-  - `life_context.get_request_status` can return a cached handoff response when the local Agent path is temporarily offline
-  - `/relay/state` exposes only handoff metadata and retention settings, never Pack body text
-  - relay state persistence and metadata backups still exclude Context Pack bodies
-- Added Connections UI setup guidance for OAuth relay, pairing, local Agent, connector URLs, and Remote MCP diagnostics.
-- Added app-managed AI Access Service in the Tauri Control Center:
-  - `AI連携を開始` launches bundled `lcv-relay` and `lcv-agent`
-  - app requests a pairing code and connects Agent automatically
-  - status shows Relay reachability, Agent connection, managed process state, and MCP URL
-  - the top AI Access panel exposes a copyable MCP URL for connector setup
-  - the Remote Relay setup section exposes copyable health and Streamable HTTP `/mcp` smoke-test commands
-  - diagnostics distinguish reachable Relay, expected OAuth `401`, and header-contract `406/415` failures
-  - external relays are status-only; the app does not automatically attach the local Agent to a relay it did not start
-  - `管理中の連携を停止` only stops processes started by the app
-  - closing the app window hides Control Center into the menu bar/system tray and keeps app-managed Relay and Agent running
-  - `Quit Life Context Vault` from the menu bar/system tray stops app-managed Relay and Agent before process exit
-  - `npm run tauri:bundle` embeds `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host`
+- ~~Added OAuth-capable HTTP MCP relay (`lcv-relay`), local Vault Agent (`lcv-agent`), CIMD/DCR/PKCE OAuth, hosted relay deployment, relay retention controls, relay tenant isolation, and relay handoff cache.~~ **Removed in Simplify 1.1.** These binaries and all related relay/agent/OAuth surfaces were deleted. The product is now 2 binaries: the Tauri app + `lcv-mcp`.
+- Added Connections UI setup guidance for Local MCP (`installClaudeDesktopConfig` flow).
 - Added always-available AI Access operations:
   - Connections can install/remove a macOS LaunchAgent login item for Life Context Vault
   - Startup item generation now supports macOS LaunchAgent, Windows Startup folder command, and Linux XDG autostart desktop entry paths
@@ -174,13 +120,11 @@ Last updated: 2026-06-13
   - removed items stay visible as `user_hidden` exclusions while Pack items, source snippets, warnings, and max sensitivity are recalculated
   - `confirm_native_context_pack` and `deny_native_context_pack_request` move external-AI approval decisions through Vault Core
   - Requests shows the exact number of Fact items/snippets scheduled for sending and exposes per-item "do not send to this AI" controls
-- Added Chrome browser capture extension and Native Messaging host:
+- Added Chrome browser capture extension and Native Messaging host (**`lcv-capture-host` binary removed in Simplify 1.1**; browser-extension code remains but the native host sidecar is gone):
   - Manifest V3 extension under `browser-extension/`
   - popup-triggered capture for ChatGPT, Claude, and Gemini
-  - native host `lcv-capture-host`
   - capture writes `passive_capture` Source, `PassiveCaptureEvent`, and unapproved Inbox candidates through shared Rust Vault Core
   - host refuses capture unless Passive Capture is enabled and the site is allowed
-  - the host no longer owns extraction, redaction, persistence, or audit logic; it only adapts the Native Messaging protocol to Vault Core
 - Added Browser Capture host installer:
   - Connections accepts the unpacked Chrome extension id and installs the Chrome Native Messaging host manifest from the desktop app
   - extension ids are validated before writing
@@ -268,27 +212,14 @@ Last updated: 2026-06-13
   - `npm run product:check` runs frontend tests/build, Rust tests, Rust release binary build, format check when rustfmt is installed, and `git diff --check`
   - `npm run product:check:full` additionally runs the Tauri sidecar integration build, local SSE soak, and large retrieval benchmark
   - `product:check` can run smaller benchmark profiles through `-- --include-bench --bench-facts <n> --bench-chunks-per-fact <n>`
-  - `product:check` also validates the documented hosted Relay configuration baseline, while real deployed endpoints use `npm run hosted-relay:smoke`
+  - `product:check` runs standard app/Rust/release-binary checks
 - Added GitHub Actions product qualification workflow:
   - `.github/workflows/product-check.yml` runs `npm run product:check` on pull requests and pushes to `main`/`master`
   - scheduled weekly runs and manual `workflow_dispatch` can include a bounded retrieval benchmark profile
   - workflow summaries and an uploaded `product-check.log` preserve release-check and benchmark output for review
-- Added hosted Relay deployment artifacts:
-  - `deploy/relay/Dockerfile` builds a relay-only container with direct Vault sidecar fallback disabled
-  - `.dockerignore` excludes local Vault databases, relay state, build output, and dependency noise from container context
-  - `scripts/check-hosted-relay-config.mjs` validates the hosted Relay environment boundary: public HTTPS origin, no direct sidecar/Vault settings, no static bearer fallback, no hosted auto-approve, long admin/handoff secrets, exact HTTPS CORS origins, tenant id, durable metadata path, and hosted handoff TTL at or below 600 seconds
-  - `scripts/hosted-relay-smoke.mjs` verifies a deployed HTTPS Relay health, OAuth metadata, protected-resource metadata, trusted/untrusted CORS behavior, OAuth challenge behavior, optional staging OAuth registration/owner-approval/PKCE/authenticated MCP when an admin token is supplied, and metadata-only `/relay/state`
-  - `docs/hosted-relay-deployment.md` defines required public HTTPS settings, durable metadata volume, automated/manual smoke tests, token rotation, and incident runbooks
-  - hosted deployment guidance keeps the relay metadata-only and requires local Agent/Vault access for real Context Pack generation
-- Added release-gated HTTP Relay smoke:
-  - `npm run relay:smoke` starts release `lcv-relay` and `lcv-mcp` on a random loopback port with a temporary encrypted Vault
-  - the smoke checks health, method boundary, CORS, OAuth challenge, header-contract failures, MCP session issue/reuse/delete, dynamic OAuth client registration, unsafe redirect rejection, approval-page consent, S256 PKCE token exchange, wrong-verifier/resource/code-reuse rejection, insufficient-scope `403`, OAuth bearer `tools/list`, and metadata-only relay persistence
-  - persisted relay state is asserted to keep registered OAuth client metadata while excluding MCP tool responses, MCP session ids, OAuth access tokens, authorization codes, and PKCE verifiers
-  - `npm run product:check` now runs the smoke after release sidecar binaries are built
-- Added local SSE soak coverage:
-  - `npm run relay:sse-soak` opens repeated authenticated Streamable HTTP receive channels against release `lcv-relay`
-  - the soak verifies ready events, generated-event-id resume, unknown-cursor non-storage/non-echo, bounded recent SSE diagnostics, and metadata-only persisted state
-  - `npm run product:check:full` includes the soak for release candidates, while `product:check` keeps the default loop bounded
+- ~~Added hosted Relay deployment artifacts: `deploy/relay/Dockerfile`, hosted-relay-config checker, smoke scripts, and `docs/hosted-relay-deployment.md`.~~ **Removed in Simplify 1.1.**
+- ~~Added release-gated HTTP Relay smoke (`npm run relay:smoke`).~~ **Removed in Simplify 1.1.**
+- ~~Added local SSE soak coverage (`npm run relay:sse-soak`).~~ **Removed in Simplify 1.1.**
 - Added Streamable HTTP SSE receive-channel support:
   - `GET /mcp` now returns an authenticated `text/event-stream` ready event for clients that open the MCP receive channel
   - `Last-Event-ID` is accepted for compatibility; generated Relay SSE event ids can resume the same client/session stream inside the bounded in-memory metadata window
@@ -323,12 +254,10 @@ Last updated: 2026-06-13
 
 ## Still Remaining For Full Product Grade
 
-- Hosted operations outside this repository: actual public HTTPS Relay domain, DNS, platform secret store, persistent volume, backups, uptime monitoring, and provider registration against the real `/mcp` endpoint.
 - Bundled OCR and Office conversion runtimes for users who do not want to install Tesseract or LibreOffice separately.
-- CIMD hardening for custom host allowlists if provider certification requires connect-time IP pinning, metadata caching, fetch rate limiting, `private_key_jwt`, or confidential-client assertions; the current Relay supports allowlisted public-client CIMD metadata document validation with PKCE/resource binding plus DCR fallback.
 - Provider-assisted semantic conflict detection, multi-Fact merge, and entity-level versioning beyond the current deterministic date/current-value Candidate conflict annotation and explicit supersede flow.
 - Hosted CI threshold tuning after real runner history accumulates; the 100k Fact / 500k SourceChunk benchmark remains an explicit local release-candidate check because of dataset size.
-- Remote MCP hosted-client certification and provider-specific long-lived SSE behavior if certification requires more than the current metadata-only resume window and session lifecycle.
+- Cloud AI clients (ChatGPT, Claude web) use copy/export fallback only; no hosted relay path exists (removed in Simplify 1.1).
 
 ## Verification
 
@@ -340,18 +269,9 @@ Last updated: 2026-06-13
 - Claude Desktop config merge unit test preserving existing MCP servers
 - Context Pack approval tests proving external-AI confirmation does not create a local answer and AI-bound payloads omit internal fields
 - stdio MCP smoke test for `initialize`, `tools/list`, and `life_context.propose_memory`
-- `npm run relay:build`
-- `npm run agent:build`
 - `npm run sidecars:prepare`
 - MCP sidecar smoke test for external `request_context_pack` persistence and `get_request_status` lookup against the same encrypted Vault
 - stdio MCP binary smoke test for shared-core `life_context.request_context_pack` returning a `ContextPack only` payload
-- HTTP relay smoke test for `/health`, OAuth metadata, unauthorized `/mcp`, authorized `tools/list`, encrypted direct fallback writes, paired Agent WebSocket writes, persisted OAuth client reload, and metadata-only `/relay/state`
-- Relay retention tests proving old request metadata is pruned by TTL and OAuth client registrations are pruned only when a client TTL is configured
-- Relay state backup tests proving metadata-only backup generations are rotated without storing Context Pack bodies
-- Relay tenant tests proving non-loopback binds require tenant id, mismatched tenant state is refused, and legacy tenantless metadata migrates to the configured tenant
-- Relay handoff tests proving only fulfilled `ContextPack only` responses are accepted, `/relay/state` omits Pack body text, and offline `get_request_status` can return a still-valid cached handoff
-- Relay handoff signature tests proving unsigned/spoofed handoffs are rejected before short-lived cache storage
-- Relay HTTP parser tests proving oversized request bodies and headers are rejected before unbounded allocation
 - MCP tests proving low-sensitivity external Context Packs are queued for user confirmation instead of auto-returned
 - Native Context Pack expiry tests proving confirmed-but-expired Packs are not returned to external clients
 - Provider execution tests proving noisy OCR/Office providers do not deadlock on pipe output and failed conversion removes temp directories
@@ -360,9 +280,8 @@ Last updated: 2026-06-13
 - Windows Startup command and Linux XDG desktop-entry unit tests proving startup helpers run only the current app binary and do not include Vault keys or Context Pack payloads
 - Background lifecycle unit tests proving window close hides to tray without stopping managed AI Access, while window destruction/quit still stops managed Relay and Agent
 - Bundled sidecar smoke test from `Life Context Vault.app/Contents/MacOS` for Relay -> Agent -> MCP `tools/list`
-- `npm run capture:build`
 - Chrome Native Messaging host manifest generation unit tests for extension id validation and allowed origin shape
-- Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation
+- ~~Native Messaging host smoke test for disabled capture refusal and enabled capture candidate generation~~ (`lcv-capture-host` removed in Simplify 1.1)
 - SQLCipher tests for encrypted DB plain-read refusal and plaintext PoC DB migration
 - Native Vault FTS tests proving active ApprovedFact-only search, SQL-side filters, and escaped user query terms
 - Native projection-state tests proving MCP/Relay-style external `vault_state` writes are projected into normalized tables/FTS and app saves mark the projected revision
@@ -387,15 +306,14 @@ Last updated: 2026-06-13
 - Native and browser fallback policy update tests proving per-client domain allowlists persist, deduplicate, audit their count, reject empty/unknown/mixed-invalid domain updates without widening access, fail closed for corrupted empty persisted allowlists, and invalidate existing Packs before later confirmation or retrieval
 - MCP Context Pack tests proving `request_context_pack` uses the shared Vault Core path for sensitive queued Packs and low-risk returned Packs without Raw Source body leakage
 - MCP shared Core tests proving `propose_memory` creates Candidates but not Facts, `get_request_status` strips internal Pack fields, and confirmed Packs are hidden from clients that do not own the original request
-- Agent tests proving Remote Relay client identity is forwarded to the MCP sidecar as trusted runtime metadata
-- Entry-point smoke tests proving MCP, Relay, and Capture-created Vault DBs are not readable as plaintext SQLite
+- Entry-point smoke tests proving MCP-created Vault DBs are not readable as plaintext SQLite
 - Large retrieval benchmark: `npm run retrieval:bench` on 2026-06-12 seeded 100,000 Facts and 500,000 SourceChunks in 1786.4ms, measured FTS P95 at 160.9ms, and measured Context Pack generation P95 at 63.6ms, below the 300ms / 1000ms targets
 - Product release check wrapper covering standard app/Rust/release-binary checks and optional full Tauri + retrieval benchmark qualification
 - GitHub Actions product check workflow for PR/push checks plus weekly/manual bounded retrieval benchmark runs
 - Hosted Relay Dockerfile and deployment runbook with metadata-only state, token rotation, incident response, and smoke-test guidance
 - `npm run tauri:build`
 - `npm run tauri:bundle`
-- Bundle inspection confirmed `lcv-mcp`, `lcv-relay`, `lcv-agent`, and `lcv-capture-host` are embedded under `Life Context Vault.app/Contents/MacOS`.
+- Bundle inspection confirmed `lcv-mcp` is embedded under `Life Context Vault.app/Contents/MacOS`. (`lcv-relay`, `lcv-agent`, `lcv-capture-host` were removed in Simplify 1.1.)
 - Browser UI checks:
   - desktop `1440x980`: Connections MCP setup card displays without horizontal overflow
   - mobile `390x844`: Connections MCP setup card and code blocks fit without page-level horizontal overflow
@@ -634,7 +552,7 @@ Last updated: 2026-06-13
 - Product fit: accepted; everyday AI clients now have a documented public HTTPS relay shape while the actual Vault remains on the user's device.
 - Security/privacy: accepted; the Docker defaults disable direct sidecar fallback, require external secrets for public binds, persist only metadata under `/data`, and keep Context Pack handoff bodies memory-only.
 - Hosted operations: accepted; deployment docs define required env vars, durable volume, smoke tests, admin token rotation, static fallback token rotation, and incident response.
-- Maintainability: accepted; the Dockerfile builds only `lcv-relay`, `.dockerignore` keeps local Vault/state/build artifacts out of the context, and the runbook links from `docs/http-mcp-relay.md`.
+- Maintainability: accepted at the time; the Dockerfile built only `lcv-relay`. *(Relay and associated docs removed in Simplify 1.1.)*
 - Verification: Dockerfile/runbook added, YAML/docs diff checked, and local `npm run product:check` had already passed for the codebase before this docs/deploy-only slice.
 
 ### First-Run AI Access UX Slice

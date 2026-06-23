@@ -177,8 +177,6 @@ type ConnectionDiagnosticTone = "ready" | "attention" | "blocked" | "neutral";
 type ConnectionDiagnosticAction =
   | "open_desktop"
   | "start_ai_access"
-  | "start_hosted_agent"
-  | "copy_web_connector"
   | "open_requests"
   | "refresh";
 
@@ -198,23 +196,6 @@ interface ConnectionDiagnostic {
   issue: string | null;
   primaryAction: ConnectionDiagnosticAction;
   items: ConnectionDiagnosticItem[];
-}
-
-interface HostedRelayRegistrationReadiness {
-  tone: ConnectionDiagnosticTone;
-  title: string;
-  summary: string;
-  nextStep: string;
-  items: ConnectionDiagnosticItem[];
-}
-
-interface WebAiRegistrationGuide {
-  provider: string;
-  status: ConnectionDiagnosticState;
-  statusLabel: string;
-  steps: string[];
-  actionLabel: string;
-  boundary: string;
 }
 
 type ContextPackBoundaryTone = "ready" | "attention";
@@ -370,10 +351,6 @@ const policySensitivityOptions: SensitivityTier[] = [
 ];
 
 const localMcpBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp";
-const localAgentBinaryPath = "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-agent";
-const localRelayBaseUrl = "http://127.0.0.1:8765";
-const localRelayUrl = `${localRelayBaseUrl}/mcp`;
-const localRelayToken = "dev-local-token";
 
 /** Set to true to mount the QV component gallery at startup (dev only). */
 const SHOW_QV_GALLERY = false;
@@ -3102,7 +3079,7 @@ export function auditReceiptBody(event: AuditEvent): string {
 
 function deliveryChannelLabel(channel: string): string {
   if (channel === "clipboard_copy") return "コピー";
-  if (channel === "relay_handoff") return "Relay";
+
   return channel || "Context Pack";
 }
 

@@ -29,8 +29,10 @@ The extension captures the current ChatGPT, Claude, or Gemini chat page and send
 
 ## Build Native Host
 
+> **Note:** `lcv-capture-host` was removed in Simplify 1.1. The `capture:build` script no longer exists.
+
 ```bash
-npm run capture:build
+# npm run capture:build  # (removed in Simplify 1.1)
 ```
 
 ## Load Extension
@@ -53,7 +55,7 @@ Use the Tauri desktop app for the normal path:
 2. Paste the generated Chrome extension id into **Chrome拡張ID**.
 3. Click **Native Hostを追加**.
 
-The app writes the Native Messaging host manifest for the bundled `lcv-capture-host`, backs up any previous manifest with the same host name, and refuses invalid extension IDs.
+The app writes the Native Messaging host manifest for the bundled `lcv-capture-host`. **Note: the `lcv-capture-host` binary was removed in Simplify 1.1. The browser-extension code remains, but the native host sidecar no longer exists. The install flow described below applies to the pre-Simplify 1.1 state.**
 
 Manual fallback:
 

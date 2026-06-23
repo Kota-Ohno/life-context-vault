@@ -215,16 +215,6 @@ interface NativeContextPackMutationPayload {
   generatedBy: "native_vault_core";
 }
 
-export interface RelayContextPackHandoffResult {
-  stored: boolean;
-  requestId: string;
-  expiresAt: number | null;
-  ttlSeconds: number | null;
-  state: VaultState | null;
-  updatedAt: string | null;
-  generatedBy: "native_relay_handoff";
-}
-
 interface NativeSourceIngestPayload {
   payload: string;
   updatedAt: string | null;
@@ -446,11 +436,7 @@ export async function saveNativeRuntimePreferences(
   return true;
 }
 
-/**
- * Request a managed-relay pairing URL from the operator's hosted relay
- * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then
- * passed to `startAiAccessAgentForRelay` to complete one-click pairing.
- */
+/** Install the local Claude Desktop MCP config entry for lcv-mcp. */
 export async function installClaudeDesktopConfig(): Promise<ClaudeDesktopConfigInstallResult | null> {
   if (!isTauriRuntime()) return null;
   const { invoke } = await import("@tauri-apps/api/core");

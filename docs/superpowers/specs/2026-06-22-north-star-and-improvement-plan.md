@@ -31,8 +31,10 @@ and frictionless consumption, governed by safety.
   cloud service to be classified — doing so would break the very boundary that justifies the layer.
 - **Trust under zero-touch is held after the fact.** Removing the pre-delivery gate for low tiers is
   compensated by a non-blocking delivery notification + the disclosure ledger + one-tap revocation.
-- **Relay is necessary and minimal.** The hosted relay is the only path by which cloud AI tools can
-  read the layer, so it stays — metadata-only, highest security bar, expanding *clients* not surface.
+- **Relay is necessary and minimal.** *(Correction: the hosted relay was removed in Simplify 1.1.
+  Cloud AI tools currently use copy/export fallback only. "Universal" now means "read by LOCAL MCP
+  clients (Claude Desktop, Codex, …)". The relay decision may be revisited in a future release, but
+  it is not currently present in the codebase.)*
 
 ## 3. Decision Ledger (validated)
 
@@ -43,7 +45,7 @@ and frictionless consumption, governed by safety.
 | 3 | Tiering safety | **Fail-safe** default — unknown is never silently public |
 | 4 | Classification locale | **Local-only** (no leak); cloud classification is out |
 | 5 | Ingestion | **Curated/deliberate**; broad auto-mass-capture is out of scope |
-| 6 | Distribution | **Relay stays** (necessary); kill onboarding friction; broaden clients |
+| 6 | Distribution | **Relay stays** (necessary); kill onboarding friction; broaden clients | *(Correction: relay removed in Simplify 1.1; currently local-MCP-only + copy fallback)* |
 | 7 | Zero-touch trust | **Non-blocking notification + post-hoc ledger + revoke** |
 | 8 | Zero-touch semantics | **Allowlist**: zero-touch iff (sensitivity ≤ threshold) ∧ (confidence ≥ bar) ∧ (not unclassified) |
 | 9 | Migration | **Lazy re-classify**; legacy facts treated as *unclassified*; batch-classify locally on upgrade |
@@ -54,8 +56,11 @@ and frictionless consumption, governed by safety.
 | R1 | P0/P1 sequencing | ship fail-safe default **together with** the deterministic-signal expansion; local model follows |
 | R3 | CI hygiene | add `rustfmt.toml` pinning 2-space indent so `cargo fmt --check` passes without reformatting |
 
-R2 (the precise relay onboarding-friction mechanism) is deferred to design-time and requires
-measuring the current per-client pairing flow (OAuth Code+PKCE+DCR+CIMD, pairing code) in code.
+R2 (the precise relay onboarding-friction mechanism) was deferred to design-time. *Correction (post-spec):
+the relay was removed in Simplify 1.1. R2 is now reframed as LOCAL MCP onboarding friction: the
+`installClaudeDesktopConfig` flow, the hard-coded dev path in the copy fallback, missing non-macOS
+key env guidance, and unactionable dev/preview errors are the current friction points. Cloud clients
+use copy-fallback only.*
 
 ## 4. Necessary vs Unnecessary Elements
 
@@ -71,8 +76,10 @@ measuring the current per-client pairing flow (OAuth Code+PKCE+DCR+CIMD, pairing
   `detectSensitivity` (`src/vault.ts`). BUILD.
 - **Opt-in local classification provider** — env-gated local command mirroring `LCV_OCR_COMMAND` /
   `LCV_LEGACY_OFFICE_COMMAND` (bounded, stdout-capped). BUILD (after deterministic baseline).
-- **Distribution stack** (`lcv-mcp`, `lcv-relay`, `lcv-agent`): broaden supported clients; minimize
-  pairing friction; relay stays metadata-only and security-hardened. INVEST.
+- **Distribution stack** (`lcv-mcp` + the app's Claude-config installer): *(Correction: `lcv-relay`
+  and `lcv-agent` were removed in Simplify 1.1. Current distribution is local MCP via
+  `installClaudeDesktopConfig` + copy fallback for cloud clients.)* Broaden supported local clients;
+  minimize `installClaudeDesktopConfig` friction; relay may return in a future phase. INVEST.
 - **Disclosure ledger + revocation** (Home timeline) and **non-blocking OS delivery notification**
   on the existing tray / AI-access-supervisor. KEEP / ADD.
 - **Metadata-only audit receipts** (no pack/source/candidate bodies). KEEP.
@@ -121,17 +128,19 @@ and pass `npm run product:check`, per repo convention.
   deterministic remains the default and the floor.
 - **P2 — non-blocking OS delivery notification**, coalesced, deep-linked to the ledger; complements
   the existing post-hoc timeline.
-- **P3 — distribution onboarding friction.** Resolve R2 (measure the per-client pairing flow first),
-  then streamline pairing and broaden supported clients; keep relay metadata-only + hardened.
+- **P3 — distribution onboarding friction.** *(R2 reframed post-Simplify 1.1: relay removed; friction
+  is now the LOCAL MCP `installClaudeDesktopConfig` flow, hard-coded dev path, missing non-macOS key
+  env, and unactionable dev/preview errors.)* Streamline local MCP setup and broaden supported clients.
 - **P4 — scope discipline.** Explicitly decline auto-mass-capture; keep ingestion curated. Document the
   boundary so future work doesn't drift toward surveillance.
 - **Cross-cutting — CI hygiene (R3).** Add `rustfmt.toml` (2-space) so `product:check`'s
   `cargo fmt --check` passes without a repo-wide reformat, making the release gate meaningful again.
 
 ## 7. Open Items (resolve during design)
-- **R2 — relay onboarding mechanism.** Identify exactly where pairing friction lives (OAuth
-  Code+PKCE+DCR+CIMD, pairing-code handoff) by reading the relay/agent flow, then choose the
-  streamlining. Requires code measurement; not decidable from first principles.
+- **R2 — relay onboarding mechanism.** *(Reframed post-Simplify 1.1: relay removed. Friction is now
+  the local MCP `installClaudeDesktopConfig` flow — hard-coded dev sidecar path, missing non-macOS
+  `LCV_VAULT_DB_KEY` guidance, and unactionable errors in the browser/dev preview. Resolve by
+  measuring the local MCP install flow in code.)*
 - **Confidence calibration.** What confidence the deterministic signals actually emit, and where the
   global default bar sits, needs empirical tuning against real vault content.
 - **`unclassified` representation.** Distinct sensitivity value vs `classified=false` flag — pick one
