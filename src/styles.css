@@ -4488,6 +4488,96 @@ button:focus-visible {
   margin-top: var(--space-2);
 }
 
+/* ─── First-run onboarding steps (factCount === 0) ─────────── */
+.qv-onboarding-steps {
+  list-style: none;
+  margin: var(--space-4) 0 var(--space-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 36ch;
+}
+
+.qv-onboarding-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.qv-onboarding-step__icon {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+
+.qv-onboarding-step__content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qv-onboarding-step__title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-primary);
+  line-height: 1.4;
+}
+
+.qv-onboarding-step__body {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+
+/* ─── Empty-inbox next-step hint ──────────────────────────── */
+.qv-inbox-hint {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--hairline);
+}
+
+/* ─── Connection status pill ───────────────────────────────── */
+.qv-connect-card__head-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qv-connection-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.qv-connection-status--connected {
+  background: var(--tone-ready-soft);
+  color: var(--tone-ready);
+  border-color: var(--tone-ready);
+}
+
+.qv-connection-status--disconnected {
+  background: var(--bg-sunken);
+  color: var(--ink-faint);
+  border-color: var(--hairline);
+}
+
 /* ============================================================
    QV Toggle — accessible switch for standing-delivery toggles
    Token-driven; no hard-coded hex.

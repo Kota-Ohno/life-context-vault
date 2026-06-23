@@ -1833,6 +1833,7 @@ export function App() {
               enableLoginItem={enableLoginItem}
               disableLoginItem={disableLoginItem}
               goRequests={() => setView("requests")}
+              hasActiveConnection={state.connectorSessions.some((s) => s.status === "connected")}
             />
             {state.accessPolicies.length > 0 && (
               <div className="qv-connect" style={{ paddingTop: 0 }}>
@@ -2115,6 +2116,11 @@ function ContextRequestsView({
               title="まだAI要求はありません"
               body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこの取り込みで確認できます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
             />
+          )}
+          {requests.length === 0 && (
+            <p className="qv-inbox-hint">
+              Claude Desktopを再起動し、何か質問してみてください。要求はここに表示されます。MCPを使わない場合は下で「AIに渡す内容（記憶）」を作成できます。
+            </p>
           )}
         </div>
         {showCopyFallbackStarter ? (

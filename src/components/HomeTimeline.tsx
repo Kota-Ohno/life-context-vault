@@ -12,6 +12,7 @@ import { BoundaryRule } from "./BoundaryRule";
 import { Tag } from "./Tag";
 import { Seal } from "./Seal";
 import { Button } from "./Button";
+import { ONBOARDING_STEPS } from "../onboarding";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -232,6 +233,7 @@ function TimelineEmpty({
 }) {
   // Zero-facts onboarding branch: vault has no active facts yet.
   if (factCount === 0) {
+    const STEP_ICONS = ["①", "②", "③"] as const;
     return (
       <div className="qv-tl-empty">
         <p className="qv-tl-empty__kana" aria-hidden="true">◇</p>
@@ -241,6 +243,22 @@ function TimelineEmpty({
         <p className="qv-tl-empty__body">
           情報を追加して承認すると、AIに渡せる文脈パックが作られます。
         </p>
+
+        {/* 3-step onboarding flow */}
+        <ol className="qv-onboarding-steps" aria-label="はじめかたのステップ">
+          {ONBOARDING_STEPS.map((step, i) => (
+            <li key={step.key} className="qv-onboarding-step">
+              <span className="qv-onboarding-step__icon" aria-hidden="true">
+                {STEP_ICONS[i]}
+              </span>
+              <div className="qv-onboarding-step__content">
+                <strong className="qv-onboarding-step__title">{step.title}</strong>
+                <span className="qv-onboarding-step__body">{step.body}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+
         <p className="qv-tl-empty__trust">
           承認した文脈だけがAIに渡ります。保存前にMemory Inboxで確認できます。
         </p>

@@ -16,6 +16,7 @@ export function ConnectView({
   enableLoginItem,
   disableLoginItem,
   goRequests,
+  hasActiveConnection,
 }: {
   nativePath: string | null;
   claudeInstallBusy: boolean;
@@ -27,6 +28,7 @@ export function ConnectView({
   enableLoginItem: () => void;
   disableLoginItem: () => void;
   goRequests: () => void;
+  hasActiveConnection: boolean;
 }) {
   return (
     <div className="qv-connect">
@@ -44,13 +46,19 @@ export function ConnectView({
               <p className="qv-connect-card__sub">ローカル MCP</p>
               <h2 className="qv-connect-card__title">Claude Desktop</h2>
             </div>
-            <Plug size={16} className="qv-connect-card__icon" />
+            <div className="qv-connect-card__head-right">
+              <span className={`qv-connection-status ${hasActiveConnection ? "qv-connection-status--connected" : "qv-connection-status--disconnected"}`}>
+                {hasActiveConnection ? "接続済み" : "未接続"}
+              </span>
+              <Plug size={16} className="qv-connect-card__icon" />
+            </div>
           </div>
 
           <p className="qv-connect-card__desc">
             Claude Desktopの設定ファイルにMCPサーバーを追加します。接続後、Claude DesktopからAIに渡す内容（記憶）を要求できます。毎回の要求はあなたの確認を経てから返されます。
           </p>
 
+          {/* One-click install — recommended primary path */}
           <div className="qv-connect-card__actions">
             <Button
               variant="primary"
@@ -59,7 +67,7 @@ export function ConnectView({
               onClick={installClaudeConfig}
             >
               <Plug size={14} />
-              Claude設定へ追加
+              Claude設定へ追加（推奨）
             </Button>
 
             {loginItemStatus && loginItemStatus.supported ? (
@@ -86,9 +94,10 @@ export function ConnectView({
             </p>
           ) : null}
 
+          {/* Manual config — last resort fallback */}
           <details className="qv-connect-card__disclosure">
-            <summary>MCP設定（手動コピー用）</summary>
-            <p className="qv-connect-card__note">※ これはテンプレートです。「Claude設定へ追加」を使うと正確なパスが自動設定されます。</p>
+            <summary>MCP設定を手動でコピーする（上の自動追加が使えない場合のみ）</summary>
+            <p className="qv-connect-card__note">※ これはテンプレートです。「Claude設定へ追加（推奨）」を使うと正確なパスが自動設定されます。自動追加が動作しない場合の最終手段としてご利用ください。</p>
             <pre className="qv-connect-card__code">{claudeConfig}</pre>
           </details>
         </Card>
