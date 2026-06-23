@@ -695,6 +695,20 @@ export function App() {
     storageReady
   ]);
 
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen("delivery-notification", () => {
+        setView("requests");
+      });
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const activeCandidates = useMemo(
     () =>
       state.candidates.filter((candidate) =>
