@@ -693,7 +693,7 @@ describe("AI access UI safety", () => {
     const summary = homeCaptureSafetySummary(settings, [event], [source]);
 
     expect(summary.tone).toBe("attention");
-    expect(summary.title).toBe("Passive Captureは停止中");
+    expect(summary.title).toBe("受動キャプチャは停止中");
     expect(summary.body).toContain("書き込みません");
     expect(summary.allowedSitesLabel).toBe("未設定");
     expect(summary.purgeableCount).toBe(0);
