@@ -1816,7 +1816,7 @@ export function App() {
             }
             approve={approve}
             reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "記憶を却下しました。")}
-            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "記憶をLaterに移しました。")}
+            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "記憶をあとでに移しました。")}
             markSensitive={(candidate) =>
               void reviewCandidateStatus(candidate, "blocked_sensitive", "記憶を要確認扱いにしました。")
             }

@@ -4753,11 +4753,29 @@ button:focus-visible {
   margin: 0 0 3px;
 }
 
-.qv-standing-row__threshold {
+/* Shared 「詳細」 disclosure (DetailsDisclosure). Mirrors the connect-card
+   disclosure so the raw-tier/threshold reveal matches the tokenized UI. */
+.qv-details__summary {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.qv-details__summary:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--pine));
+  outline-offset: 2px;
+}
+.qv-details__summary::-webkit-details-marker {
+  display: none;
+}
+.qv-details__body {
+  margin-top: 6px;
   font-size: 0.75rem;
   color: var(--ink-faint);
-  margin: 0;
-  font-family: var(--font-mono);
 }
 
 .qv-standing-note {
