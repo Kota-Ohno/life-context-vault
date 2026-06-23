@@ -260,7 +260,7 @@ function TimelineEmpty({
         </ol>
 
         <p className="qv-tl-empty__trust">
-          承認した文脈だけがAIに渡ります。保存前にMemory Inboxで確認できます。
+          承認した文脈だけがAIに渡ります。保存前に取り込みで確認できます。
         </p>
         <div className="qv-tl-empty__actions">
           {pendingCandidateCount > 0 ? (

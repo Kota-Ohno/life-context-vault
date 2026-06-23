@@ -4318,7 +4318,7 @@ export function documentIngestionReadiness(
         : "変換ツール未接続",
       detail: legacyOfficeConversionAvailable
         ? "旧Officeはこの端末で新形式へ変換してから抽出します。"
-        : "旧Officeは取り込めません。SettingsでLibreOffice等を設定してから追加します。"
+        : "旧Officeは取り込めません。設定でLibreOffice等を設定してから追加します。"
     }
   ];
 }
