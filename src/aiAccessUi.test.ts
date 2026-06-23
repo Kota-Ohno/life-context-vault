@@ -175,12 +175,12 @@ describe("AI access UI safety", () => {
 
     const receipt = contextPackBoundaryReceipt(pack, request);
 
-    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 件の記憶 / 1 snippets");
+    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 件の記憶 / 1 件の抜粋");
     expect(receipt.find((item) => item.label === "AIに渡る")?.detail).toContain("ChatGPT");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.value).toBe("2 exclusions");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("非公開");
     expect(receipt.find((item) => item.label === "確認状態")?.tone).toBe("attention");
-    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("承認するまでPack本文");
+    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("承認するまで記憶の内容");
     expect(JSON.stringify(receipt)).not.toContain("Approved fact text that may be sent");
     expect(JSON.stringify(receipt)).not.toContain("Short approved snippet");
 
@@ -190,7 +190,7 @@ describe("AI access UI safety", () => {
     );
 
     expect(noApprovalRequired.find((item) => item.label === "確認状態")?.value).toBe("確認不要");
-    expect(noApprovalRequired.find((item) => item.label === "確認状態")?.detail).toContain("返却またはコピーするまでPack本文");
+    expect(noApprovalRequired.find((item) => item.label === "確認状態")?.detail).toContain("返却またはコピーするまで記憶の内容");
     expect(
       contextPackDeliveryState(
         { ...pack, confirmationStatus: "not_required" },
@@ -259,7 +259,7 @@ describe("AI access UI safety", () => {
     const receipt = contextPackBoundaryReceipt(pack, request, nowMs);
 
     expect(receipt.find((item) => item.label === "確認状態")?.value).toBe("期限切れ");
-    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("Pack本文を返しません");
+    expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("記憶の内容を返しません");
   });
 
   it("builds a restore receipt that explains backup contents and current Vault replacement", () => {
@@ -463,9 +463,9 @@ describe("AI access UI safety", () => {
     expect(preview.expiredCaptureCount).toBe(1);
     expect(preview.promotedSourceCount).toBe(1);
     expect(preview.receiptSections.map((section) => section.label)).toContain("AI接続とポリシー");
-    expect(preview.receiptSections.find((section) => section.label === "キャプチャ履歴")?.detail).toContain("TTL切れCapture");
-    expect(preview.aiBoundarySections.find((section) => section.label === "取得可能Pack")?.value).toBe("1件");
-    expect(preview.aiBoundarySections.find((section) => section.label === "期限切れPack")?.value).toBe("1件");
+    expect(preview.receiptSections.find((section) => section.label === "キャプチャ履歴")?.detail).toContain("TTL切れキャプチャ");
+    expect(preview.aiBoundarySections.find((section) => section.label === "取得可能な記憶")?.value).toBe("1件");
+    expect(preview.aiBoundarySections.find((section) => section.label === "期限切れの記憶")?.value).toBe("1件");
     expect(preview.aiBoundarySections.find((section) => section.label === "AI接続メタデータ")?.detail).toContain(
       "接続"
     );
@@ -586,7 +586,7 @@ describe("AI access UI safety", () => {
     const sections = clearVaultImpactSections(state);
 
     expect(sections.find((section) => section.label === "生活コンテキスト")?.value).toContain("1件のソース / 1件の記憶");
-    expect(sections.find((section) => section.label === "AI境界")?.detail).toContain("1件の取得可能Pack");
+    expect(sections.find((section) => section.label === "AI境界")?.detail).toContain("1件の取得可能な記憶");
     expect(sections.find((section) => section.label === "AI接続とポリシー")?.detail).toContain("外部サービス側");
     expect(sections.find((section) => section.label === "監査 / キャプチャ")?.detail).toContain("AI配信");
     expect(JSON.stringify(sections)).not.toContain("Source body that must not appear");
@@ -748,8 +748,8 @@ describe("AI access UI safety", () => {
     expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 件の記憶");
     expect(sections.find((section) => section.label === "未承認で止める")?.value).toBe("1 candidates");
     expect(sections.find((section) => section.label === "確認/返却待ち")?.value).toBe("1 requests");
-    expect(sections.find((section) => section.label === "AIへ返せるPack")?.value).toBe("1 ready");
-    expect(sections.find((section) => section.label === "AIへ返せるPack")?.detail).toContain("期限切れPack");
+    expect(sections.find((section) => section.label === "AIへ返せる記憶")?.value).toBe("1 ready");
+    expect(sections.find((section) => section.label === "AIへ返せる記憶")?.detail).toContain("期限切れの記憶");
     expect(JSON.stringify(sections)).not.toContain("Approved fact text");
     expect(JSON.stringify(sections)).not.toContain("Candidate text");
     expect(JSON.stringify(sections)).not.toContain("request text");

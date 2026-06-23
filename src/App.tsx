@@ -933,11 +933,11 @@ export function App() {
     const sourceId = event ? passiveCaptureSourceId(event) : null;
     const source = sourceId ? state.sources.find((item) => item.id === sourceId) : null;
     if (!event || !source) {
-      setNotice("Capture履歴に紐づく取り込み元が見つかりませんでした。");
+      setNotice("キャプチャ履歴に紐づく取り込み元が見つかりませんでした。");
       return;
     }
     if (source.deletionState === "purged") {
-      setNotice("このCapture本文はすでに消去済みです。");
+      setNotice("このキャプチャ本文はすでに消去済みです。");
       return;
     }
     await changeSourceLifecycle(source.id, "purge_body");
@@ -948,12 +948,12 @@ export function App() {
       .filter((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "purged");
     if (sourceIds.length === 0) {
       setConfirmAllCapturePurge(false);
-      setNotice("消去できるCapture本文はありません。");
+      setNotice("消去できるキャプチャ本文はありません。");
       return;
     }
     if (!confirmAllCapturePurge) {
       setConfirmAllCapturePurge(true);
-      setNotice(`${sourceIds.length}件のCapture本文を消去する前に、画面の影響表示を確認してください。`);
+      setNotice(`${sourceIds.length}件のキャプチャ本文を消去する前に、画面の影響表示を確認してください。`);
       return;
     }
 
@@ -972,12 +972,12 @@ export function App() {
           nativeRevisionRef.current = latestRevision;
           setNativeRevision(latestRevision);
           setState(latestState);
-          setNotice(`${sourceIds.length}件のCapture本文を消去しました。`);
+          setNotice(`${sourceIds.length}件のキャプチャ本文を消去しました。`);
         }
         setConfirmAllCapturePurge(false);
         return;
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでCapture本文を消去できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreでキャプチャ本文を消去できませんでした。"));
         return;
       }
     }
@@ -986,7 +986,7 @@ export function App() {
       (current, sourceId) => updateSourceLifecycle(current, sourceId, "purge_body"),
       state
     );
-    apply(next, `${sourceIds.length}件のCapture本文を消去しました。`);
+    apply(next, `${sourceIds.length}件のキャプチャ本文を消去しました。`);
     setConfirmAllCapturePurge(false);
   }
 
@@ -1082,7 +1082,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでFactを更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで記憶を更新できませんでした。"));
         return;
       }
     }
@@ -1117,7 +1117,7 @@ export function App() {
           return true;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでFactを保存できませんでした。"));
+        setNotice(formatVaultError(error, "Vault Coreで記憶を保存できませんでした。"));
         return false;
       }
     }
@@ -1428,7 +1428,7 @@ export function App() {
         payloadText,
         createdAt: new Date().toISOString()
       });
-      setNotice("Clipboardに書き込めませんでした。下の手動コピー欄から選択してコピーしてください。");
+      setNotice("クリップボードに書き込めませんでした。下の手動コピー欄から選択してコピーしてください。");
     }
   }
 
@@ -1536,7 +1536,7 @@ export function App() {
       setNotice(message);
       return true;
     } catch {
-      setNotice("Clipboardに書き込めませんでした。表示された内容を手動でコピーしてください。");
+      setNotice("クリップボードに書き込めませんでした。表示された内容を手動でコピーしてください。");
       return false;
     }
   }
@@ -1647,7 +1647,7 @@ export function App() {
     try {
       const status = await getLoginItemStatus();
       setLoginItemStatus(status);
-      setNotice(status ? "Login Itemの状態を更新しました。" : "Desktop appでのみLogin Itemを管理できます。");
+      setNotice(status ? "Login Itemの状態を更新しました。" : "デスクトップアプリでのみLogin Itemを管理できます。");
     } catch (error) {
       setNotice(formatVaultError(error, "Login Itemの状態確認に失敗しました。"));
     }
@@ -1692,7 +1692,7 @@ export function App() {
       const result = await installClaudeDesktopConfig();
       setClaudeInstallResult(result);
       if (!result) {
-        setNotice("Desktop appでのみClaude Desktop設定をインストールできます。");
+        setNotice("このアプリでのみClaude Desktop設定をインストールできます。");
       } else if (result.alreadyConfigured) {
         const base = "Claude Desktop設定はすでに最新です。";
         setNotice(result.warning ? `${base} ／ ${result.warning}` : base);
@@ -2156,7 +2156,7 @@ function ContextRequestsView({
             </div>
             <div className="trust-note">
               <ShieldCheck size={16} />
-              <span>ここで作ったPackも、確認画面で許可またはコピーするまでAIには渡りません。</span>
+              <span>ここで作った記憶も、確認画面で許可またはコピーするまでAIには渡りません。</span>
             </div>
             {requestComposer("確認用にAIに渡す内容（記憶）を作成")}
           </div>
@@ -2242,7 +2242,7 @@ function ContextRequestsView({
             <div className="pack-scope-summary">
               <ShieldCheck size={16} />
               <span>
-                {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
+                {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠の抜粋だけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
             <div className="pack-boundary-receipt-grid" aria-label="AIに渡した内容（記憶）配信境界">
@@ -2259,7 +2259,7 @@ function ContextRequestsView({
                 <div className="trust-note">
                   <Clipboard size={16} />
                   <span>
-                    Clipboardに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
+                    クリップボードに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
                   </span>
                 </div>
                 <label className="field manual-copy-field">
@@ -2317,7 +2317,7 @@ function ContextRequestsView({
               {currentPack.items.length === 0 && <p className="muted">使える承認済みの記憶がまだありません。</p>}
             </div>
             <div className="source-snippet-list">
-              <strong>AIへ渡る根拠snippet</strong>
+              <strong>AIへ渡る根拠の抜粋</strong>
               {currentPack.sourceSnippets && currentPack.sourceSnippets.length > 0 ? (
                 currentPack.sourceSnippets.slice(0, 5).map((snippet) => (
                   <div className="source-snippet" key={snippet.id}>
@@ -2333,7 +2333,7 @@ function ContextRequestsView({
                 <div className="source-snippet empty">
                   <div>
                     <span>今回は取り込み元のスニペットを送信しません</span>
-                    <Badge>0 snippets</Badge>
+                    <Badge>0 件の抜粋</Badge>
                   </div>
                   <p>取り込み元の原文や高感度タイトルはAIへ渡しません。上の記憶の本文と理由だけが含まれます。</p>
                   <small>出典確認が必要な場合は、Sourcesで元データとポリシーを確認できます。</small>
@@ -2732,7 +2732,7 @@ function SettingsView({
                   復元すると現在のVault全体をこのバックアップで置き換えます。内容の最高感度は{restorePreview.sensitivitySummary}です。
                   {restorePreview.newestSourceAt ? ` 最新Source: ${formatDateTime(restorePreview.newestSourceAt)}。` : ""}
                   {restorePreview.oldestAuditAt ? ` 監査ログは${formatDateTime(restorePreview.oldestAuditAt)}以降を含みます。` : ""}
-                  {restorePreview.expiredCaptureCount > 0 ? ` TTL切れCaptureが${restorePreview.expiredCaptureCount}件あります。` : ""}
+                  {restorePreview.expiredCaptureCount > 0 ? ` TTL切れキャプチャが${restorePreview.expiredCaptureCount}件あります。` : ""}
                 </span>
               </div>
               <Input
@@ -3197,7 +3197,7 @@ function auditCompactMetadata(event: AuditEvent): string {
     client ? `AI: ${client}` : null,
     status ? `状態: ${status}` : null,
     typeof itemCount === "number" ? `記憶: ${itemCount}` : null,
-    typeof invalidated === "number" ? `失効Pack: ${invalidated}` : null
+    typeof invalidated === "number" ? `失効した記憶: ${invalidated}` : null
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "本文なしの監査メタデータ";
 }
@@ -3475,19 +3475,19 @@ export function homeAiBoundarySections({
       value: `${actionableRequestCount} requests`,
       detail:
         actionableRequestCount > 0
-          ? "承認、返却、またはコピー操作まではPack本文を外部AIへ返しません。"
+          ? "承認、返却、またはコピー操作までは記憶の内容を外部AIへ返しません。"
           : "いま確認待ちのAI要求はありません。",
       tone: actionableRequestCount > 0 ? "attention" : "ready"
     },
     {
-      label: "AIへ返せるPack",
+      label: "AIへ返せる記憶",
       value: `${deliverablePackCount} ready`,
       detail:
         expiredPackCount > 0
-          ? `${expiredPackCount}件の期限切れPackはAIへ返せません。`
+          ? `${expiredPackCount}件の期限切れの記憶はAIへ返せません。`
           : deliverablePackCount > 0
-            ? "期限内の確認済みPackだけが取得可能です。"
-            : "取得可能なPackはありません。必要な時に作成します。",
+            ? "期限内の確認済みの記憶だけが取得可能です。"
+            : "取得可能な記憶はありません。必要な時に作成します。",
       tone: deliverablePackCount > 0 ? "attention" : "ready"
     }
   ];
@@ -3518,8 +3518,8 @@ export function contextPackBoundaryReceipt(
   const deliveryState = contextPackDeliveryState(pack, request, nowMs);
   const waitingDetail =
     pack.confirmationStatus === "not_required"
-      ? "返却またはコピーするまでPack本文は外部AIへ返しません。"
-      : "承認するまでPack本文は外部AIへ返しません。";
+      ? "返却またはコピーするまで記憶の内容は外部AIへ返しません。"
+      : "承認するまで記憶の内容は外部AIへ返しません。";
   const excludedReasons = Array.from(new Set(pack.excludedItems.map((item) => exclusionReasonLabel(item.reason))));
   const exclusionDetail =
     excludedReasons.length > 0
@@ -3530,8 +3530,8 @@ export function contextPackBoundaryReceipt(
     {
       label: "AIに渡る",
       tone: pack.items.length > 0 || snippetCount > 0 ? "ready" : "attention",
-      value: `${pack.items.length} 件の記憶 / ${snippetCount} snippets`,
-      detail: `${clientName}へ渡るのは承認済みの記憶と最小snippetだけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
+      value: `${pack.items.length} 件の記憶 / ${snippetCount} 件の抜粋`,
+      detail: `${clientName}へ渡るのは承認済みの記憶と最小の抜粋だけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
     },
     {
       label: "AIに渡らない",
@@ -3542,17 +3542,17 @@ export function contextPackBoundaryReceipt(
     {
       label: "有効期限",
       tone: minutesLeft === null || minutesLeft > 0 ? "ready" : "attention",
-      value: minutesLeft === null ? "短命Pack" : minutesLeft > 0 ? `約${minutesLeft}分` : "期限切れ",
-      detail: "期限切れ後は外部AIが同じPack本文を再取得できません。"
+      value: minutesLeft === null ? "短命の記憶" : minutesLeft > 0 ? `約${minutesLeft}分` : "期限切れ",
+      detail: "期限切れ後は外部AIが同じ記憶の内容を再取得できません。"
     },
     {
       label: "確認状態",
       tone: deliveryState.canDeliver ? "ready" : "attention",
       value: deliveryState.expired ? "期限切れ" : packConfirmationLabel(pack.confirmationStatus),
       detail: deliveryState.expired
-        ? "期限切れのため、外部AIへPack本文を返しません。"
+        ? "期限切れのため、外部AIへ記憶の内容を返しません。"
         : deliveryState.canDeliver
-          ? "承認済みのため、外部AIはこのPack境界内だけを取得できます。"
+          ? "承認済みのため、外部AIはこの記憶の範囲内だけを取得できます。"
           : waitingDetail
     }
   ];
@@ -3674,9 +3674,9 @@ function packDeliveryBody(state: ContextPackDeliveryState | null): string {
     return "外部AIはget_request_statusで、このAIに渡す内容（記憶）だけを取得できます。";
   }
   if (state?.awaitingReturn) {
-    return "確認不要ですが、返却またはコピーするまで外部AIにはPack本文を返しません。";
+    return "確認不要ですが、返却またはコピーするまで外部AIには記憶の内容を返しません。";
   }
-  return "承認するまで、外部AIにはPack本文を返しません。";
+  return "承認するまで、外部AIには記憶の内容を返しません。";
 }
 
 function requestStatusLabel(status: ContextPackRequest["status"]): string {
@@ -3850,7 +3850,7 @@ function restoreReceiptSections(input: {
       value: `${input.counts.captureEvents}件`,
       detail:
         input.expiredCaptureCount > 0
-          ? `TTL切れCaptureが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
+          ? `TTL切れキャプチャが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
           : "パッシブキャプチャイベントを含みます。承認前の記憶はAI回答に使いません。",
       tone: input.expiredCaptureCount > 0 ? "attention" : "ready"
     },
@@ -3892,21 +3892,21 @@ function restoreAiBoundarySummary(state: VaultState): {
 function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySummary>): RestorePreview["aiBoundarySections"] {
   return [
     {
-      label: "取得可能Pack",
+      label: "取得可能な記憶",
       value: `${input.deliverablePackCount}件`,
       detail:
         input.deliverablePackCount > 0
-          ? "復元後も期限内の確認済みPackがあります。AI要求一覧で内容と期限を確認してください。"
+          ? "復元後も期限内の確認済みの記憶があります。AI要求一覧で内容と期限を確認してください。"
           : "復元後すぐ外部AIへ返せる内容（記憶）はありません。必要なら新しくAIに渡す内容（記憶）を作成します。",
       tone: input.deliverablePackCount > 0 ? "attention" : "ready"
     },
     {
-      label: "期限切れPack",
+      label: "期限切れの記憶",
       value: `${input.expiredPackCount}件`,
       detail:
         input.expiredPackCount > 0
-          ? "期限切れPackは復元されても外部AIへ返せません。履歴としてAI要求/監査ログで確認できます。"
-          : "短命Packの期限切れによる復元後の整理対象はありません。",
+          ? "期限切れの記憶は復元されても外部AIへ返せません。履歴としてAI要求/監査ログで確認できます。"
+          : "短命の記憶の期限切れによる復元後の整理対象はありません。",
       tone: input.expiredPackCount > 0 ? "attention" : "ready"
     },
     {
@@ -3955,7 +3955,7 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
       value: `${counts.requests}件のAI要求 / ${counts.packs}件の送信内容`,
       detail:
         hasAiBoundaryRecords
-          ? `${aiBoundary.deliverablePackCount}件の取得可能Pack、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れPackのローカル履歴を削除します。`
+          ? `${aiBoundary.deliverablePackCount}件の取得可能な記憶、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れの記憶のローカル履歴を削除します。`
           : "AI要求とAIに渡した内容（記憶）はありません。",
       tone: hasAiBoundaryRecords ? "attention" : "ready"
     },
@@ -3970,7 +3970,7 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
     },
     {
       label: "監査 / キャプチャ",
-      value: `${counts.auditEvents} Audit / ${counts.captureEvents} Captures`,
+      value: `監査 ${counts.auditEvents}件 / キャプチャ ${counts.captureEvents}件`,
       detail:
         hasAuditCapture
           ? "保存・承認・AI配信・キャプチャのローカル監査履歴を削除します。AIへ渡した過去の本文は監査ログには保存されていません。"
@@ -4129,7 +4129,7 @@ export function homeCaptureSafetySummary(
     tone: "attention",
     title: "受動キャプチャは停止中",
     body:
-      "停止中はブラウザ拡張や手動Captureから書き込みません。必要なときだけ開始できます。",
+      "停止中はブラウザ拡張や手動キャプチャから書き込みません。必要なときだけ開始できます。",
     allowedSitesLabel,
     lastCaptureLabel,
     lastPreview,
@@ -4204,8 +4204,8 @@ function unsupportedFileFeedback(
   if (reason === "native_required") {
     return {
       tone: "attention",
-      title: "Desktop appで開いてください",
-      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewでは取り込めません。Desktop appのローカルVault Coreで抽出してください。`
+      title: "デスクトップアプリで開いてください",
+      body: `${file.name} はPDF/Office抽出が必要です。ブラウザPreviewでは取り込めません。デスクトップアプリのローカルVault Coreで抽出してください。`
     };
   }
   if (reason === "ocr_required") {
@@ -4299,7 +4299,7 @@ export function documentIngestionReadiness(
     {
       label: "PDF / DOCX等",
       state: "ready",
-      value: "Desktopでローカル抽出",
+      value: "デスクトップアプリでローカル抽出",
       detail: "本文は取り込み元と取り込み候補になり、承認とAI送信は別確認です。"
     },
     {
@@ -4467,10 +4467,10 @@ function factStatusLabel(status: ApprovedFact["status"]): string {
 
 function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: number): string {
   if (action === "keep_active" || action === "restore") {
-    return "記憶を保持し、AIに渡す記憶へ戻しました。";
+    return "記憶を保持し、AIへ渡す対象へ戻しました。";
   }
   if (action === "hide") {
-    return `記憶をAIに渡す記憶から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `記憶をAIへ渡す対象から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
   if (action === "delete") {
     return `記憶を削除済みにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;

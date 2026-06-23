@@ -571,7 +571,7 @@ export function IngestView({
           <div className="qv-ingest__trust-note">
             <ShieldCheck size={14} />
             <span>
-              PDF/OfficeはDesktopでローカル抽出します。
+              PDF/Officeはデスクトップアプリでローカル抽出します。
               {ocrExtractionAvailable
                 ? ` 画像は ${ocrProviderLabel ?? "OCR変換ツール"} をローカル実行して抽出します。`
                 : " 画像OCRは変換ツール接続まで取り込めません。"}

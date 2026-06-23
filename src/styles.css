@@ -4886,6 +4886,15 @@ button:focus-visible {
   border-radius: var(--radius-sm);
 }
 
+.qv-ingest__cand-status {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  padding: 2px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
 .qv-ingest__conflict-tag {
   font-family: var(--font-mono);
   font-size: 0.68rem;

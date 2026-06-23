@@ -368,7 +368,7 @@ export function HomeTimeline({
           />
         ))}
         <span className="qv-tl-scoperow__count" aria-live="polite">
-          {SCOPE_LABELS[scope]}渡したFact{" "}
+          {SCOPE_LABELS[scope]}渡した記憶{" "}
           <b>{total}件</b>
           {pending > 0 && (
             <>
