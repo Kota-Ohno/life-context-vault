@@ -32,8 +32,8 @@ describe("isBatchEligible", () => {
     expect(isBatchEligible(makeCandidate({ status: "new", detectedSensitivity: "personal" }))).toBe(true);
   });
 
-  it("returns true for needs_user_detail status", () => {
-    expect(isBatchEligible(makeCandidate({ status: "needs_user_detail" }))).toBe(true);
+  it("returns false for needs_user_detail status (detail prompt is per-item only)", () => {
+    expect(isBatchEligible(makeCandidate({ status: "needs_user_detail" }))).toBe(false);
   });
 
   it("returns false for blocked_sensitive status — must not be batch-approvable", () => {
