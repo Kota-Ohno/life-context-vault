@@ -72,7 +72,6 @@ import {
   saveNativeRuntimePreferences,
   setNativeDeliveryNotificationsEnabled
 } from "./nativeStorage";
-import { detectLang, Lang, t } from "./i18n";
 import { formatVaultError } from "./lib/formatVaultError";
 import { Metric } from "./components/Metric";
 import { Badge } from "./components/Badge";
@@ -381,10 +380,13 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
-  const [lang, setLang] = useState<Lang>(() => {
+  const [lang, setLang] = useState<"ja" | "en">(() => {
     const stored = typeof localStorage !== "undefined" ? localStorage.getItem("lcv-lang") : null;
     if (stored === "en" || stored === "ja") return stored;
-    return detectLang();
+    if (typeof navigator !== "undefined" && navigator.language) {
+      return navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en";
+    }
+    return "ja";
   });
   useEffect(() => {
     try {
@@ -403,13 +405,6 @@ export function App() {
   const [activePackId, setActivePackId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [manualCopyPayload, setManualCopyPayload] = useState<ManualCopyPayload | null>(null);
-  const [captureClient, setCaptureClient] = useState<ConnectorKind>("chatgpt");
-  const [captureConversationId, setCaptureConversationId] = useState("demo-thread");
-  const [captureText, setCaptureText] = useState("");
-  const [captureExtensionId, setCaptureExtensionId] = useState("");
-  const [captureHostInstallBusy, setCaptureHostInstallBusy] = useState(false);
-  const [captureHostInstallResult, setCaptureHostInstallResult] =
-    useState<any | null>(null);
   const [confirmAllCapturePurge, setConfirmAllCapturePurge] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<LifeContextDomain | "all">("all");

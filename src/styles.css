@@ -2549,33 +2549,6 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.sensitivity.public {
-  border-color: var(--tone-ready);
-  background: var(--tone-ready-soft);
-}
-
-.sensitivity.personal {
-  border-color: #b7cce0;
-  background: #eef6fb;
-}
-
-[data-theme="dark"] .sensitivity.personal {
-  border-color: #2a4d6e;
-  background: #162433;
-}
-
-.sensitivity.private_consequential {
-  border-color: var(--tone-attention);
-  background: var(--tone-attention-soft);
-}
-
-.sensitivity.sensitive,
-.sensitivity.secret_never_send {
-  border-color: var(--tone-blocked);
-  background: var(--tone-blocked-soft);
-  color: var(--tone-blocked);
-}
-
 .sensitivity.bucket-public_ok {
   border-color: var(--tone-ready);
   background: var(--tone-ready-soft);
