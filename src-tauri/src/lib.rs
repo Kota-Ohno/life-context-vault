@@ -3509,7 +3509,7 @@ fn get_context_request_status_at_path_with_client(
             }),
           ),
         );
-        let _ = save_vault_json_with_projection(&mut connection, &vault_mut);
+        save_vault_json_with_projection(&mut connection, &vault_mut)?;
       }
     }
     return Ok(VaultCoreRequestStatusResult {
@@ -9623,7 +9623,6 @@ fn delivery_notification_poll_once(app: &AppHandle) -> Result<(), String> {
   {
     eprintln!("[delivery-poller] notification send failed: {e}");
   }
-  let _ = app.emit("delivery-notification", ());
   connection
     .execute(
       "INSERT INTO projection_state (key, value, updated_at)
