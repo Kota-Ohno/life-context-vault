@@ -50,7 +50,7 @@ export function ConnectView({
               <span role="status" className={`qv-connection-status ${hasActiveConnection ? "qv-connection-status--connected" : "qv-connection-status--disconnected"}`}>
                 {hasActiveConnection ? "接続済み" : "未接続"}
               </span>
-              <Plug size={16} className="qv-connect-card__icon" />
+              <Plug size={16} className="qv-connect-card__icon" aria-hidden="true" />
             </div>
           </div>
 
@@ -66,7 +66,7 @@ export function ConnectView({
               disabled={claudeInstallBusy || !nativePath}
               onClick={installClaudeConfig}
             >
-              <Plug size={14} />
+              <Plug size={14} aria-hidden="true" />
               Claude設定へ追加（推奨）
             </Button>
 
@@ -109,7 +109,7 @@ export function ConnectView({
               <p className="qv-connect-card__sub">コピー経由</p>
               <h2 className="qv-connect-card__title">ChatGPT · その他のAI</h2>
             </div>
-            <MessageSquare size={16} className="qv-connect-card__icon" />
+            <MessageSquare size={16} className="qv-connect-card__icon" aria-hidden="true" />
           </div>
 
           <p className="qv-connect-card__desc">
@@ -118,7 +118,7 @@ export function ConnectView({
 
           <div className="qv-connect-card__actions">
             <Button variant="ghost" size="md" onClick={goRequests}>
-              <MessageSquare size={14} />
+              <MessageSquare size={14} aria-hidden="true" />
               Requestsへ
             </Button>
           </div>

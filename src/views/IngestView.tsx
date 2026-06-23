@@ -319,7 +319,7 @@ export function IngestView({
             onClick={toggleSelectionMode}
             aria-pressed={selectionMode}
           >
-            {selectionMode ? <X size={14} /> : <CheckSquare size={14} />}
+            {selectionMode ? <X size={14} aria-hidden="true" /> : <CheckSquare size={14} aria-hidden="true" />}
             {selectionMode ? "選択をキャンセル" : "まとめて承認"}
           </Button>
 
@@ -327,9 +327,9 @@ export function IngestView({
             <>
               <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
                 {selectedIds.size === eligibleCandidates.length ? (
-                  <CheckSquare size={14} />
+                  <CheckSquare size={14} aria-hidden="true" />
                 ) : (
-                  <Square size={14} />
+                  <Square size={14} aria-hidden="true" />
                 )}
                 {selectedIds.size === eligibleCandidates.length ? "すべて解除" : "すべて選択"}
               </Button>
@@ -340,7 +340,7 @@ export function IngestView({
                 disabled={selectedIds.size === 0}
                 aria-label={`選択した${selectedIds.size}件の記憶を承認`}
               >
-                <Check size={14} />
+                <Check size={14} aria-hidden="true" />
                 {selectedIds.size > 0
                   ? `${selectedIds.size}件を承認`
                   : "記憶を選択してください"}
@@ -357,15 +357,15 @@ export function IngestView({
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="primary" onClick={goHome}>
-                <Sparkles size={15} />
+                <Sparkles size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>
               <Button variant="ghost" onClick={goConnections}>
-                <Plug size={15} />
+                <Plug size={15} aria-hidden="true" />
                 AI会話連携を設定
               </Button>
               <div className="qv-ingest__trust-note">
-                <ShieldCheck size={14} />
+                <ShieldCheck size={14} aria-hidden="true" />
                 <span>記憶は承認後にAIへ渡せるようになり、確認後だけAIに渡ります。</span>
               </div>
             </div>
@@ -449,7 +449,7 @@ export function IngestView({
                 {replacementOptions.length > 0 && (
                   <div className="qv-ingest__supersede">
                     <div className="qv-ingest__trust-note qv-ingest__trust-note--compact">
-                      <RefreshCw size={13} />
+                      <RefreshCw size={13} aria-hidden="true" />
                       <span>古い記憶を置き換える場合だけ選択します。置き換えた記憶はAIに渡らなくなり、履歴に残ります。</span>
                     </div>
                     <div className="qv-ingest__supersede-options">
@@ -482,19 +482,19 @@ export function IngestView({
                 {!selectionMode && (
                   <div className="qv-ingest__cand-actions">
                     <Button variant="primary" size="sm" onClick={() => approve(candidate)}>
-                      <Check size={14} />
+                      <Check size={14} aria-hidden="true" />
                       この記憶を承認
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
-                      <ShieldAlert size={14} />
+                      <ShieldAlert size={14} aria-hidden="true" />
                       要確認にする
                     </Button>
                     <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
-                      <Archive size={14} />
+                      <Archive size={14} aria-hidden="true" />
                       あとで
                     </Button>
                     <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
-                      <X size={14} />
+                      <X size={14} aria-hidden="true" />
                       却下
                     </Button>
                   </div>
@@ -520,14 +520,14 @@ export function IngestView({
         <Card className="qv-ingest__add-card">
           <p className="qv-ingest__add-eyebrow">会話・メモから追加</p>
           <div className="qv-ingest__trust-note">
-            <ShieldCheck size={14} />
+            <ShieldCheck size={14} aria-hidden="true" />
             <span>ここで保存されるのは取り込み元と未承認の記憶です。AIへ渡るのは承認した記憶だけです。</span>
           </div>
           <div className="qv-ingest__form-stack">
             <FieldInput label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
             <FieldTextarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
             <Button variant="primary" onClick={addManualSource}>
-              <Sparkles size={15} />
+              <Sparkles size={15} aria-hidden="true" />
               記憶を生成
             </Button>
           </div>
@@ -544,7 +544,7 @@ export function IngestView({
             onDragOver={handleDropZoneDrag}
             onDrop={handleDropZoneDrop}
           >
-            <Upload size={22} />
+            <Upload size={22} aria-hidden="true" />
             <strong>{isDragActive ? "ここにドロップ" : "ファイルを選択 / ドロップ"}</strong>
             <span className="qv-ingest__drop-label">{sourceLabel}</span>
             <small>1ファイルずつ追加します</small>
@@ -561,7 +561,7 @@ export function IngestView({
           </label>
           {uploadFeedback && (
             <div className={`qv-ingest__upload-feedback qv-ingest__upload-feedback--${uploadFeedback.tone}`}>
-              {uploadFeedback.tone === "ready" ? <CheckCircle2 size={15} /> : <ShieldAlert size={15} />}
+              {uploadFeedback.tone === "ready" ? <CheckCircle2 size={15} aria-hidden="true" /> : <ShieldAlert size={15} aria-hidden="true" />}
               <div>
                 <strong>{uploadFeedback.title}</strong>
                 <span>{uploadFeedback.body}</span>
@@ -569,7 +569,7 @@ export function IngestView({
             </div>
           )}
           <div className="qv-ingest__trust-note">
-            <ShieldCheck size={14} />
+            <ShieldCheck size={14} aria-hidden="true" />
             <span>
               PDF/Officeはデスクトップアプリでローカル抽出します。
               {ocrExtractionAvailable
@@ -583,7 +583,7 @@ export function IngestView({
           <div className="qv-ingest__readiness-grid" aria-label="ドキュメント取り込み状況">
             {documentReadiness.map((item) => (
               <div className={`qv-ingest__readiness-card qv-ingest__readiness-card--${item.state}`} key={item.label}>
-                {item.state === "ready" ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}
+                {item.state === "ready" ? <CheckCircle2 size={13} aria-hidden="true" /> : <ShieldAlert size={13} aria-hidden="true" />}
                 <div>
                   <span>{item.label}</span>
                   <strong>{item.value}</strong>
@@ -597,7 +597,7 @@ export function IngestView({
 
       {/* Source history */}
       <div className="qv-ingest__trust-note qv-ingest__source-lifecycle-note">
-        <Archive size={14} />
+        <Archive size={14} aria-hidden="true" />
         <span>取り込み元を停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
       </div>
 
@@ -608,7 +608,7 @@ export function IngestView({
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="ghost" onClick={goHome}>
-                <FileText size={15} />
+                <FileText size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>
             </div>
@@ -685,7 +685,7 @@ function IngestSourceRow({
               placeholder="再抽出したい本文"
             />
             <div className="qv-ingest__trust-note">
-              <RefreshCw size={13} />
+              <RefreshCw size={13} aria-hidden="true" />
               <span>保存すると未承認の記憶を作り直します。承認済みの記憶は再確認待ちになり、AIに渡した内容（記憶）は無効化されます。</span>
             </div>
           </div>
@@ -756,7 +756,7 @@ function IngestSourceRow({
                   AIに渡した内容（記憶）{linkedPackCount}件に影響します。
                 </span>
                 <Button variant="quiet" size="sm" onClick={() => setConfirmBodyPurge(false)}>
-                  <X size={13} />
+                  <X size={13} aria-hidden="true" />
                   取消
                 </Button>
               </div>
@@ -778,11 +778,11 @@ function IngestSourceRow({
                 if (saved) setBodyDraft(null);
               }}
             >
-              <RefreshCw size={13} />
+              <RefreshCw size={13} aria-hidden="true" />
               保存して再抽出
             </Button>
             <Button variant="quiet" size="sm" onClick={() => setBodyDraft(null)}>
-              <X size={13} />
+              <X size={13} aria-hidden="true" />
               取消
             </Button>
           </>
@@ -796,11 +796,11 @@ function IngestSourceRow({
                 if (saved) setDraft(null);
               }}
             >
-              <Check size={13} />
+              <Check size={13} aria-hidden="true" />
               保存
             </Button>
             <Button variant="quiet" size="sm" onClick={() => setDraft(null)}>
-              <X size={13} />
+              <X size={13} aria-hidden="true" />
               取消
             </Button>
           </>
@@ -817,7 +817,7 @@ function IngestSourceRow({
                 })
               }
             >
-              <Settings size={13} />
+              <Settings size={13} aria-hidden="true" />
               編集
             </Button>
             {source.deletionState === "active" && source.body && (
@@ -826,7 +826,7 @@ function IngestSourceRow({
                 size="sm"
                 onClick={() => setBodyDraft(source.body)}
               >
-                <RefreshCw size={13} />
+                <RefreshCw size={13} aria-hidden="true" />
                 本文編集
               </Button>
             )}
@@ -839,7 +839,7 @@ function IngestSourceRow({
             size="sm"
             onClick={() => changeSourceLifecycle(source.id, "soft_delete")}
           >
-            <Archive size={13} />
+            <Archive size={13} aria-hidden="true" />
             使用停止
           </Button>
         )}
@@ -849,7 +849,7 @@ function IngestSourceRow({
             size="sm"
             onClick={() => changeSourceLifecycle(source.id, "restore")}
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={13} aria-hidden="true" />
             復元
           </Button>
         )}
@@ -866,7 +866,7 @@ function IngestSourceRow({
               changeSourceLifecycle(source.id, "purge_body");
             }}
           >
-            <X size={13} />
+            <X size={13} aria-hidden="true" />
             {confirmBodyPurge ? "確認して本文消去" : "本文消去"}
           </Button>
         )}
