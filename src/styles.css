@@ -1862,52 +1862,17 @@ button:focus-visible {
   .launch-panel .onboarding-checklist,
   .inbox-empty-action-grid,
   .context-inventory-grid,
-  .policy-grid,
-  .policy-controls,
-  .policy-domain-list,
-  .connection-wizard-grid,
-  .connection-diagnostic-main,
-  .connection-diagnostic-status-grid,
-  .home-capture-meta,
-  .home-ai-boundary-grid,
-  .hosted-relay-grid,
-  .hosted-relay-status,
-  .hosted-relay-steps,
-  .hosted-relay-boundary,
-  .web-ai-registration-guide,
   .document-readiness-grid,
   .pack-boundary-receipt-grid,
-  .ai-access-quickstart,
-  .ai-access-map-grid,
-  .ai-access-checklist,
-  .service-status-grid,
-  .automation-grid,
   .restore-preview-grid,
   .restore-receipt-grid,
   .setup-grid,
-  .setup-grid.remote-relay-setup,
   .search-controls {
     grid-template-columns: 1fr;
   }
 
   .home-grid .background-panel {
     grid-row: auto;
-  }
-
-  .ai-access-endpoint {
-    padding-right: 0;
-    padding-bottom: 12px;
-    border-right: 0;
-    border-bottom: 1px solid #e1e8df;
-  }
-
-  .ai-access-check {
-    border-right: 0;
-    border-bottom: 1px solid #e0e5dd;
-  }
-
-  .ai-access-check:last-child {
-    border-bottom: 0;
   }
 
   .ask-layout.has-active-pack .context-pack-panel {
@@ -1924,11 +1889,7 @@ button:focus-visible {
   .topbar-actions,
   .panel-heading,
   .panel-summary,
-  .home-capture-safety-heading,
-  .automation-card-heading,
   .search-mode-row,
-  .policy-domain-heading,
-  .capture-status-strip,
   .fact-row,
   .table-row,
   .connection-row,
@@ -1945,14 +1906,6 @@ button:focus-visible {
 
   .panel-summary-status {
     justify-content: flex-start;
-  }
-
-  .policy-domain-actions {
-    justify-content: flex-start;
-  }
-
-  .policy-domain-actions button {
-    flex: 1 1 130px;
   }
 
   .audit-summary-grid,
@@ -2068,16 +2021,9 @@ button:focus-visible {
   }
 
   .context-item-footer,
-  .excluded-context-item,
-  .capture-history-row {
+  .excluded-context-item {
     display: grid;
     grid-template-columns: 1fr;
-  }
-
-  .capture-status-strip > .danger-button,
-  .capture-history-row > .danger-button {
-    width: 100%;
-    min-width: 0;
   }
 
   .context-item-footer .secondary-button,
@@ -2097,9 +2043,6 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .ai-access-primary-actions {
-    justify-content: flex-start;
-  }
 }
 
 .onboarding-card {
@@ -2501,13 +2444,6 @@ button:focus-visible {
   margin-bottom: var(--space-4);
 }
 
-.qv-gallery__swatch-label {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--ink-faint);
-  margin-bottom: var(--space-2);
-}
-
 /* back navigation in gallery */
 .qv-gallery__back {
   font-family: var(--font-mono);
@@ -2523,15 +2459,6 @@ button:focus-visible {
 
 .qv-gallery__back:hover {
   color: var(--ink);
-}
-
-/* colour swatches in gallery */
-.qv-gallery__swatch {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--hairline);
-  display: inline-block;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -3544,15 +3471,6 @@ button:focus-visible {
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--pine) 20%, transparent);
-}
-
-.qv-ingest__cand-conf {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--ink-faint);
-  padding: 2px 6px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
 }
 
 .qv-ingest__cand-status {
