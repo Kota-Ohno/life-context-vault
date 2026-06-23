@@ -437,6 +437,20 @@ export async function saveNativeRuntimePreferences(
   return true;
 }
 
+/**
+ * Persist the delivery-notifications opt-in flag.  Returns the persisted
+ * value, or null outside Tauri.  The caller is responsible for requesting
+ * OS permission via tauri-plugin-notification's `requestPermission()` when
+ * enabling.
+ */
+export async function setNativeDeliveryNotificationsEnabled(
+  enabled: boolean
+): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("set_delivery_notifications_enabled", { enabled });
+}
+
 /** Install the local Claude Desktop MCP config entry for lcv-mcp. */
 export async function installClaudeDesktopConfig(): Promise<ClaudeDesktopConfigInstallResult | null> {
   if (!isTauriRuntime()) return null;

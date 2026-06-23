@@ -20,8 +20,10 @@ use std::{
 use tauri::{
   menu::{MenuBuilder, MenuItemBuilder},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-  ActivationPolicy, App, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+  ActivationPolicy, App, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+  WindowEvent,
 };
+use tauri_plugin_notification::NotificationExt;
 
 mod embeddings;
 mod mcp_stdio;
@@ -1459,6 +1461,32 @@ pub fn create_context_pack_request_at_path(
   let expires_at = str_field(&request, "expiresAt");
   let max_sensitivity_included = str_field(&pack, "maxSensitivityIncluded");
   let confirmation_status = str_field(&pack, "confirmationStatus");
+  if confirmation_status == "not_required" {
+    let now = now_iso();
+    let client_id_del = str_field(&request, "clientId");
+    let client_name_del = str_field(&request, "clientName");
+    mutate_vault_item_by_id(&mut vault, "contextPacks", &pack_id, |p| {
+      p["deliveredAt"] = Value::String(now.clone());
+    })?;
+    push_json_array(
+      &mut vault,
+      "auditEvents",
+      audit_event(
+        "context_pack_delivered",
+        "context_pack",
+        &pack_id,
+        "public",
+        json!({
+          "zeroTouch": true,
+          "clientName": client_name_del,
+          "clientId": client_id_del,
+          "packId": pack_id
+        }),
+      ),
+    );
+  }
+  let pack = find_vault_item_by_id(&vault, "contextPacks", &pack_id)
+    .ok_or_else(|| format!("created ContextPack was not found after delivery mark: {pack_id}"))?;
   let context_pack = if confirmation_status == "not_required" || confirmation_status == "confirmed"
   {
     Some(safe_context_pack_for_client(&pack))
@@ -3380,7 +3408,7 @@ fn get_context_request_status_at_path_with_client(
   request_id: &str,
   expected_client_id: Option<&str>,
 ) -> Result<VaultCoreRequestStatusResult, String> {
-  let connection = open_vault_db_at_path(path)?;
+  let mut connection = open_vault_db_at_path(path)?;
   let vault = load_vault_json_from_connection(&connection)?;
   let Some(request) = find_vault_item_by_id(&vault, "contextPackRequests", request_id) else {
     return Ok(VaultCoreRequestStatusResult {
@@ -3448,6 +3476,42 @@ fn get_context_request_status_at_path_with_client(
         },
         context_pack: None,
       });
+    }
+    // Fire-once delivery audit event for confirmed packs
+    let delivered_at = pack
+      .get("deliveredAt")
+      .and_then(Value::as_str)
+      .unwrap_or("")
+      .to_string();
+    if delivered_at.is_empty() {
+      let now = now_iso();
+      let client_id_del = str_field(&request, "clientId");
+      let client_name_del = str_field(&request, "clientName");
+      let pack_id_del = str_field(pack, "id");
+      let mut vault_mut = load_vault_json_from_connection(&connection)?;
+      if mutate_vault_item_by_id(&mut vault_mut, "contextPacks", &pack_id_del, |p| {
+        p["deliveredAt"] = Value::String(now.clone());
+      })
+      .is_ok()
+      {
+        push_json_array(
+          &mut vault_mut,
+          "auditEvents",
+          audit_event(
+            "context_pack_delivered",
+            "context_pack",
+            &pack_id_del,
+            "public",
+            json!({
+              "zeroTouch": false,
+              "clientName": client_name_del,
+              "clientId": client_id_del,
+              "packId": pack_id_del
+            }),
+          ),
+        );
+        save_vault_json_with_projection(&mut connection, &vault_mut)?;
+      }
     }
     return Ok(VaultCoreRequestStatusResult {
       status: "fulfilled".to_string(),
@@ -9250,6 +9314,19 @@ fn update_native_fact_metadata(
   })
 }
 
+/// Persist the delivery-notifications opt-in flag in `runtimePreferences`.
+/// When `enabled` is true the caller is responsible for requesting OS
+/// permission from the TS side (tauri-plugin-notification's
+/// `requestPermission()`).  This command only persists the user intent.
+#[tauri::command]
+fn set_delivery_notifications_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+  let path = vault_db_path(&app)?;
+  let mut prefs = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+  prefs["deliveryNotificationsEnabled"] = json!(enabled);
+  save_runtime_preferences_at_path(&path, &prefs)?;
+  Ok(enabled)
+}
+
 pub fn run() {
   tauri::Builder::default()
     .on_window_event(|window, event| {
@@ -9309,7 +9386,8 @@ pub fn run() {
       recover_vault_with_recovery_key,
       write_recovery_envelope,
       get_native_runtime_preferences,
-      save_native_runtime_preferences
+      save_native_runtime_preferences,
+      set_delivery_notifications_enabled
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -9336,6 +9414,11 @@ pub fn run() {
       window.set_focus()?;
       eprintln!("Life Context Vault main window is visible");
 
+      app.handle().plugin(tauri_plugin_notification::init())?;
+      let poller_handle = app.handle().clone();
+      std::thread::spawn(move || {
+        delivery_notification_poller(poller_handle);
+      });
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -9426,6 +9509,174 @@ fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), S
   }
   vault["classifierMigrationVersion"] = json!(CLASSIFIER_MIGRATION_VERSION);
   save_vault_json_with_projection(connection, &vault)?;
+  Ok(())
+}
+
+// ─── Delivery notification selector (P2 OS notifications) ────────────────────
+
+/// Counts and client names only — NO fact/source/candidate text ever enters this struct.
+#[derive(Debug, PartialEq)]
+pub struct DeliveryNotice {
+  /// Per-client human-readable name + count of zero-touch deliveries.
+  pub per_client: Vec<(String, usize)>,
+  /// Total zero-touch deliveries across all clients.
+  pub total: usize,
+  /// The `id` of the newest qualifying audit event (used as the next `last_seen_id`).
+  pub newest_event_id: String,
+}
+
+/// Pure, content-free selector for zero-touch delivery notifications.
+///
+/// Scans `events` (an ordered slice of `auditEvents` JSON values, oldest-first) for
+/// `context_pack_delivered` events that:
+///   - have `metadata.zeroTouch == true` (zero-touch / confirmation-not-required deliveries), and
+///   - have an `id` that comes AFTER `last_seen_id` in the slice order.
+///
+/// Returns `None` when:
+///   - `opted_in` is `false`, OR
+///   - there are no qualifying events after `last_seen_id`.
+///
+/// `DeliveryNotice.per_client` is sorted by client name for determinism.
+///
+/// ASSUMPTION: A `context_pack_delivered` event does not yet exist in the codebase.
+/// Task 3 will add it with `metadata.zeroTouch` (bool) and `metadata.clientName` (string).
+/// This function is designed against that expected schema.  When current audit events
+/// (`context_pack_generated`, `context_pack_confirmed`, …) are scanned, all will simply
+/// produce zero matches because none carry `eventType == "context_pack_delivered"`.
+pub fn select_delivery_notification(
+  events: &[serde_json::Value],
+  last_seen_id: Option<&str>,
+  opted_in: bool,
+) -> Option<DeliveryNotice> {
+  if !opted_in {
+    return None;
+  }
+
+  // Skip events up-to-and-including last_seen_id.
+  let skip_before = last_seen_id.map(|seen| {
+    events
+      .iter()
+      .position(|e| e.get("id").and_then(Value::as_str) == Some(seen))
+      .map(|pos| pos + 1) // start AFTER the seen event
+      .unwrap_or(events.len()) // unknown id → treat all as already seen
+  });
+  let new_events = &events[skip_before.unwrap_or(0)..];
+
+  // Collect zero-touch deliveries by client name.
+  let mut per_client: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+  let mut newest_event_id = String::new();
+
+  for event in new_events {
+    let event_type = event.get("eventType").and_then(Value::as_str).unwrap_or("");
+    if event_type != "context_pack_delivered" {
+      continue;
+    }
+    let metadata = match event.get("metadata") {
+      Some(m) => m,
+      None => continue,
+    };
+    let zero_touch = metadata
+      .get("zeroTouch")
+      .and_then(Value::as_bool)
+      .unwrap_or(false);
+    if !zero_touch {
+      continue;
+    }
+    // Content-free: we only read the human display name, never any fact/source/candidate text.
+    let client_name = metadata
+      .get("clientName")
+      .and_then(Value::as_str)
+      .unwrap_or("Unknown client")
+      .to_string();
+    *per_client.entry(client_name).or_insert(0) += 1;
+    if let Some(id) = event.get("id").and_then(Value::as_str) {
+      newest_event_id = id.to_string();
+    }
+  }
+
+  if per_client.is_empty() {
+    return None;
+  }
+
+  let mut per_client_vec: Vec<(String, usize)> = per_client.into_iter().collect();
+  per_client_vec.sort_by(|a, b| a.0.cmp(&b.0));
+  let total = per_client_vec.iter().map(|(_, c)| c).sum();
+
+  Some(DeliveryNotice {
+    per_client: per_client_vec,
+    total,
+    newest_event_id,
+  })
+}
+
+// ─── Delivery notification background poller (P2 OS notifications) ───────────
+
+const DELIVERY_NOTIFICATION_LAST_SEEN_KEY: &str = "delivery_notification_last_seen";
+
+fn delivery_notification_poller(app: AppHandle) {
+  loop {
+    std::thread::sleep(std::time::Duration::from_secs(15));
+    if let Err(e) = delivery_notification_poll_once(&app) {
+      eprintln!("[delivery-poller] error: {e}");
+    }
+  }
+}
+
+fn delivery_notification_poll_once(app: &AppHandle) -> Result<(), String> {
+  let path = vault_db_path(app)?;
+  let connection = open_vault_db_at_path(&path)?;
+  let vault = load_vault_json_from_connection(&connection)?;
+  let prefs = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+  let opted_in = prefs
+    .get("deliveryNotificationsEnabled")
+    .and_then(Value::as_bool)
+    .unwrap_or(false);
+  let last_seen: Option<String> = connection
+    .query_row(
+      "SELECT value FROM projection_state WHERE key = ?1",
+      rusqlite::params![DELIVERY_NOTIFICATION_LAST_SEEN_KEY],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| format!("failed to read last-seen marker: {e}"))?;
+  let events: Vec<Value> = vault
+    .get("auditEvents")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  let Some(notice) = select_delivery_notification(&events, last_seen.as_deref(), opted_in) else {
+    return Ok(());
+  };
+  let body: String = if notice.per_client.len() == 1 {
+    let (name, count) = &notice.per_client[0];
+    format!("{name} に {count} 件の文脈を渡しました")
+  } else {
+    notice
+      .per_client
+      .iter()
+      .map(|(name, count)| format!("{name} に {count} 件"))
+      .collect::<Vec<_>>()
+      .join("、")
+  };
+  if let Err(e) = app
+    .notification()
+    .builder()
+    .title("Life Context Vault")
+    .body(body)
+    .show()
+  {
+    eprintln!("[delivery-poller] notification send failed: {e}");
+  }
+  connection
+    .execute(
+      "INSERT INTO projection_state (key, value, updated_at)
+       VALUES (?1, ?2, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP",
+      rusqlite::params![DELIVERY_NOTIFICATION_LAST_SEEN_KEY, notice.newest_event_id],
+    )
+    .map_err(|e| format!("failed to persist last-seen marker: {e}"))?;
   Ok(())
 }
 
@@ -9695,6 +9946,44 @@ mod tests {
     save_runtime_preferences_at_path(&path, &prefs).expect("save prefs");
     let loaded = get_runtime_preferences_at_path(&path).expect("load prefs");
     assert_eq!(loaded, prefs);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn delivery_notifications_enabled_persists_in_runtime_preferences() {
+    use_test_vault_key();
+    let path = temp_vault_path("delivery-notif");
+    // default: field absent → treated as false
+    let initial = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+    assert_eq!(
+      initial
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      None,
+      "field should be absent before first write"
+    );
+    // enable: persist true
+    let mut prefs = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+    prefs["deliveryNotificationsEnabled"] = json!(true);
+    save_runtime_preferences_at_path(&path, &prefs).expect("save enabled");
+    let after_enable = get_runtime_preferences_at_path(&path).expect("load after enable");
+    assert_eq!(
+      after_enable
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      Some(true),
+    );
+    // disable: persist false
+    let mut prefs2 = after_enable;
+    prefs2["deliveryNotificationsEnabled"] = json!(false);
+    save_runtime_preferences_at_path(&path, &prefs2).expect("save disabled");
+    let after_disable = get_runtime_preferences_at_path(&path).expect("load after disable");
+    assert_eq!(
+      after_disable
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      Some(false),
+    );
     remove_temp_vault(&path);
   }
 
@@ -14939,5 +15228,350 @@ mod tests {
         "warning must be set when only raw key is present"
       );
     }
+  }
+
+  // ── select_delivery_notification tests ─────────────────────────────────────
+
+  fn make_delivery_event(id: &str, client_name: &str, zero_touch: bool) -> serde_json::Value {
+    json!({
+      "id": id,
+      "eventType": "context_pack_delivered",
+      "actor": "vault_core",
+      "subjectType": "context_pack",
+      "subjectId": format!("pack_{id}"),
+      "occurredAt": "2025-01-01T00:00:00.000Z",
+      "sensitivity": "low",
+      "metadata": {
+        "clientName": client_name,
+        "zeroTouch": zero_touch
+      }
+    })
+  }
+
+  fn make_other_event(id: &str, event_type: &str) -> serde_json::Value {
+    json!({
+      "id": id,
+      "eventType": event_type,
+      "actor": "vault_core",
+      "subjectType": "context_pack",
+      "subjectId": format!("pack_{id}"),
+      "occurredAt": "2025-01-01T00:00:00.000Z",
+      "sensitivity": "low",
+      "metadata": {
+        "clientName": "ChatGPT",
+        "generatedBy": "native_vault_core"
+      }
+    })
+  }
+
+  #[test]
+  fn select_delivery_opted_out_returns_none() {
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    assert_eq!(
+      select_delivery_notification(&events, None, false),
+      None,
+      "opted-out must return None regardless of events"
+    );
+  }
+
+  #[test]
+  fn select_delivery_no_events_returns_none() {
+    assert_eq!(
+      select_delivery_notification(&[], None, true),
+      None,
+      "empty event list must return None"
+    );
+  }
+
+  #[test]
+  fn select_delivery_coalesces_per_client() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+      make_delivery_event("audit_3", "ChatGPT", true),
+    ];
+    let notice =
+      select_delivery_notification(&events, None, true).expect("should produce a DeliveryNotice");
+    // Sorted by name: ChatGPT before Claude
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 2), ("Claude".to_string(), 1),],
+      "per_client must be coalesced and sorted by name"
+    );
+    assert_eq!(notice.total, 3, "total must sum across all clients");
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_confirmed_not_counted() {
+    // zero_touch=false means the user confirmed → must NOT be counted
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", false),
+      make_delivery_event("audit_2", "Claude", false),
+    ];
+    assert_eq!(
+      select_delivery_notification(&events, None, true),
+      None,
+      "user-confirmed deliveries (zeroTouch=false) must not produce a notice"
+    );
+  }
+
+  #[test]
+  fn select_delivery_mixed_zero_touch_and_confirmed() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", false), // confirmed — skip
+      make_delivery_event("audit_2", "Claude", true),   // zero-touch — count
+      make_delivery_event("audit_3", "ChatGPT", true),  // zero-touch — count
+    ];
+    let notice = select_delivery_notification(&events, None, true)
+      .expect("should notice the zero-touch deliveries");
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 1), ("Claude".to_string(), 1),]
+    );
+    assert_eq!(notice.total, 2);
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_last_seen_excludes_older_events() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+      make_delivery_event("audit_3", "ChatGPT", true),
+    ];
+    // last_seen_id = audit_2 → only audit_3 is new
+    let notice = select_delivery_notification(&events, Some("audit_2"), true)
+      .expect("audit_3 is new and should produce a notice");
+    assert_eq!(
+      notice.per_client,
+      vec![("ChatGPT".to_string(), 1)],
+      "only events after last_seen_id must be included"
+    );
+    assert_eq!(notice.total, 1);
+    assert_eq!(notice.newest_event_id, "audit_3");
+  }
+
+  #[test]
+  fn select_delivery_all_before_last_seen_returns_none() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+    ];
+    // All events are at/before last_seen_id
+    assert_eq!(
+      select_delivery_notification(&events, Some("audit_2"), true),
+      None,
+      "no new events after last_seen_id must return None"
+    );
+  }
+
+  #[test]
+  fn select_delivery_last_seen_is_first_excludes_it() {
+    let events = vec![
+      make_delivery_event("audit_1", "ChatGPT", true),
+      make_delivery_event("audit_2", "Claude", true),
+    ];
+    // last_seen = audit_1 → audit_2 is new
+    let notice =
+      select_delivery_notification(&events, Some("audit_1"), true).expect("audit_2 is new");
+    assert_eq!(notice.per_client, vec![("Claude".to_string(), 1)]);
+    assert_eq!(notice.newest_event_id, "audit_2");
+  }
+
+  #[test]
+  fn select_delivery_unknown_last_seen_id_returns_none() {
+    // Unknown last_seen_id → treat all as already seen → no new events
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    assert_eq!(
+      select_delivery_notification(&events, Some("audit_unknown_xyz"), true),
+      None,
+      "unknown last_seen_id must treat all events as already seen"
+    );
+  }
+
+  #[test]
+  fn select_delivery_non_delivery_events_not_counted() {
+    // context_pack_generated and context_pack_confirmed do NOT count
+    let events = vec![
+      make_other_event("audit_1", "context_pack_generated"),
+      make_other_event("audit_2", "context_pack_confirmed"),
+      make_other_event("audit_3", "context_pack_requested"),
+    ];
+    assert_eq!(
+      select_delivery_notification(&events, None, true),
+      None,
+      "non-delivery event types must not produce a notice"
+    );
+  }
+
+  #[test]
+  fn select_delivery_notice_contains_no_fact_or_source_content() {
+    // The DeliveryNotice struct must only carry client name + count
+    let events = vec![make_delivery_event("audit_1", "ChatGPT", true)];
+    let notice = select_delivery_notification(&events, None, true).unwrap();
+    // Verify fields: only per_client (name+count), total, newest_event_id
+    let (name, count) = &notice.per_client[0];
+    assert_eq!(name, "ChatGPT");
+    assert_eq!(*count, 1usize);
+    assert_eq!(notice.total, 1);
+    // If this compiled and runs, no fact/source/candidate data can exist in DeliveryNotice
+    // (the struct definition enforces it at the type level)
+  }
+
+  // ── context_pack_delivered fire-once tests ─────────────────────────────────
+
+  fn setup_vault_with_classified_fact_and_standing_delivery(path: &std::path::Path) {
+    // Add a source with classified fact via the full pipeline (mirrors standing_delivery test)
+    let source = add_source_with_candidates_at_path(
+      path,
+      "manual_note",
+      "manual_entry",
+      "Contact info",
+      "Contact alice@example.com for schedule details.",
+    )
+    .expect("add source");
+    approve_candidate_at_path(path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+    set_connection_standing_delivery_at_path(path, "conn_chatgpt", true).expect("enable");
+  }
+
+  #[test]
+  fn context_pack_delivered_zero_touch_fires_once_with_content_free_metadata() {
+    use_test_vault_key();
+    let path = temp_vault_path("delivered_zero_touch");
+    setup_vault_with_classified_fact_and_standing_delivery(&path);
+
+    let result = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact alice?",
+      None,
+      None,
+      None,
+    )
+    .expect("create pack");
+    assert_eq!(
+      result.confirmation_status, "not_required",
+      "should be zero-touch"
+    );
+    assert!(result.context_pack.is_some(), "zero-touch pack returned");
+
+    let conn = open_vault_db_at_path(&path).expect("open");
+    let vault = load_vault_json_from_connection(&conn).expect("load");
+    let delivered_events: Vec<&Value> = vault
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .unwrap()
+      .iter()
+      .filter(|e| str_field(e, "eventType") == "context_pack_delivered")
+      .collect();
+    assert_eq!(delivered_events.len(), 1, "exactly one delivered event");
+    let meta = &delivered_events[0]["metadata"];
+    assert_eq!(meta["zeroTouch"], json!(true));
+    assert_eq!(meta["clientName"], json!("ChatGPT"));
+    assert_eq!(meta["clientId"], json!("conn_chatgpt"));
+    assert!(meta["packId"].as_str().unwrap_or("").starts_with("pack_"));
+    // Verify content-free: no factText, no sourceIds
+    assert!(meta.get("factText").is_none());
+    assert!(meta.get("sourceIds").is_none());
+    assert!(meta.get("items").is_none());
+
+    // Second request should produce a second independent event (not re-fire first)
+    let result2 = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "another task",
+      None,
+      None,
+      None,
+    )
+    .expect("create second pack");
+    assert_ne!(result2.pack_id, result.pack_id, "distinct packs");
+    let conn2 = open_vault_db_at_path(&path).expect("open2");
+    let vault2 = load_vault_json_from_connection(&conn2).expect("load2");
+    let delivered2: Vec<&Value> = vault2
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .unwrap()
+      .iter()
+      .filter(|e| str_field(e, "eventType") == "context_pack_delivered")
+      .collect();
+    assert_eq!(delivered2.len(), 2, "two packs → two events, not more");
+
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn context_pack_delivered_confirmed_fires_once_not_on_re_poll() {
+    use_test_vault_key();
+    let path = temp_vault_path("delivered_confirmed");
+    setup_vault_with_classified_fact_and_standing_delivery(&path);
+
+    // Create pending pack by disabling standing delivery
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", false).expect("disable");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "pending task",
+      None,
+      None,
+      None,
+    )
+    .expect("build pack");
+    assert_eq!(built.confirmation_status, "pending_user_confirmation");
+    assert!(
+      built.context_pack.is_none(),
+      "pending → no immediate delivery"
+    );
+
+    // Confirm the pack
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm");
+
+    // First status poll: should fire delivered event and return pack
+    let s1 =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("status1");
+    assert_eq!(s1.status, "fulfilled");
+    assert!(s1.context_pack.is_some());
+
+    let conn = open_vault_db_at_path(&path).expect("open");
+    let vault = load_vault_json_from_connection(&conn).expect("load");
+    let delivered: Vec<&Value> = vault
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .unwrap()
+      .iter()
+      .filter(|e| str_field(e, "eventType") == "context_pack_delivered")
+      .collect();
+    assert_eq!(delivered.len(), 1, "one delivered event after first poll");
+    let meta = &delivered[0]["metadata"];
+    assert_eq!(meta["zeroTouch"], json!(false));
+    assert_eq!(meta["clientName"], json!("ChatGPT"));
+    assert!(meta.get("factText").is_none(), "content-free");
+
+    // Second status poll: should NOT add another delivered event (fire-once)
+    let s2 =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("status2");
+    assert_eq!(s2.status, "fulfilled");
+    let conn2 = open_vault_db_at_path(&path).expect("open2");
+    let vault2 = load_vault_json_from_connection(&conn2).expect("load2");
+    let delivered2_count = vault2
+      .get("auditEvents")
+      .and_then(Value::as_array)
+      .unwrap()
+      .iter()
+      .filter(|e| str_field(e, "eventType") == "context_pack_delivered")
+      .count();
+    assert_eq!(
+      delivered2_count, 1,
+      "second poll must not add a second delivered event"
+    );
+
+    remove_temp_vault(&path);
   }
 }

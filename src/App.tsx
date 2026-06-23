@@ -2,6 +2,7 @@ import {
   Activity,
   Archive,
   ArrowRight,
+  Bell,
   Check,
   CheckCircle2,
   Clipboard,
@@ -68,7 +69,8 @@ import {
   importNativeEncryptedBackup,
   isTauriRuntime,
   getNativeRuntimePreferences,
-  saveNativeRuntimePreferences
+  saveNativeRuntimePreferences,
+  setNativeDeliveryNotificationsEnabled
 } from "./nativeStorage";
 import { detectLang, Lang, t } from "./i18n";
 import { formatVaultError } from "./lib/formatVaultError";
@@ -669,6 +671,7 @@ export function App() {
     sensitivityFilter,
     storageReady
   ]);
+
 
   const activeCandidates = useMemo(
     () =>
@@ -1621,6 +1624,21 @@ export function App() {
     });
   }
 
+  async function setDeliveryNotificationsEnabled(enabled: boolean) {
+    await setNativeDeliveryNotificationsEnabled(enabled);
+    updateRuntimePreference({ deliveryNotificationsEnabled: enabled });
+    if (enabled) {
+      try {
+        const { requestPermission } = await import(
+          "@tauri-apps/plugin-notification"
+        );
+        await requestPermission();
+      } catch {
+        // permission request best-effort; setting is already persisted
+      }
+    }
+  }
+
   async function refreshLoginItem() {
     try {
       const status = await getLoginItemStatus();
@@ -1953,6 +1971,7 @@ export function App() {
             ocrProviderCandidates={ocrProviderCandidates}
             legacyOfficeProviderCandidates={legacyOfficeProviderCandidates}
             updateRuntimePreference={updateRuntimePreference}
+            setDeliveryNotificationsEnabled={setDeliveryNotificationsEnabled}
             copyText={copyText}
           />
         )}
@@ -2577,6 +2596,7 @@ function SettingsView({
   ocrProviderCandidates,
   legacyOfficeProviderCandidates,
   updateRuntimePreference,
+  setDeliveryNotificationsEnabled,
   copyText
 }: {
   passphrase: string;
@@ -2601,6 +2621,7 @@ function SettingsView({
   ocrProviderCandidates: NativeOcrProviderCandidate[];
   legacyOfficeProviderCandidates: NativeLegacyOfficeProviderCandidate[];
   updateRuntimePreference: (next: Partial<RuntimePreferences>) => void;
+  setDeliveryNotificationsEnabled: (enabled: boolean) => Promise<void>;
   copyText: (value: string, message: string) => Promise<boolean>;
 }) {
   const hasOcrCommand = Boolean(runtimePreferences.ocrCommand.trim());
@@ -2991,6 +3012,43 @@ function SettingsView({
               設定を消す
             </button>
           </div>
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">配信通知</p>
+            <h3>OS通知</h3>
+          </div>
+          <Badge>
+            {runtimePreferences.deliveryNotificationsEnabled ? "有効" : "無効"}
+          </Badge>
+        </div>
+        <p>
+          スタンディング配信が承認されたときにOSの通知を受け取ります。有効にするとOS側で通知許可を求めます。
+        </p>
+        <div className="action-column">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() =>
+              void setDeliveryNotificationsEnabled(
+                !runtimePreferences.deliveryNotificationsEnabled
+              )
+            }
+          >
+            {runtimePreferences.deliveryNotificationsEnabled ? (
+              <>
+                <X size={16} />
+                通知を無効にする
+              </>
+            ) : (
+              <>
+                <Bell size={16} />
+                通知を有効にする
+              </>
+            )}
+          </button>
         </div>
       </div>
       <div className="panel">
