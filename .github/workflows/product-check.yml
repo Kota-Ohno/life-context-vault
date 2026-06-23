@@ -36,7 +36,12 @@ concurrency:
 jobs:
   product-check:
     name: Product Release Checks
-    runs-on: ubuntu-latest
+    # macOS runner: this is a macOS-first product (Keychain, ~/Library/Application
+    # Support, Tauri set_activation_policy). Building/testing on macos-latest matches
+    # the shipping target and the green local `npm run product:check`; on Linux the
+    # Tauri app crate needs GTK/glib AND macOS-only APIs (set_activation_policy) that
+    # are not cfg-gated, so it cannot compile there.
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       CI_INCLUDE_BENCH: ${{ github.event.inputs.include_bench || 'false' }}
