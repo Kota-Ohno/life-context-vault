@@ -2576,6 +2576,22 @@ button:focus-visible {
   color: var(--tone-blocked);
 }
 
+.sensitivity.bucket-public_ok {
+  border-color: var(--tone-ready);
+  background: var(--tone-ready-soft);
+}
+
+.sensitivity.bucket-needs_review {
+  border-color: var(--tone-attention);
+  background: var(--tone-attention-soft);
+}
+
+.sensitivity.bucket-private {
+  border-color: var(--tone-blocked);
+  background: var(--tone-blocked-soft);
+  color: var(--tone-blocked);
+}
+
 .candidate-card {
   display: grid;
   gap: 12px;

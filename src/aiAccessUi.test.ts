@@ -91,7 +91,7 @@ describe("AI access UI safety", () => {
 
     expect(connected.find((item) => item.label === "画像OCR")?.value).toBe("Tesseract OCR 接続済み");
     expect(connected.find((item) => item.label === "旧DOC / XLS / PPT")?.value).toBe("LibreOffice 接続済み");
-    expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("Fact化とAI送信は別確認");
+    expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("承認とAI送信は別確認");
   });
 
   it("keeps the copy fallback starter available unless a pack is already selected", () => {
@@ -175,10 +175,10 @@ describe("AI access UI safety", () => {
 
     const receipt = contextPackBoundaryReceipt(pack, request);
 
-    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 Facts / 1 snippets");
+    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 件の記憶 / 1 snippets");
     expect(receipt.find((item) => item.label === "AIに渡る")?.detail).toContain("ChatGPT");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.value).toBe("2 exclusions");
-    expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("送信禁止");
+    expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("非公開");
     expect(receipt.find((item) => item.label === "確認状態")?.tone).toBe("attention");
     expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("承認するまでPack本文");
     expect(JSON.stringify(receipt)).not.toContain("Approved fact text that may be sent");
@@ -457,7 +457,7 @@ describe("AI access UI safety", () => {
       auditEvents: 1
     });
     expect(preview.currentCounts.sources).toBe(1);
-    expect(preview.sensitivitySummary).toBe("センシティブ");
+    expect(preview.sensitivitySummary).toBe("要確認");
     expect(preview.activeConnectorCount).toBe(1);
     expect(preview.pairedConnectorCount).toBe(1);
     expect(preview.expiredCaptureCount).toBe(1);
@@ -634,8 +634,8 @@ describe("AI access UI safety", () => {
     expect(summary.allowedSitesLabel).toBe("chatgpt.com, claude.ai +1");
     expect(summary.lastPreview).toContain("来月引っ越す予定");
     expect(summary.purgeableCount).toBe(1);
-    expect(summary.body).toContain("未承認候補");
-    expect(summary.body).toContain("Context Pack確認");
+    expect(summary.body).toContain("確認待ちの記憶");
+    expect(summary.body).toContain("AIに渡した内容（記憶）の確認");
     const longPreview = homeCaptureSafetySummary(
       settings,
       [event],
@@ -745,7 +745,7 @@ describe("AI access UI safety", () => {
 
     const sections = homeAiBoundarySections({ facts, candidates, requests, contextPacks, nowMs });
 
-    expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 Facts");
+    expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 件の記憶");
     expect(sections.find((section) => section.label === "未承認で止める")?.value).toBe("1 candidates");
     expect(sections.find((section) => section.label === "確認/返却待ち")?.value).toBe("1 requests");
     expect(sections.find((section) => section.label === "AIへ返せるPack")?.value).toBe("1 ready");
@@ -777,8 +777,8 @@ describe("AI access UI safety", () => {
     const body = auditReceiptBody(event);
 
     expect(body).toContain("契約・保険、書類・証明の文脈");
-    expect(body).toContain("2件のApprovedFact");
-    expect(body).toContain("Raw Source本文と未承認候補は含めていません");
+    expect(body).toContain("2件の記憶");
+    expect(body).toContain("Raw Source本文と確認待ちの記憶は含めていません");
   });
 
 });
