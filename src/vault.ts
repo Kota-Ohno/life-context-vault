@@ -1669,7 +1669,7 @@ export function recordContextPackDelivery(
   state: VaultState,
   packId: string,
   input: {
-    channel: "clipboard_copy" | "relay_handoff";
+    channel: "clipboard_copy";
     status: "copied" | "registered" | "failed" | "skipped";
     ttlSeconds?: number | null;
     relayExpiresAt?: number | null;
