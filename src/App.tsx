@@ -1088,7 +1088,7 @@ export function App() {
   async function changeFactLifecycle(factId: string, action: FactLifecycleAction) {
     const fact = state.facts.find((item) => item.id === factId);
     if (!fact) {
-      setNotice("Factが見つかりませんでした。");
+      setNotice("記憶が見つかりませんでした。");
       return;
     }
     if (nativePath) {
@@ -1115,11 +1115,11 @@ export function App() {
   async function editFactMetadata(factId: string, input: FactMetadataUpdate): Promise<boolean> {
     const fact = state.facts.find((item) => item.id === factId);
     if (!fact) {
-      setNotice("Factが見つかりませんでした。");
+      setNotice("記憶が見つかりませんでした。");
       return false;
     }
     if (!input.factText.trim()) {
-      setNotice("Fact本文を入力してください。");
+      setNotice("記憶の本文を入力してください。");
       return false;
     }
     if (input.sensitivity === "secret_never_send") {
@@ -1789,14 +1789,14 @@ export function App() {
               const pack = state.contextPacks.find((p) => p.id === packId);
               if (!pack) return;
               const ok = window.confirm(
-                "このFactを今後どのAIにも渡しません。よろしいですか？"
+                "この記憶を今後どのAIにも渡しません。よろしいですか？"
               );
               if (!ok) return;
               const next = pack.items.reduce(
                 (s, item) => updateFactLifecycle(s, item.factId, "hide"),
                 state
               );
-              apply(next, "Factを非表示にしました。今後どのAIにも渡しません。");
+              apply(next, "記憶を非表示にしました。今後どのAIにも渡しません。");
             }}
           />
         )}
@@ -2055,7 +2055,7 @@ function ContextRequestsView({
         : "今は対応待ちはありません";
   const requestQueueBody =
     pendingReviewRequests.length > 0
-      ? "外部AIへ返す前に、使うFact・根拠・除外理由を確認できます。"
+      ? "外部AIへ返す前に、使う記憶・根拠・除外理由を確認できます。"
       : unreturnedLowRiskRequests.length > 0
         ? "低リスクでも、AIへ返す前に送信内容をここで確認できます。"
         : showCopyFallbackStarter
@@ -2233,7 +2233,7 @@ function ContextRequestsView({
             <div className="pack-scope-summary">
               <ShieldCheck size={16} />
               <span>
-                {currentPack.items.length}件のFactと{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
+                {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠snippetだけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
             <div className="pack-boundary-receipt-grid" aria-label="Context Pack delivery boundary">
@@ -2305,7 +2305,7 @@ function ContextRequestsView({
                   </div>
                 </div>
               ))}
-              {currentPack.items.length === 0 && <p className="muted">使える承認済みFactがまだありません。</p>}
+              {currentPack.items.length === 0 && <p className="muted">使える承認済みの記憶がまだありません。</p>}
             </div>
             <div className="source-snippet-list">
               <strong>AIへ渡る根拠snippet</strong>
@@ -2326,7 +2326,7 @@ function ContextRequestsView({
                     <span>今回はSource snippetを送信しません</span>
                     <Badge>0 snippets</Badge>
                   </div>
-                  <p>Raw Source本文や高感度SourceタイトルはAIへ渡しません。上のFact本文と理由だけがPack本文に含まれます。</p>
+                  <p>Raw Source本文や高感度SourceタイトルはAIへ渡しません。上の記憶の本文と理由だけがPack本文に含まれます。</p>
                   <small>出典確認が必要な場合は、Sourcesで元データとポリシーを確認できます。</small>
                 </div>
               )}
@@ -2343,7 +2343,7 @@ function ContextRequestsView({
             )}
             {hiddenExcludedFacts.length > 0 && (
               <div className="excluded-context-items">
-                <strong>あなたがこのAIから外したFact</strong>
+                <strong>あなたがこのAIから外した記憶</strong>
                 {hiddenExcludedFacts.map(({ exclusion, fact }) => (
                   <div className="excluded-context-item" key={`${exclusion.referencedId}-${exclusion.reason}`}>
                     <span>{fact?.factText ?? exclusion.referencedId}</span>
@@ -2556,7 +2556,7 @@ function SearchView({
           <div className="panel-heading compact-heading">
             <div>
               <p className="eyebrow">Version history</p>
-              <h3>置き換え済みFact</h3>
+              <h3>置き換え済みの記憶</h3>
             </div>
             <Badge>{supersededFacts.length}件</Badge>
           </div>
@@ -3164,8 +3164,8 @@ function auditEventLabel(event: AuditEvent): string {
     context_pack_denied: "Context Request拒否",
     candidate_generated: "候補生成",
     candidate_reviewed: "候補レビュー",
-    fact_created: "Fact作成",
-    fact_updated: "Fact更新",
+    fact_created: "記憶作成",
+    fact_updated: "記憶更新",
     source_added: "Source追加",
     source_updated: "Source更新",
     source_deleted: "Source停止",
@@ -3187,7 +3187,7 @@ function auditCompactMetadata(event: AuditEvent): string {
   const parts = [
     client ? `AI: ${client}` : null,
     status ? `状態: ${status}` : null,
-    typeof itemCount === "number" ? `Fact: ${itemCount}` : null,
+    typeof itemCount === "number" ? `記憶: ${itemCount}` : null,
     typeof invalidated === "number" ? `失効Pack: ${invalidated}` : null
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "本文なしの監査メタデータ";
@@ -3229,7 +3229,7 @@ function FactRow({
         {draft ? (
           <div className="fact-edit-form">
             <Textarea
-              label="Fact本文"
+              label="記憶の本文"
               value={draft.factText}
               onChange={(value) => setDraft({ ...draft, factText: value })}
               placeholder="AIに渡す正本の文脈"
@@ -3445,7 +3445,7 @@ export function homeAiBoundarySections({
   return [
     {
       label: "AIが使える正本",
-      value: `${activeFactCount} Facts`,
+      value: `${activeFactCount} 件の記憶`,
       detail:
         activeFactCount > 0
           ? "記憶だけがAIに渡す記憶になります。"
@@ -3521,8 +3521,8 @@ export function contextPackBoundaryReceipt(
     {
       label: "AIに渡る",
       tone: pack.items.length > 0 || snippetCount > 0 ? "ready" : "attention",
-      value: `${pack.items.length} Facts / ${snippetCount} snippets`,
-      detail: `${clientName}へ渡るのは承認済みFactと最小snippetだけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
+      value: `${pack.items.length} 件の記憶 / ${snippetCount} snippets`,
+      detail: `${clientName}へ渡るのは承認済みの記憶と最小snippetだけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
     },
     {
       label: "AIに渡らない",
@@ -3822,7 +3822,7 @@ function restoreReceiptSections(input: {
       tone: input.counts.sources > 0 ? "attention" : "ready"
     },
     {
-      label: "Approved Facts",
+      label: "承認済みの記憶",
       value: `${input.counts.facts}件`,
       detail: "ユーザ承認済みの記憶として戻ります。確認待ちの記憶はInboxに残り、承認済みとしては使われません。",
       tone: input.counts.facts > 0 ? "ready" : "attention"

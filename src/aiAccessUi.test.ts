@@ -175,7 +175,7 @@ describe("AI access UI safety", () => {
 
     const receipt = contextPackBoundaryReceipt(pack, request);
 
-    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 Facts / 1 snippets");
+    expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 件の記憶 / 1 snippets");
     expect(receipt.find((item) => item.label === "AIに渡る")?.detail).toContain("ChatGPT");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.value).toBe("2 exclusions");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("非公開");
@@ -745,7 +745,7 @@ describe("AI access UI safety", () => {
 
     const sections = homeAiBoundarySections({ facts, candidates, requests, contextPacks, nowMs });
 
-    expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 Facts");
+    expect(sections.find((section) => section.label === "AIが使える正本")?.value).toBe("1 件の記憶");
     expect(sections.find((section) => section.label === "未承認で止める")?.value).toBe("1 candidates");
     expect(sections.find((section) => section.label === "確認/返却待ち")?.value).toBe("1 requests");
     expect(sections.find((section) => section.label === "AIへ返せるPack")?.value).toBe("1 ready");
