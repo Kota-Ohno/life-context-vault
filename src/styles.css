@@ -2660,10 +2660,6 @@ button:focus-visible {
   line-height: 1.45;
 }
 
-.warning-line.conflict-line {
-  border-color: var(--tone-attention);
-  background: var(--tone-attention-soft);
-}
 
 .drop-zone {
   display: grid;
@@ -3495,6 +3491,11 @@ button:focus-visible {
 .qv-button:focus-visible {
   outline: 2px solid var(--pine);
   outline-offset: 2px;
+}
+
+.qv-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* sizes */
@@ -4532,7 +4533,7 @@ button:focus-visible {
 
 .qv-onboarding-step__body {
   font-size: 0.75rem;
-  color: var(--ink-faint);
+  color: var(--ink-secondary);
   line-height: 1.5;
 }
 
@@ -4889,7 +4890,7 @@ button:focus-visible {
 .qv-ingest__cand-status {
   font-family: var(--font-mono);
   font-size: 0.7rem;
-  color: var(--ink-faint);
+  color: var(--ink-secondary);
   padding: 2px 6px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
@@ -5040,7 +5041,7 @@ button:focus-visible {
   align-items: center;
   gap: var(--space-1);
   font-size: 0.75rem;
-  color: var(--ink-faint);
+  color: var(--ink-secondary);
   padding-top: var(--space-1);
   border-top: 1px solid var(--hairline);
   margin-top: var(--space-1);

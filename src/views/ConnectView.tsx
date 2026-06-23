@@ -47,7 +47,7 @@ export function ConnectView({
               <h2 className="qv-connect-card__title">Claude Desktop</h2>
             </div>
             <div className="qv-connect-card__head-right">
-              <span className={`qv-connection-status ${hasActiveConnection ? "qv-connection-status--connected" : "qv-connection-status--disconnected"}`}>
+              <span role="status" className={`qv-connection-status ${hasActiveConnection ? "qv-connection-status--connected" : "qv-connection-status--disconnected"}`}>
                 {hasActiveConnection ? "接続済み" : "未接続"}
               </span>
               <Plug size={16} className="qv-connect-card__icon" />

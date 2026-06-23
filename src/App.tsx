@@ -1243,6 +1243,7 @@ export function App() {
           setNotice("Vault CoreでAI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
+          setQuestion("");
           return;
         }
       } catch (error) {
@@ -1261,6 +1262,7 @@ export function App() {
     apply(built.state, "AI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
     setActiveRequestId(requested.request.id);
     setActivePackId(built.pack?.id ?? null);
+    setQuestion("");
   }
 
   function generateAnswer(pack: ContextPack) {
@@ -3062,6 +3064,7 @@ function SettingsView({
           </button>
         </div>
       </div>
+      {import.meta.env.DEV && (
       <div className="panel">
         <div className="panel-heading">
           <div>
@@ -3106,6 +3109,7 @@ function SettingsView({
           </div>
         </div>
       </div>
+      )}
     </section>
   );
 }

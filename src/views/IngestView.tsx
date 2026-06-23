@@ -440,7 +440,7 @@ export function IngestView({
                 {/* Conflict warning */}
                 {conflictFactIds.length > 0 && (
                   <div className="qv-ingest__warning-line">
-                    <ShieldAlert size={14} />
+                    <ShieldAlert size={14} aria-hidden="true" />
                     {candidate.conflictReason ?? "既存の記憶と異なる可能性があります。保存前に置き換えるか確認してください。"}
                   </div>
                 )}
@@ -473,7 +473,7 @@ export function IngestView({
                 {/* Sensitive warning */}
                 {candidate.status === "blocked_sensitive" && (
                   <div className="qv-ingest__warning-line">
-                    <ShieldAlert size={14} />
+                    <ShieldAlert size={14} aria-hidden="true" />
                     要確認の記憶です。保存するとAIに渡す前に毎回確認します。
                   </div>
                 )}
@@ -501,7 +501,7 @@ export function IngestView({
                 )}
                 {selectionMode && !eligible && (
                   <p className="qv-ingest__cand-ineligible-note">
-                    <ShieldAlert size={13} />
+                    <ShieldAlert size={13} aria-hidden="true" />
                     個別に確認が必要です
                   </p>
                 )}
