@@ -1,4 +1,4 @@
-// src/onboarding.ts — first-run guidance copy (salvaged from the removed i18n layer)
+// First-run onboarding step copy (記憶を追加 → 確認して承認 → AIと接続).
 export const ONBOARDING_STEPS = [
   { key: "add", title: "生活背景を少し書く", body: "ガイド入力またはデモデータで、AIに覚えておいてほしい背景を追加します。保存前にMemory Inboxで確認します。" },
   { key: "approve", title: "Memory Inbox で承認", body: "生成された候補を確認します。承認したものだけがAIの確定文脈になります。" },

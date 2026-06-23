@@ -14,8 +14,6 @@ export type RailView =
 export interface RailProps {
   view: RailView;
   setView: (v: RailView) => void;
-  lang: "ja" | "en";
-  setLang: (l: "ja" | "en") => void;
   /** Badge: incoming candidate count (取り込み + Inbox) */
   candidateCount: number;
   /** Badge: requests needing action */
@@ -29,8 +27,6 @@ export interface RailProps {
 export function Rail({
   view,
   setView,
-  lang,
-  setLang,
   candidateCount,
   requestCount,
   reviewFactCount,
@@ -107,15 +103,6 @@ export function Rail({
             onClick={() => setView("settings")}
           >
             <Settings size={14} aria-hidden="true" /> 設定
-          </button>
-          <button
-            className="qv-rail__lang-btn"
-            type="button"
-            onClick={() => setLang(lang === "ja" ? "en" : "ja")}
-            aria-label="Toggle language"
-            title={lang === "ja" ? "Switch to English" : "日本語に切り替え"}
-          >
-            {lang.toUpperCase()}
           </button>
         </div>
       </div>

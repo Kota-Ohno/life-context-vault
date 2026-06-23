@@ -380,21 +380,6 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
-  const [lang, setLang] = useState<"ja" | "en">(() => {
-    const stored = typeof localStorage !== "undefined" ? localStorage.getItem("lcv-lang") : null;
-    if (stored === "en" || stored === "ja") return stored;
-    if (typeof navigator !== "undefined" && navigator.language) {
-      return navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en";
-    }
-    return "ja";
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("lcv-lang", lang);
-    } catch {
-      /* localStorage unavailable; language stays in-memory for this session */
-    }
-  }, [lang]);
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [candidateSupersedes, setCandidateSupersedes] = useState<Record<string, string[]>>({});
   const [manualTitle, setManualTitle] = useState("");
@@ -1731,8 +1716,6 @@ export function App() {
       <Rail
         view={view}
         setView={setView}
-        lang={lang}
-        setLang={setLang}
         candidateCount={activeCandidates.length}
         requestCount={state.contextPackRequests.filter((request) => requestNeedsUserAction(request)).length}
         reviewFactCount={reviewFacts.length}
