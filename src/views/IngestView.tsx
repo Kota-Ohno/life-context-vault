@@ -429,7 +429,7 @@ export function IngestView({
 
                 {/* Editable text */}
                 <textarea
-                  aria-label="Candidate text"
+                  aria-label="候補テキスト"
                   className="qv-ingest__cand-text"
                   value={edits[candidate.id] ?? candidate.proposedFactText}
                   onChange={(e) => setEdit(candidate.id, e.target.value)}
@@ -580,7 +580,7 @@ export function IngestView({
                 : " 旧Office形式は変換ツール接続まで取り込めません。"}
             </span>
           </div>
-          <div className="qv-ingest__readiness-grid" aria-label="Document ingestion readiness">
+          <div className="qv-ingest__readiness-grid" aria-label="ドキュメント取り込み状況">
             {documentReadiness.map((item) => (
               <div className={`qv-ingest__readiness-card qv-ingest__readiness-card--${item.state}`} key={item.label}>
                 {item.state === "ready" ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}

@@ -735,7 +735,7 @@ export function App() {
       {
         kind: "manual_note",
         origin: "manual_entry",
-        title: manualTitle || "Manual note",
+        title: manualTitle || "手動メモ",
         body: manualBody
       },
       "取り込み元を保存し、取り込みに記憶を追加しました。"
@@ -744,7 +744,7 @@ export function App() {
       const next = addSourceWithCandidates(state, {
         kind: "manual_note",
         origin: "manual_entry",
-        title: manualTitle || "Manual note",
+        title: manualTitle || "手動メモ",
         body: manualBody
       });
       apply(next, "取り込み元を保存し、取り込みに記憶を追加しました。");
@@ -1229,7 +1229,7 @@ export function App() {
       try {
         const built = await createNativeContextPackRequest({
           clientId: requestClientId,
-          clientName: client?.clientName ?? "Unknown AI",
+          clientName: client?.clientName ?? "不明なAI",
           taskText: question,
           purpose: "普段使うAIへの回答文脈",
           approvalMode: "explicit_sensitive"
@@ -1251,7 +1251,7 @@ export function App() {
     }
     const requested = createContextPackRequest(state, {
       clientId: requestClientId,
-      clientName: client?.clientName ?? "Unknown AI",
+      clientName: client?.clientName ?? "不明なAI",
       taskText: question,
       purpose: "普段使うAIへの回答文脈",
       approvalMode: "explicit_sensitive"
@@ -1747,7 +1747,7 @@ export function App() {
         <header className="topbar">
           {!VIEWS_WITH_OWN_HEADER.has(view) && (
             <div>
-              <p className="eyebrow">User-owned life context</p>
+              <p className="eyebrow">あなたの生活背景</p>
               <h2>{titleForView(view)}</h2>
             </div>
           )}
@@ -1755,7 +1755,7 @@ export function App() {
             {nativePath && (
               <button className="secondary-button" onClick={refreshFromNative} type="button">
                 <RefreshCw size={16} aria-hidden="true" />
-                Sync
+                同期
               </button>
             )}
             {notice && (
@@ -2084,7 +2084,7 @@ function ContextRequestsView({
         <Sparkles size={16} aria-hidden="true" />
         {buttonLabel}
       </button>
-      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認とAuditを通します。</p>
+      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認と監査ログを通します。</p>
     </div>
   );
   const packPanelRef = useRef<HTMLDivElement | null>(null);
@@ -2102,7 +2102,7 @@ function ContextRequestsView({
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">AI confirmation inbox</p>
+            <p className="eyebrow">AIへの送信確認</p>
             <h3>AIへ返す前の確認待ち</h3>
           </div>
           <Send size={18} aria-hidden="true" />
@@ -2149,7 +2149,7 @@ function ContextRequestsView({
           <div className="copy-fallback-starter">
             <div className="panel-heading compact-heading">
               <div>
-                <p className="eyebrow">コピーFallback</p>
+                <p className="eyebrow">コピー送信</p>
                 <h3>MCPなしでAIに渡す内容（記憶）を作る</h3>
               </div>
               <Clipboard size={18} aria-hidden="true" />
@@ -2171,7 +2171,7 @@ function ContextRequestsView({
       <div className="panel context-pack-panel" ref={packPanelRef}>
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">AI-bound preview</p>
+            <p className="eyebrow">AI送信プレビュー</p>
             <h3>この内容だけAIへ渡す</h3>
           </div>
           {currentRequest && <Badge>{currentRequest.clientName}</Badge>}
@@ -2179,7 +2179,7 @@ function ContextRequestsView({
         {currentPack && (
           <>
             <div className="pack-summary top-pack-summary">
-              <Badge>{currentPack.riskLevel} risk</Badge>
+              <Badge>{currentPack.riskLevel} リスク</Badge>
               <SensitivityBadge sensitivity={currentPack.maxSensitivityIncluded} />
               <Badge>{packConfirmationLabel(currentPack.confirmationStatus)}</Badge>
             </div>
@@ -2259,7 +2259,7 @@ function ContextRequestsView({
                 <div className="trust-note">
                   <Clipboard size={16} aria-hidden="true" />
                   <span>
-                    クリップボードに書き込めない環境です。下のPayloadを選択してAIへ貼り付け、完了後にAuditへ記録します。
+                    クリップボードに書き込めない環境です。下の送信内容を選択してAIへ貼り付け、完了後に監査ログへ記録します。
                   </span>
                 </div>
                 <label className="field manual-copy-field">
@@ -2277,7 +2277,7 @@ function ContextRequestsView({
                     type="button"
                   >
                     <CheckCircle2 size={16} aria-hidden="true" />
-                    手動コピー済みとしてAudit記録
+                    手動コピー済みとして監査ログ記録
                   </button>
                   <button className="secondary-button" onClick={clearManualCopyPayload} type="button">
                     <X size={16} aria-hidden="true" />
@@ -2431,7 +2431,7 @@ function SearchView({
       <div className="memory-inventory-panel">
         <div className="panel-heading compact-heading">
           <div>
-            <p className="eyebrow">Memory inventory</p>
+            <p className="eyebrow">記憶の一覧</p>
             <h3>AIが使える保存済みの記憶</h3>
           </div>
           <Badge>{inventory.active} AIに渡す記憶</Badge>
@@ -2465,7 +2465,7 @@ function SearchView({
         <div className="memory-review-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Needs review</p>
+              <p className="eyebrow">確認が必要</p>
               <h3>AIに使う前に確認が必要な記憶</h3>
             </div>
             <Badge>{reviewFacts.length}件</Badge>
@@ -2536,7 +2536,7 @@ function SearchView({
         <div className="memory-review-panel excluded-facts-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Outside AI context</p>
+              <p className="eyebrow">AIに渡さない</p>
               <h3>AIに渡す記憶から外れている記憶</h3>
             </div>
             <Badge>{filteredExcludedFacts.length}件</Badge>
@@ -2562,7 +2562,7 @@ function SearchView({
         <div className="memory-review-panel version-history-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="eyebrow">Version history</p>
+              <p className="eyebrow">変更履歴</p>
               <h3>置き換え済みの記憶</h3>
             </div>
             <Badge>{supersededFacts.length}件</Badge>
@@ -3078,7 +3078,7 @@ function SettingsView({
               <ShieldAlert size={16} aria-hidden="true" />
               <span>Vaultをクリアすると、取り込み元、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
-            <div className="clear-impact-list" aria-label="Vault clear impact">
+            <div className="clear-impact-list" aria-label="消去の影響">
               {clearImpactSections.map((section) => (
                 <div className={`restore-receipt ${section.tone}`} key={section.label}>
                   <strong>{section.label}</strong>
@@ -4000,7 +4000,7 @@ function restoreOverwriteSections(
     {
       label: "AI接続設定",
       value: `${currentCounts.connectorSessions}件の接続 / ${currentCounts.policies}件のポリシー -> ${nextCounts.connectorSessions}件の接続 / ${nextCounts.policies}件のポリシー`,
-      detail: "Claude、ChatGPT、ブラウザキャプチャ、コピーFallbackの接続メタデータとポリシーが置き換わります。",
+      detail: "Claude、ChatGPT、ブラウザキャプチャ、コピー経由の接続メタデータとポリシーが置き換わります。",
       tone: "attention"
     },
     {
@@ -4154,8 +4154,8 @@ function connectorKindLabel(kind: ConnectorKind): string {
     claude_remote: "Claude",
     gemini: "Gemini",
     codex: "Codex",
-    generic_mcp: "MCP client",
-    copy_fallback: "Copy fallback"
+    generic_mcp: "MCP クライアント",
+    copy_fallback: "コピー経由"
   };
   return labels[kind];
 }
