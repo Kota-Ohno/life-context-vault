@@ -462,15 +462,15 @@ describe("AI access UI safety", () => {
     expect(preview.pairedConnectorCount).toBe(1);
     expect(preview.expiredCaptureCount).toBe(1);
     expect(preview.promotedSourceCount).toBe(1);
-    expect(preview.receiptSections.map((section) => section.label)).toContain("AI接続とPolicy");
-    expect(preview.receiptSections.find((section) => section.label === "Capture履歴")?.detail).toContain("TTL切れCapture");
+    expect(preview.receiptSections.map((section) => section.label)).toContain("AI接続とポリシー");
+    expect(preview.receiptSections.find((section) => section.label === "キャプチャ履歴")?.detail).toContain("TTL切れCapture");
     expect(preview.aiBoundarySections.find((section) => section.label === "取得可能Pack")?.value).toBe("1件");
     expect(preview.aiBoundarySections.find((section) => section.label === "期限切れPack")?.value).toBe("1件");
     expect(preview.aiBoundarySections.find((section) => section.label === "AI接続メタデータ")?.detail).toContain(
-      "Connections"
+      "接続"
     );
     expect(preview.overwriteSections.find((section) => section.label === "生活コンテキスト")?.value).toContain(
-      "1 Sources / 1 Facts -> 1 Sources / 1 Facts"
+      "1件のソース / 1件の記憶 -> 1件のソース / 1件の記憶"
     );
     expect(JSON.stringify(preview)).not.toContain("must not appear");
     expect(JSON.stringify(preview)).not.toContain("Restored pack body text");
@@ -585,10 +585,10 @@ describe("AI access UI safety", () => {
 
     const sections = clearVaultImpactSections(state);
 
-    expect(sections.find((section) => section.label === "生活コンテキスト")?.value).toContain("1 Sources / 1 Facts");
+    expect(sections.find((section) => section.label === "生活コンテキスト")?.value).toContain("1件のソース / 1件の記憶");
     expect(sections.find((section) => section.label === "AI境界")?.detail).toContain("1件の取得可能Pack");
-    expect(sections.find((section) => section.label === "AI接続とPolicy")?.detail).toContain("外部サービス側");
-    expect(sections.find((section) => section.label === "Audit / Capture")?.detail).toContain("AI配達");
+    expect(sections.find((section) => section.label === "AI接続とポリシー")?.detail).toContain("外部サービス側");
+    expect(sections.find((section) => section.label === "監査 / キャプチャ")?.detail).toContain("AI配信");
     expect(JSON.stringify(sections)).not.toContain("Source body that must not appear");
     expect(JSON.stringify(sections)).not.toContain("Fact text that must not appear");
     expect(JSON.stringify(sections)).not.toContain("Pack body that must not appear");
