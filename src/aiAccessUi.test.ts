@@ -40,7 +40,7 @@ describe("AI access UI safety", () => {
       )
     ).toBe("Guided background setup, Sample insurance renewal note, +1");
     expect(factSourceNames({ sourceIds: [] }, [])).toBe("出典なし");
-    expect(factSourceNames({ sourceIds: ["missing"] }, [])).toBe("Source未検出");
+    expect(factSourceNames({ sourceIds: ["missing"] }, [])).toBe("取り込み元が見つかりません");
   });
 
   it("counts which approved facts are eligible for AI context", () => {

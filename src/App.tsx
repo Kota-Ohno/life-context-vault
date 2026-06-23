@@ -791,7 +791,7 @@ export function App() {
             return;
           }
         } catch (error) {
-          setNotice(formatVaultError(error, "保留中Sourceの保存に失敗しました。"));
+          setNotice(formatVaultError(error, "保留中の取り込み元の保存に失敗しました。"));
         }
       }
       setUploadFeedback(unsupportedFileFeedback(file, support.reason));
@@ -807,7 +807,7 @@ export function App() {
         setUploadFeedback({
           tone: "attention",
           title: "ファイルを読めませんでした",
-          body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、Manual sourceに貼り付けてください。"
+          body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、「会話・メモから追加」に貼り付けてください。"
         });
         return;
       }
@@ -846,7 +846,7 @@ export function App() {
           body:
             error instanceof Error
               ? error.message
-              : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合はManual sourceに貼り付けてください。"
+              : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合は「会話・メモから追加」に貼り付けてください。"
         });
         return;
       }
@@ -3354,7 +3354,7 @@ export function factSourceNames(
   if (fact.sourceIds.length === 0) return "出典なし";
   const visibleNames = fact.sourceIds
     .slice(0, 2)
-    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "Source未検出");
+    .map((sourceId) => sources.find((source) => source.id === sourceId)?.title ?? "取り込み元が見つかりません");
   const hiddenCount = fact.sourceIds.length - visibleNames.length;
   return hiddenCount > 0 ? [...visibleNames, `+${hiddenCount}`].join(", ") : visibleNames.join(", ");
 }
@@ -3430,7 +3430,7 @@ export function homeAiBoundarySections({
       detail:
         activeFactCount > 0
           ? "記憶だけがAIに渡す記憶になります。"
-          : "Sourceや記憶だけではAIに渡る文脈になりません。",
+          : "取り込み元や記憶だけではAIに渡る文脈になりません。",
       tone: activeFactCount > 0 ? "ready" : "attention"
     },
     {
@@ -4184,7 +4184,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "画像OCRはまだ未接続です",
-      body: `${file.name} は画像として検出しました。SettingsのLocal OCRで検出機能を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+      body: `${file.name} は画像として検出しました。設定のローカルOCRで検出機能を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容を「会話・メモから追加」に貼り付けてください。`
     };
   }
   if (reason === "legacy_office") {
@@ -4272,7 +4272,7 @@ export function documentIngestionReadiness(
       label: "PDF / DOCX等",
       state: "ready",
       value: "Desktopでローカル抽出",
-      detail: "本文はSourceと取り込み候補になり、承認とAI送信は別確認です。"
+      detail: "本文は取り込み元と取り込み候補になり、承認とAI送信は別確認です。"
     },
     {
       label: "画像OCR",
@@ -4280,7 +4280,7 @@ export function documentIngestionReadiness(
       value: ocrExtractionAvailable ? `${ocrProviderLabel ?? "OCR変換ツール"} 接続済み` : "変換ツール未接続",
       detail: ocrExtractionAvailable
         ? "画像はこの端末のOCRだけで抽出します。"
-        : "画像は取り込めません。SettingsでLocal OCRを設定するまで手入力を使います。"
+        : "画像は取り込めません。設定でローカルOCRを設定するまで手入力を使います。"
     },
     {
       label: "旧DOC / XLS / PPT",
