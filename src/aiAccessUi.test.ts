@@ -178,7 +178,7 @@ describe("AI access UI safety", () => {
     expect(receipt.find((item) => item.label === "AIに渡る")?.value).toBe("1 Facts / 1 snippets");
     expect(receipt.find((item) => item.label === "AIに渡る")?.detail).toContain("ChatGPT");
     expect(receipt.find((item) => item.label === "AIに渡らない")?.value).toBe("2 exclusions");
-    expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("送信禁止");
+    expect(receipt.find((item) => item.label === "AIに渡らない")?.detail).toContain("非公開");
     expect(receipt.find((item) => item.label === "確認状態")?.tone).toBe("attention");
     expect(receipt.find((item) => item.label === "確認状態")?.detail).toContain("承認するまでPack本文");
     expect(JSON.stringify(receipt)).not.toContain("Approved fact text that may be sent");
@@ -457,7 +457,7 @@ describe("AI access UI safety", () => {
       auditEvents: 1
     });
     expect(preview.currentCounts.sources).toBe(1);
-    expect(preview.sensitivitySummary).toBe("センシティブ");
+    expect(preview.sensitivitySummary).toBe("要確認");
     expect(preview.activeConnectorCount).toBe(1);
     expect(preview.pairedConnectorCount).toBe(1);
     expect(preview.expiredCaptureCount).toBe(1);
@@ -635,7 +635,7 @@ describe("AI access UI safety", () => {
     expect(summary.lastPreview).toContain("来月引っ越す予定");
     expect(summary.purgeableCount).toBe(1);
     expect(summary.body).toContain("未承認候補");
-    expect(summary.body).toContain("Context Pack確認");
+    expect(summary.body).toContain("AIに渡した内容（記憶）の確認");
     const longPreview = homeCaptureSafetySummary(
       settings,
       [event],

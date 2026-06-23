@@ -87,6 +87,9 @@ import { IngestView } from "./views/IngestView";
 import { Toggle } from "./components/Toggle";
 import { Card } from "./components/Card";
 import { SectionDivider } from "./components/SectionDivider";
+import { DetailsDisclosure } from "./components/DetailsDisclosure";
+import { sensitivityBucketLabel } from "./sensitivityBuckets";
+import { factMemoryStatus, memoryStatusLabel } from "./memoryStatus";
 import {
   RuntimePreferences,
   loadRuntimePreferences,
@@ -3276,7 +3279,10 @@ function FactRow({
         ) : (
           <>
             <strong>{fact.factText}</strong>
-            <span>{domainLabel(fact.domain)} / {fact.confidence} / {factStatusLabel(fact.status)}</span>
+            <span>{domainLabel(fact.domain)} / {memoryStatusLabel(factMemoryStatus(fact.status))}</span>
+            <DetailsDisclosure>
+              <span>感度: {sensitivityLabel(fact.sensitivity)} / 確信度: {fact.confidence} / 状態: {factStatusLabel(fact.status)}</span>
+            </DetailsDisclosure>
             {sourceNames && <span>{sourceNames}</span>}
           </>
         )}
@@ -3517,7 +3523,7 @@ export function contextPackBoundaryReceipt(
       label: "AIに渡る",
       tone: pack.items.length > 0 || snippetCount > 0 ? "ready" : "attention",
       value: `${pack.items.length} Facts / ${snippetCount} snippets`,
-      detail: `${clientName}へ渡るのは承認済みFactと最小snippetだけです。最高感度は${sensitivityLabel(pack.maxSensitivityIncluded)}です。`
+      detail: `${clientName}へ渡るのは承認済みFactと最小snippetだけです。最高感度は${sensitivityBucketLabel(pack.maxSensitivityIncluded)}です。`
     },
     {
       label: "AIに渡らない",
@@ -3709,7 +3715,7 @@ function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reas
     deleted: "削除済み",
     user_hidden: "ユーザ非表示",
     not_relevant: "今回の目的と不一致",
-    secret_never_send: "送信禁止"
+    secret_never_send: "非公開"
   };
   return labels[reason];
 }
@@ -3761,7 +3767,7 @@ export function makeRestorePreview(restored: VaultState, currentState: VaultStat
     generatedAt: new Date().toISOString(),
     counts,
     currentCounts,
-    sensitivitySummary: highestSensitivity ? sensitivityLabel(highestSensitivity) : "空のVault",
+    sensitivitySummary: highestSensitivity ? sensitivityBucketLabel(highestSensitivity) : "空のVault",
     newestSourceAt,
     oldestAuditAt,
     sourceBodyBytes,
@@ -4103,7 +4109,7 @@ export function homeCaptureSafetySummary(
       tone: "ready",
       title: "許可サイトだけをローカルで候補化中",
       body:
-        "Captureは未承認候補を作るだけです。Fact化とAI送信は、Memory InboxとContext Pack確認を通ります。",
+        "Captureは未承認候補を作るだけです。Fact化とAI送信は、Memory InboxとAIに渡した内容（記憶）の確認を通ります。",
       allowedSitesLabel,
       lastCaptureLabel,
       lastPreview,
