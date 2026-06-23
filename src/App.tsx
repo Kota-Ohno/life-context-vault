@@ -760,7 +760,7 @@ export function App() {
         title: manualTitle || "Manual note",
         body: manualBody
       },
-      "Sourceを保存し、Memory Inboxに候補を追加しました。"
+      "Sourceを保存し、Memory Inboxに記憶を追加しました。"
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -769,7 +769,7 @@ export function App() {
         title: manualTitle || "Manual note",
         body: manualBody
       });
-      apply(next, "Sourceを保存し、Memory Inboxに候補を追加しました。");
+      apply(next, "Sourceを保存し、Memory Inboxに記憶を追加しました。");
       setView("sources");
     }
     if (addStatus === "failed") return;
@@ -879,7 +879,7 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`
+      `${file.name} をSourceとして保存し、Memory Inboxに記憶を追加しました。${extractionDetail}`
     );
     if (addStatus === "unavailable") {
       const next = addSourceWithCandidates(state, {
@@ -888,7 +888,7 @@ export function App() {
         title: file.name,
         body: text
       });
-      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに候補を追加しました。${extractionDetail}`);
+      apply(next, `${file.name} をSourceとして保存し、Memory Inboxに記憶を追加しました。${extractionDetail}`);
       setView("sources");
     }
     if (addStatus !== "failed") setUploadFeedback(null);
@@ -911,7 +911,7 @@ export function App() {
       setNativeRevision(added.updatedAt);
       setState(added.state);
       setNotice(
-        `${message} ${added.candidateIds.length}件の候補が作成されました。承認されるまでAIには使われません。`
+        `${message} ${added.candidateIds.length}件の記憶が作成されました。承認されるまでAIには使われません。`
       );
       setView("sources");
       return "saved";
@@ -1123,7 +1123,7 @@ export function App() {
       return false;
     }
     if (input.sensitivity === "secret_never_send") {
-      setNotice("SecretはApprovedFactとして保存できません。Sourceまたは候補を削除してください。");
+      setNotice("Secretは記憶として保存できません。Sourceまたは記憶を削除してください。");
       return false;
     }
     if (nativePath) {
@@ -1181,7 +1181,7 @@ export function App() {
       }
     }
     if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
-      setNotice("削除または消去されたSource由来の候補はFact化できません。Sourceを復元するか、新しいSourceとして追加してください。");
+      setNotice("削除または消去されたSource由来の記憶は承認できません。Sourceを復元するか、新しいSourceとして追加してください。");
       return;
     }
     const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
@@ -1239,7 +1239,7 @@ export function App() {
           nativeRevisionRef.current = built.updatedAt;
           setNativeRevision(built.updatedAt);
           setState(built.state);
-          setNotice("Vault CoreでContext Requestを受け取り、短命Context Packを生成しました。");
+          setNotice("Vault CoreでContext Requestを受け取り、短命のAIに渡す内容（記憶）を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
           return;
@@ -1257,7 +1257,7 @@ export function App() {
       approvalMode: "explicit_sensitive"
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
-    apply(built.state, "Context Requestを受け取り、短命Context Packを生成しました。");
+    apply(built.state, "Context Requestを受け取り、短命のAIに渡す内容（記憶）を生成しました。");
     setActiveRequestId(requested.request.id);
     setActivePackId(built.pack?.id ?? null);
   }
@@ -1278,7 +1278,7 @@ export function App() {
   }
 
   async function changePackItemVisibility(pack: ContextPack, factId: string, included: boolean) {
-    const verb = included ? "Context Packへ戻しました。" : "このAIには渡さないようContext Packから外しました。";
+    const verb = included ? "AIに渡す内容（記憶）へ戻しました。" : "このAIには渡さないようAIに渡す内容（記憶）から外しました。";
     if (nativePath) {
       try {
         const updated = await updateNativeContextPackItemVisibility({
@@ -1309,10 +1309,10 @@ export function App() {
       : null;
     if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
       if (!canSendContextPackToAi(state, pack)) {
-        setNotice("このContext Packは現在のAI接続ポリシーでは送信できません。新しいContext Packを作成してください。");
+        setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーでは送信できません。新しくAIに渡す内容（記憶）を作成してください。");
         return;
       }
-      setNotice("このContext PackはすでにAIへ返せる状態です。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+      setNotice("このAIに渡す内容（記憶）はすでにAIへ返せる状態です。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
       return;
     }
     if (nativePath) {
@@ -1324,7 +1324,7 @@ export function App() {
           setState(updated.state);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
-          setNotice("Context Packを承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+          setNotice("AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
           return;
         }
       } catch (error) {
@@ -1337,11 +1337,11 @@ export function App() {
     if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
       apply(
         confirmedState,
-        "このContext Packは現在のAI接続ポリシーでは承認できません。新しいContext Packを作成してください。"
+        "このAIに渡す内容（記憶）は現在のAI接続ポリシーでは承認できません。新しくAIに渡す内容（記憶）を作成してください。"
       );
       return;
     }
-    apply(confirmedState, "Context Packを承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+    apply(confirmedState, "AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
   }
 
   async function copyPackForAi(pack: ContextPack) {
@@ -1350,7 +1350,7 @@ export function App() {
       : null;
     const shouldConfirm = pack.confirmationStatus !== "confirmed" || request?.status !== "fulfilled";
     if (!shouldConfirm && !canSendContextPackToAi(state, pack)) {
-      setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+      setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
       return;
     }
     let payloadPack = shouldConfirm
@@ -1368,7 +1368,7 @@ export function App() {
             if (updated.requestId) setActiveRequestId(updated.requestId);
             payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
             if (!canSendContextPackToAi(updated.state, payloadPack)) {
-              setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+              setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
               return;
             }
           }
@@ -1381,7 +1381,7 @@ export function App() {
         const confirmedPack = confirmedState.contextPacks.find((item) => item.id === pack.id);
         if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
           setState(confirmedState);
-          setNotice("このContext Packは現在のAI接続ポリシーではコピーできません。新しいContext Packを作成してください。");
+          setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
           return;
         }
         setState(confirmedState);
@@ -1410,7 +1410,7 @@ export function App() {
     const copied = await copyText(
       payloadText,
       shouldConfirm
-        ? "Context Packを承認し、ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
+        ? "AIに渡す内容（記憶）を承認し、ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
         : "ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
     );
     if (copied) {
@@ -1435,7 +1435,7 @@ export function App() {
     const pack = state.contextPacks.find((item) => item.id === packId);
     if (!pack || !canSendContextPackToAi(state, pack)) {
       setManualCopyPayload(null);
-      setNotice("このContext Packは現在のAI接続ポリシーでは記録できません。新しいContext Packを作成してください。");
+      setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーでは記録できません。新しくAIに渡す内容（記憶）を作成してください。");
       return;
     }
     setState((current) =>
@@ -1815,10 +1815,10 @@ export function App() {
               }))
             }
             approve={approve}
-            reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "候補を却下しました。")}
-            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "候補をLaterに移しました。")}
+            reject={(candidate) => void reviewCandidateStatus(candidate, "rejected", "記憶を却下しました。")}
+            archive={(candidate) => void reviewCandidateStatus(candidate, "archived", "記憶をLaterに移しました。")}
             markSensitive={(candidate) =>
-              void reviewCandidateStatus(candidate, "blocked_sensitive", "候補をセンシティブ扱いにしました。")
+              void reviewCandidateStatus(candidate, "blocked_sensitive", "記憶を要確認扱いにしました。")
             }
             goHome={() => setView("home")}
             goConnections={() => setView("connections")}
@@ -1894,7 +1894,7 @@ export function App() {
                     );
                   })}
                   <p className="qv-standing-note">
-                    オンにすると低感度の記憶はAIへ自動で渡されます。感度が高い記憶は引き続きあなたの確認が必要です。
+                    オンにすると低感度の記憶はAIへ自動で渡されます。要確認の記憶は引き続きあなたの確認が必要です。
                   </p>
                 </Card>
               </div>
@@ -2059,7 +2059,7 @@ function ContextRequestsView({
       : unreturnedLowRiskRequests.length > 0
         ? "低リスクでも、AIへ返す前に送信内容をここで確認できます。"
         : showCopyFallbackStarter
-          ? "新しいAI要求が届くとここに並びます。MCPなしで使う場合は下でContext Packを作成します。"
+          ? "新しいAI要求が届くとここに並びます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
           : "新しいAI要求が届くとここに並びます。手動テストは下の折りたたみから試せます。";
   const requestComposer = (buttonLabel: string) => (
     <div className="form-stack">
@@ -2080,7 +2080,7 @@ function ContextRequestsView({
         <Sparkles size={16} />
         {buttonLabel}
       </button>
-      <p className="muted">MCPなしでも、AIへ渡す前に同じContext Pack確認とAuditを通します。</p>
+      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認とAuditを通します。</p>
     </div>
   );
   const packPanelRef = useRef<HTMLDivElement | null>(null);
@@ -2132,7 +2132,7 @@ function ContextRequestsView({
           {requests.length === 0 && (
             <EmptyState
               title="まだAI要求はありません"
-              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。MCPなしで使う場合は下でContext Packを作成します。"
+              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこのInboxで確認できます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
             />
           )}
         </div>
@@ -2141,7 +2141,7 @@ function ContextRequestsView({
             <div className="panel-heading compact-heading">
               <div>
                 <p className="eyebrow">コピーFallback</p>
-                <h3>MCPなしでContext Packを作る</h3>
+                <h3>MCPなしでAIに渡す内容（記憶）を作る</h3>
               </div>
               <Clipboard size={18} />
             </div>
@@ -2149,11 +2149,11 @@ function ContextRequestsView({
               <ShieldCheck size={16} />
               <span>ここで作ったPackも、確認画面で許可またはコピーするまでAIには渡りません。</span>
             </div>
-            {requestComposer("確認用Context Packを作成")}
+            {requestComposer("確認用にAIに渡す内容（記憶）を作成")}
           </div>
         ) : (
           <details className="advanced-panel request-test-panel">
-            <summary>手動でContext Packを試す</summary>
+            <summary>手動でAIに渡す内容（記憶）を試す</summary>
             {requestComposer("テスト要求を作成")}
           </details>
         )}
@@ -2425,12 +2425,12 @@ function SearchView({
         <div className="panel-heading compact-heading">
           <div>
             <p className="eyebrow">Memory inventory</p>
-            <h3>AIが使える保存済みFact</h3>
+            <h3>AIが使える保存済みの記憶</h3>
           </div>
-          <Badge>{inventory.active} Context Pack候補</Badge>
+          <Badge>{inventory.active} AIに渡す記憶</Badge>
         </div>
         <div className="context-inventory-grid">
-          <Metric label="Context Pack候補" value={inventory.active} />
+          <Metric label="AIに渡す記憶" value={inventory.active} />
           <Metric label="再確認待ち" value={inventory.needsReview} />
           <Metric label="非表示/削除" value={inventory.hiddenOrDeleted} />
           <Metric label="履歴/期限切れ" value={inventory.history} />
@@ -2438,7 +2438,7 @@ function SearchView({
         <div className={inventory.needsReview > 0 ? "trust-note attention-note" : "trust-note"}>
           <ShieldCheck size={16} />
           <span>
-            Context Pack候補に入るのはActiveなApprovedFactだけです。再確認待ち、非表示、削除済み、期限切れ、置き換え済みFactはAIに渡しません。
+            AIに渡す記憶になるのはActiveな記憶だけです。再確認待ち、非表示、削除済み、期限切れ、置き換え済みの記憶はAIに渡しません。
           </span>
         </div>
         {!hasAnyFact && (
@@ -2459,13 +2459,13 @@ function SearchView({
           <div className="panel-heading compact-heading">
             <div>
               <p className="eyebrow">Needs review</p>
-              <h3>AIに使う前に確認が必要なFact</h3>
+              <h3>AIに使う前に確認が必要な記憶</h3>
             </div>
             <Badge>{reviewFacts.length}件</Badge>
           </div>
           <div className="trust-note">
             <ShieldAlert size={16} />
-            <span>Sourceが停止・本文消去・本文更新されたFactです。保持するとContext Pack候補へ戻り、非表示/削除すると既存Packも無効化されます。</span>
+            <span>Sourceが停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
           </div>
           <div className="domain-list">
             {reviewFacts.map((fact) => (
@@ -2523,20 +2523,20 @@ function SearchView({
             editFactMetadata={editFactMetadata}
           />
         ))}
-        {results.length === 0 && <p className="muted">一致するApprovedFactがありません。</p>}
+        {results.length === 0 && <p className="muted">一致する記憶がありません。</p>}
       </div>
       {filteredExcludedFacts.length > 0 && (
         <div className="memory-review-panel excluded-facts-panel">
           <div className="panel-heading compact-heading">
             <div>
               <p className="eyebrow">Outside AI context</p>
-              <h3>Context Pack候補から外れているFact</h3>
+              <h3>AIに渡す記憶から外れている記憶</h3>
             </div>
             <Badge>{filteredExcludedFacts.length}件</Badge>
           </div>
           <div className="trust-note">
             <EyeOff size={16} />
-            <span>非表示、削除済みのFactです。AIに使う必要が戻ったものだけ、明示的にContext Pack候補へ戻します。</span>
+            <span>非表示、削除済みの記憶です。AIに使う必要が戻ったものだけ、明示的にAIに渡す記憶へ戻します。</span>
           </div>
           <div className="domain-list">
             {filteredExcludedFacts.map((fact) => (
@@ -2562,7 +2562,7 @@ function SearchView({
           </div>
           <div className="trust-note">
             <RefreshCw size={16} />
-            <span>ここにあるFactは履歴として残っていますが、通常の検索結果やContext Pack候補には入りません。</span>
+            <span>ここにある記憶は履歴として残っていますが、通常の検索結果やAIに渡す記憶には入りません。</span>
           </div>
           <div className="domain-list">
             {supersededFacts.map((fact) => (
@@ -2670,9 +2670,9 @@ function SettingsView({
             <div className="restore-preview">
               <div className="restore-preview-grid">
                 <Metric label="元データ" value={restorePreview.counts.sources} />
-                <Metric label="保存済みFact" value={restorePreview.counts.facts} />
-                <Metric label="Inbox候補" value={restorePreview.counts.candidates} />
-                <Metric label="Context Packs" value={restorePreview.counts.packs} />
+                <Metric label="保存済みの記憶" value={restorePreview.counts.facts} />
+                <Metric label="Inboxの記憶" value={restorePreview.counts.candidates} />
+                <Metric label="AIに渡した内容（記憶）" value={restorePreview.counts.packs} />
                 <Metric label="依頼" value={restorePreview.counts.requests} />
                 <Metric label="Capture" value={restorePreview.counts.captureEvents} />
                 <Metric label="AI接続" value={restorePreview.counts.connectorSessions} />
@@ -2749,7 +2749,7 @@ function SettingsView({
         <div className="form-stack">
           <div className="trust-note">
             <ShieldCheck size={16} />
-            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
+            <span>旧Office変換は指定したローカルコマンドだけを実行します。変換後の本文はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {legacyOfficeProviderCandidates.length > 0 ? (
             <div className="table-list">
@@ -2772,7 +2772,7 @@ function SettingsView({
                     type="button"
                   >
                     <Check size={16} />
-                    この候補を使う
+                    このコマンドを使う
                   </button>
                 </div>
               ))}
@@ -2901,7 +2901,7 @@ function SettingsView({
         <div className="form-stack">
           <div className="trust-note">
             <ShieldCheck size={16} />
-            <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと未承認候補になり、承認前にAIへ渡りません。</span>
+            <span>画像OCRは指定したローカルコマンドだけを実行します。抽出結果はSourceと確認待ちの記憶になり、承認前にAIへ渡りません。</span>
           </div>
           {ocrProviderCandidates.length > 0 ? (
             <div className="table-list">
@@ -2924,7 +2924,7 @@ function SettingsView({
                     type="button"
                   >
                     <Check size={16} />
-                    この候補を使う
+                    このコマンドを使う
                   </button>
                 </div>
               ))}
@@ -3068,7 +3068,7 @@ function SettingsView({
           <div className="danger-zone">
             <div className="trust-note attention-note">
               <ShieldAlert size={16} />
-              <span>Vaultをクリアすると、Sources、候補、Fact、Context Pack、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
+              <span>Vaultをクリアすると、Sources、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
             <div className="clear-impact-list" aria-label="Vault clear impact">
               {clearImpactSections.map((section) => (
@@ -3122,7 +3122,7 @@ function auditReceiptTitle(event: AuditEvent): string {
   }
   if (event.eventType === "context_pack_confirmed") return `${client}が取得できる状態にしました`;
   if (event.eventType === "context_pack_denied") return `${client}へのContext Requestを拒否しました`;
-  return `${client}へのContext Packを送信不可にしました`;
+  return `${client}へAIに渡す内容（記憶）を送信不可にしました`;
 }
 
 export function auditReceiptBody(event: AuditEvent): string {
@@ -3135,13 +3135,13 @@ export function auditReceiptBody(event: AuditEvent): string {
     .map(domainLabel);
   const pieces = [
     includedDomainLabels.length > 0 ? `${includedDomainLabels.join("、")}の文脈` : null,
-    typeof itemCount === "number" ? `${itemCount}件のApprovedFact` : null,
+    typeof itemCount === "number" ? `${itemCount}件の記憶` : null,
     typeof snippetCount === "number" ? `${snippetCount}件の根拠スニペット` : null,
     typeof excludedCount === "number" ? `${excludedCount}件を除外` : null,
     ttl ? `有効期限は約${Math.max(1, Math.round(ttl / 60))}分` : null
   ].filter(Boolean);
-  const summary = pieces.length > 0 ? pieces.join("、") : "Context Pack本文はAuditに保存していません";
-  return `${summary}。Raw Source本文と未承認候補は含めていません。`;
+  const summary = pieces.length > 0 ? pieces.join("、") : "AIに渡した内容（記憶）の本文はAuditに保存していません";
+  return `${summary}。Raw Source本文と確認待ちの記憶は含めていません。`;
 }
 
 function deliveryChannelLabel(channel: string): string {
@@ -3358,7 +3358,7 @@ function FactRow({
         {variant === "excluded" && changeFactLifecycle && (
           <button className="secondary-button" onClick={() => changeFactLifecycle(fact.id, "restore")} type="button">
             <RefreshCw size={16} />
-            Context Pack候補へ戻す
+            AIに渡す記憶へ戻す
           </button>
         )}
       </div>
@@ -3448,8 +3448,8 @@ export function homeAiBoundarySections({
       value: `${activeFactCount} Facts`,
       detail:
         activeFactCount > 0
-          ? "ApprovedFactだけがContext Pack候補になります。"
-          : "Sourceや候補だけではAIに渡る文脈になりません。",
+          ? "記憶だけがAIに渡す記憶になります。"
+          : "Sourceや記憶だけではAIに渡る文脈になりません。",
       tone: activeFactCount > 0 ? "ready" : "attention"
     },
     {
@@ -3457,8 +3457,8 @@ export function homeAiBoundarySections({
       value: `${reviewCandidateCount} candidates`,
       detail:
         reviewCandidateCount > 0
-          ? "Inboxで保存するまで、候補はAIの確定文脈に使いません。"
-          : "未承認候補はありません。",
+          ? "Inboxで保存するまで、記憶はAIの確定文脈に使いません。"
+          : "確認待ちの記憶はありません。",
       tone: reviewCandidateCount > 0 ? "attention" : "ready"
     },
     {
@@ -3515,7 +3515,7 @@ export function contextPackBoundaryReceipt(
   const exclusionDetail =
     excludedReasons.length > 0
       ? `${excludedReasons.slice(0, 3).join("、")}${excludedReasons.length > 3 ? "など" : ""}で除外しています。`
-      : "Raw Source本文、未承認候補、削除済み/期限切れFactは送信対象にしていません。";
+      : "Raw Source本文、確認待ちの記憶、削除済み/期限切れの記憶は送信対象にしていません。";
 
   return [
     {
@@ -3659,10 +3659,10 @@ function packDeliveryTitle(state: ContextPackDeliveryState | null): string {
 
 function packDeliveryBody(state: ContextPackDeliveryState | null): string {
   if (state?.expired) {
-    return "この短命Context Packは期限切れです。再度Context Packを作成すると、現在のPolicyで確認できます。";
+    return "この短命のAIに渡す内容（記憶）は期限切れです。再度AIに渡す内容（記憶）を作成すると、現在のPolicyで確認できます。";
   }
   if (state?.canDeliver) {
-    return "外部AIはget_request_statusで、このContext Packだけを取得できます。";
+    return "外部AIはget_request_statusで、このAIに渡す内容（記憶）だけを取得できます。";
   }
   if (state?.awaitingReturn) {
     return "確認不要ですが、返却またはコピーするまで外部AIにはPack本文を返しません。";
@@ -3734,12 +3734,12 @@ function sourceLifecycleNotice(
   invalidatedPackCount: number
 ): string {
   if (action === "restore") {
-    return `Sourceを復元しました。${affectedFactCount}件のFactを再びContext Pack候補に戻しました。`;
+    return `Sourceを復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
   }
   if (action === "purge_body") {
-    return `Source本文を消去しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+    return `Source本文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
-  return `Sourceを使用停止しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+  return `Sourceを使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 type RestoreRecordCounts = RestorePreview["counts"];
@@ -3818,13 +3818,13 @@ function restoreReceiptSections(input: {
       detail:
         input.promotedSourceCount > 0
           ? `${input.promotedSourceCount}件は長期保存Sourceです。復元しても自動でAIへ送信されません。`
-          : "保存されたSource本文は復元されます。AIへ渡るのは承認済みContext Packだけです。",
+          : "保存されたSource本文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
       tone: input.counts.sources > 0 ? "attention" : "ready"
     },
     {
       label: "Approved Facts",
       value: `${input.counts.facts}件`,
-      detail: "ユーザ承認済みFactとして戻ります。未承認候補はInboxに残り、Factとしては使われません。",
+      detail: "ユーザ承認済みの記憶として戻ります。確認待ちの記憶はInboxに残り、承認済みとしては使われません。",
       tone: input.counts.facts > 0 ? "ready" : "attention"
     },
     {
@@ -3842,7 +3842,7 @@ function restoreReceiptSections(input: {
       detail:
         input.expiredCaptureCount > 0
           ? `TTL切れCaptureが${input.expiredCaptureCount}件あります。復元後の整理対象です。`
-          : "Passive Captureイベントを含みます。承認前の候補はAI回答に使いません。",
+          : "Passive Captureイベントを含みます。承認前の記憶はAI回答に使いません。",
       tone: input.expiredCaptureCount > 0 ? "attention" : "ready"
     },
     {
@@ -3850,7 +3850,7 @@ function restoreReceiptSections(input: {
       value: `${input.counts.auditEvents}件`,
       detail:
         input.highestSensitivity === "secret_never_send"
-          ? "最高感度に送信禁止データを含みます。Context Pack境界とPolicyを確認してください。"
+          ? "最高感度に非公開データを含みます。AIに渡す内容（記憶）の境界とPolicyを確認してください。"
           : "AIに渡った事実の本文ではなく、配達先・件数・感度などの監査メタデータです。",
       tone: input.highestSensitivity === "secret_never_send" ? "attention" : "ready"
     }
@@ -3888,7 +3888,7 @@ function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySum
       detail:
         input.deliverablePackCount > 0
           ? "復元後も期限内の確認済みPackがあります。Requestsで内容と期限を確認してください。"
-          : "復元後すぐ外部AIへ返せるPackはありません。必要なら新しいContext Packを作成します。",
+          : "復元後すぐ外部AIへ返せる内容（記憶）はありません。必要なら新しくAIに渡す内容（記憶）を作成します。",
       tone: input.deliverablePackCount > 0 ? "attention" : "ready"
     },
     {
@@ -3938,7 +3938,7 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
       detail:
         sourceBodyBytes > 0
           ? `${formatFileSize(sourceBodyBytes)}のSource本文を含む保存データを削除します。本文内容はここには表示しません。`
-          : "保存済みSource本文はありません。FactとInbox候補も空になります。",
+          : "保存済みSource本文はありません。記憶とInboxの記憶も空になります。",
       tone: hasSavedContext ? "attention" : "ready"
     },
     {
@@ -3947,7 +3947,7 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
       detail:
         hasAiBoundaryRecords
           ? `${aiBoundary.deliverablePackCount}件の取得可能Pack、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れPackのローカル履歴を削除します。`
-          : "Context RequestとContext Packはありません。",
+          : "AI要求とAIに渡した内容（記憶）はありません。",
       tone: hasAiBoundaryRecords ? "attention" : "ready"
     },
     {
@@ -3979,7 +3979,7 @@ function restoreOverwriteSections(
     {
       label: "生活コンテキスト",
       value: `${currentCounts.sources} Sources / ${currentCounts.facts} Facts -> ${nextCounts.sources} Sources / ${nextCounts.facts} Facts`,
-      detail: "現在のSource、Fact、Inbox候補はバックアップ側の内容へ置き換わります。",
+      detail: "現在のSource、記憶、Inboxの記憶はバックアップ側の内容へ置き換わります。",
       tone: currentCounts.sources + currentCounts.facts > 0 ? "attention" : "ready"
     },
     {
@@ -4106,9 +4106,9 @@ export function homeCaptureSafetySummary(
   if (settings.enabled) {
     return {
       tone: "ready",
-      title: "許可サイトだけをローカルで候補化中",
+      title: "許可サイトだけをローカルで記憶化中",
       body:
-        "Captureは未承認候補を作るだけです。Fact化とAI送信は、Memory InboxとAIに渡した内容（記憶）の確認を通ります。",
+        "Captureは確認待ちの記憶を作るだけです。承認とAI送信は、Memory InboxとAIに渡した内容（記憶）の確認を通ります。",
       allowedSitesLabel,
       lastCaptureLabel,
       lastPreview,
@@ -4153,7 +4153,7 @@ function connectorKindLabel(kind: ConnectorKind): string {
 
 function capturePreviewText(source?: VaultState["sources"][number]): string {
   if (!source) return "紐づくSourceが見つかりません。";
-  if (source.deletionState === "purged") return "本文は消去済みです。候補やFactは確認待ちになります。";
+  if (source.deletionState === "purged") return "本文は消去済みです。記憶は確認待ちになります。";
   const text = source.body.replace(/\s+/g, " ").trim();
   if (!text) return "本文は空です。";
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
@@ -4164,13 +4164,13 @@ function captureEventStatusLabel(
   source?: VaultState["sources"][number]
 ): string {
   if (source?.deletionState === "purged" || event.processingStatus === "purged") return "本文消去済み";
-  if (event.processingStatus === "candidate_generated") return "候補作成";
+  if (event.processingStatus === "candidate_generated") return "記憶作成";
   if (event.processingStatus === "captured") return "取得済み";
-  return "候補なし";
+  return "記憶なし";
 }
 
 function sourceMetadataNotice(invalidatedPackCount: number): string {
-  return `Sourceを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  return `Sourceを更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function sourceBodyNotice(
@@ -4178,7 +4178,7 @@ function sourceBodyNotice(
   affectedFactCount: number,
   invalidatedPackCount: number
 ): string {
-  return `Source本文を保存し、${candidateCount}件の候補を再生成しました。${affectedFactCount}件のFactを再確認待ちにし、${invalidatedPackCount}件のContext Packを無効化しました。`;
+  return `Source本文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function unsupportedFileFeedback(
@@ -4203,7 +4203,7 @@ function unsupportedFileFeedback(
     return {
       tone: "attention",
       title: "画像OCRはまだ未接続です",
-      body: `${file.name} は画像として検出しました。SettingsのLocal OCRで検出候補を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
+      body: `${file.name} は画像として検出しました。SettingsのLocal OCRで検出機能を使うか、ローカルOCRコマンドを設定するまでは、テキスト化した内容をManual sourceに貼り付けてください。`
     };
   }
   if (reason === "legacy_office") {
@@ -4291,7 +4291,7 @@ export function documentIngestionReadiness(
       label: "PDF / DOCX等",
       state: "ready",
       value: "Desktopでローカル抽出",
-      detail: "本文はSourceとInbox候補になり、Fact化とAI送信は別確認です。"
+      detail: "本文はSourceとInboxの記憶になり、承認とAI送信は別確認です。"
     },
     {
       label: "画像OCR",
@@ -4339,7 +4339,7 @@ function ocrInstallerGuidesForPlatform(): OcrInstallGuide[] {
     {
       id: "mac_homebrew",
       label: "macOS / Homebrew",
-      description: "HomebrewでTesseract本体と言語データを入れます。インストール後は検出候補を使うのが安全です。",
+      description: "HomebrewでTesseract本体と言語データを入れます。インストール後は検出機能を使うのが安全です。",
       installCommand: "brew install tesseract tesseract-lang",
       command: "/opt/homebrew/bin/tesseract",
       args: "{input} stdout -l jpn+eng"
@@ -4458,26 +4458,26 @@ function factStatusLabel(status: ApprovedFact["status"]): string {
 
 function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: number): string {
   if (action === "keep_active" || action === "restore") {
-    return "Factを保持し、Context Pack候補へ戻しました。";
+    return "記憶を保持し、AIに渡す記憶へ戻しました。";
   }
   if (action === "hide") {
-    return `FactをContext Pack候補から非表示にしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+    return `記憶をAIに渡す記憶から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
   if (action === "delete") {
-    return `Factを削除済みにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+    return `記憶を削除済みにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
-  return `Factを再確認待ちにしました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  return `記憶を再確認待ちにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function factMetadataNotice(invalidatedPackCount: number): string {
-  return `Factを更新しました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+  return `記憶を更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
 }
 
 function candidateApprovalNotice(supersededFactCount: number, invalidatedPackCount: number): string {
   if (supersededFactCount > 0) {
-    return `新しいFactとして保存し、${supersededFactCount}件の古いFactを置き換えました。${invalidatedPackCount}件のContext Packを無効化しました。`;
+    return `新しい記憶として保存し、${supersededFactCount}件の古い記憶を置き換えました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
   }
-  return "承認済みFactとして保存しました。AIへ渡るのはContext Pack確認後だけです。";
+  return "承認済みの記憶として保存しました。AIへ渡るのはAIに渡す内容（記憶）の確認後だけです。";
 }
 
 function activeFactPackCount(state: VaultState, factId: string): number {
@@ -4509,22 +4509,22 @@ function searchModeCopy(
   if (mode === "native_fts") {
     return {
       title: "Vault Core FTSで検索中",
-      body: "暗号化SQLiteのApprovedFactだけを検索します。未承認候補とRaw Source本文は結果に含めません。",
+      body: "暗号化SQLiteの記憶だけを検索します。確認待ちの記憶とRaw Source本文は結果に含めません。",
       tone: "ready"
     };
   }
   if (mode === "loading") {
     return {
       title: "Vault Core FTSを更新中",
-      body: "最新のApprovedFact索引を読み込んでいます。",
+      body: "最新の記憶索引を読み込んでいます。",
       tone: "attention"
     };
   }
   return {
     title: hasNativeVault ? "ブラウザ内検索へフォールバック中" : "ブラウザ内検索",
     body: hasNativeVault
-      ? "ネイティブ検索に失敗したため、同期済みのローカル状態からApprovedFactだけを検索します。"
-      : "Tauri外ではブラウザ内の同期済み状態からApprovedFactだけを検索します。",
+      ? "ネイティブ検索に失敗したため、同期済みのローカル状態から記憶だけを検索します。"
+      : "Tauri外ではブラウザ内の同期済み状態から記憶だけを検索します。",
     tone: "attention"
   };
 }

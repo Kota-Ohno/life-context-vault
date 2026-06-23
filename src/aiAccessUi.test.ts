@@ -91,7 +91,7 @@ describe("AI access UI safety", () => {
 
     expect(connected.find((item) => item.label === "画像OCR")?.value).toBe("Tesseract OCR 接続済み");
     expect(connected.find((item) => item.label === "旧DOC / XLS / PPT")?.value).toBe("LibreOffice 接続済み");
-    expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("Fact化とAI送信は別確認");
+    expect(connected.find((item) => item.label === "PDF / DOCX等")?.detail).toContain("承認とAI送信は別確認");
   });
 
   it("keeps the copy fallback starter available unless a pack is already selected", () => {
@@ -634,7 +634,7 @@ describe("AI access UI safety", () => {
     expect(summary.allowedSitesLabel).toBe("chatgpt.com, claude.ai +1");
     expect(summary.lastPreview).toContain("来月引っ越す予定");
     expect(summary.purgeableCount).toBe(1);
-    expect(summary.body).toContain("未承認候補");
+    expect(summary.body).toContain("確認待ちの記憶");
     expect(summary.body).toContain("AIに渡した内容（記憶）の確認");
     const longPreview = homeCaptureSafetySummary(
       settings,
@@ -777,8 +777,8 @@ describe("AI access UI safety", () => {
     const body = auditReceiptBody(event);
 
     expect(body).toContain("契約・保険、書類・証明の文脈");
-    expect(body).toContain("2件のApprovedFact");
-    expect(body).toContain("Raw Source本文と未承認候補は含めていません");
+    expect(body).toContain("2件の記憶");
+    expect(body).toContain("Raw Source本文と確認待ちの記憶は含めていません");
   });
 
 });

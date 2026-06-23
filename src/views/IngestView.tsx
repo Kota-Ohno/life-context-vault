@@ -257,18 +257,18 @@ export function IngestView({
       <PageHeader
         eyebrow="取り込み"
         title="記憶の入り口"
-        lede="生活背景・文書・AI会話から候補を生み出し、あなたが選んだものだけをFactにします。"
+        lede="生活背景・文書・AI会話から記憶を生み出し、あなたが選んだものだけを残します。"
       />
 
       {/* ── Section 1: Candidate Review ───────────────────────────── */}
       <SectionDivider
-        label={pendingCount > 0 ? `承認待ちの候補 — ${pendingCount}件` : "承認待ちの候補"}
+        label={pendingCount > 0 ? `確認待ちの記憶 — ${pendingCount}件` : "確認待ちの記憶"}
       />
 
       {candidates.length === 0 ? (
         <EmptyState
-          title="承認待ちの候補はありません"
-          body="Source・メモ・AI会話Captureから候補を作ると、ここに届きます。"
+          title="確認待ちの記憶はありません"
+          body="Source・メモ・AI会話Captureから記憶を作ると、ここに届きます。"
           action={
             <div className="qv-ingest__empty-actions">
               <Button variant="primary" onClick={goHome}>
@@ -312,7 +312,7 @@ export function IngestView({
                     {memoryStatusLabel(candidateMemoryStatus(candidate.status))}
                   </span>
                   {conflictFactIds.length > 0 && (
-                    <span className="qv-ingest__conflict-tag">衝突候補</span>
+                    <span className="qv-ingest__conflict-tag">衝突する記憶</span>
                   )}
                 </div>
 
@@ -409,7 +409,7 @@ export function IngestView({
             <FieldTextarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
             <Button variant="primary" onClick={addManualSource}>
               <Sparkles size={15} />
-              候補を生成
+              記憶を生成
             </Button>
           </div>
         </Card>
@@ -479,7 +479,7 @@ export function IngestView({
       {/* Source history */}
       <div className="qv-ingest__trust-note qv-ingest__source-lifecycle-note">
         <Archive size={14} />
-        <span>Sourceを停止または本文消去すると、未承認候補はLaterへ移り、関連Factは再確認待ちになります。</span>
+        <span>Sourceを停止または本文消去すると、確認待ちの記憶はLaterへ移り、関連する記憶は再確認待ちになります。</span>
       </div>
 
       {sources.length === 0 ? (
@@ -625,15 +625,15 @@ function IngestSourceRow({
               <span className="qv-ingest__source-badge">{sourceLifecycleLabel(source.deletionState)}</span>
               <span className="qv-ingest__source-badge">{source.body ? "本文あり" : "本文なし"}</span>
               {retentionLabel && <span className="qv-ingest__source-badge">{retentionLabel}</span>}
-              <span className="qv-ingest__source-badge">候補 {linkedCandidateCount}</span>
-              <span className="qv-ingest__source-badge">Fact {linkedFactCount}</span>
-              <span className="qv-ingest__source-badge">Pack {linkedPackCount}</span>
+              <span className="qv-ingest__source-badge">確認待ち {linkedCandidateCount}</span>
+              <span className="qv-ingest__source-badge">承認済み {linkedFactCount}</span>
+              <span className="qv-ingest__source-badge">AIに渡した {linkedPackCount}</span>
             </div>
             {confirmBodyPurge && (
               <div className="qv-ingest__purge-confirm" role="status">
                 <strong>このSource本文を消去します</strong>
                 <span>
-                  本文は戻せません。未承認候補 {linkedCandidateCount}件、関連Fact {linkedFactCount}件、
+                  本文は戻せません。確認待ちの記憶 {linkedCandidateCount}件、関連する記憶 {linkedFactCount}件、
                   AIに渡した内容（記憶）{linkedPackCount}件に影響します。
                 </span>
                 <Button variant="quiet" size="sm" onClick={() => setConfirmBodyPurge(false)}>
