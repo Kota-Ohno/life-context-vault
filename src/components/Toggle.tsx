@@ -14,7 +14,7 @@ export function Toggle({ id, checked, onChange, disabled = false, label }: Toggl
   }
 
   return (
-    <label className="qv-toggle" htmlFor={id} aria-label={label}>
+    <label className="qv-toggle" htmlFor={id}>
       <input
         id={id}
         type="checkbox"
@@ -23,6 +23,7 @@ export function Toggle({ id, checked, onChange, disabled = false, label }: Toggl
         checked={checked}
         disabled={disabled}
         onChange={handleChange}
+        aria-label={label}
       />
       <span className="qv-toggle__track" aria-hidden="true">
         <span className="qv-toggle__thumb" />

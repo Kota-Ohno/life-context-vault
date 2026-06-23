@@ -1881,6 +1881,9 @@ export function App() {
                     })();
                     return (
                       <div key={policy.clientId} className="qv-standing-row">
+                        <div className="qv-standing-row__info">
+                          <p className="qv-standing-row__name">{displayName}</p>
+                        </div>
                         <Toggle
                           id={`standing-${policy.clientId}`}
                           checked={policy.standingDeliveryEnabled === true}

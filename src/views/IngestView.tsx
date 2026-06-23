@@ -375,11 +375,11 @@ export function IngestView({
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
                     <ShieldAlert size={14} />
-                    Sensitive
+                    要確認にする
                   </Button>
                   <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
                     <Archive size={14} />
-                    Later
+                    あとで
                   </Button>
                   <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
                     <X size={14} />
