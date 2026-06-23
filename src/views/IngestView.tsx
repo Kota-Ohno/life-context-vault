@@ -375,11 +375,11 @@ export function IngestView({
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => markSensitive(candidate)}>
                     <ShieldAlert size={14} />
-                    Sensitive
+                    要確認にする
                   </Button>
                   <Button variant="quiet" size="sm" onClick={() => archive(candidate)}>
                     <Archive size={14} />
-                    Later
+                    あとで
                   </Button>
                   <Button variant="quiet" size="sm" onClick={() => reject(candidate)}>
                     <X size={14} />
@@ -479,7 +479,7 @@ export function IngestView({
       {/* Source history */}
       <div className="qv-ingest__trust-note qv-ingest__source-lifecycle-note">
         <Archive size={14} />
-        <span>Sourceを停止または本文消去すると、確認待ちの記憶はLaterへ移り、関連する記憶は再確認待ちになります。</span>
+        <span>Sourceを停止または本文消去すると、確認待ちの記憶はあとでへ移り、関連する記憶は再確認待ちになります。</span>
       </div>
 
       {sources.length === 0 ? (

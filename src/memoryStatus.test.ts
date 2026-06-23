@@ -10,8 +10,12 @@ describe("memoryStatus", () => {
     expect(memoryStatusLabel(candidateMemoryStatus("approved"))).toBe("承認済み");
     expect(memoryStatusLabel(candidateMemoryStatus("edited_and_approved"))).toBe("承認済み");
   });
-  it("treats blocked candidates as 非公開", () => {
-    expect(memoryStatusLabel(candidateMemoryStatus("blocked_sensitive"))).toBe("非公開");
+  it("treats blocked candidates as 対象外 (distinct from the 非公開 secret bucket)", () => {
+    expect(memoryStatusLabel(candidateMemoryStatus("blocked_sensitive"))).toBe("対象外");
+  });
+  it("maps rejected and archived candidates to distinct terminal labels", () => {
+    expect(memoryStatusLabel(candidateMemoryStatus("rejected"))).toBe("却下");
+    expect(memoryStatusLabel(candidateMemoryStatus("archived"))).toBe("削除済み");
   });
   it("treats an active fact as 承認済み and needs_review as 確認待ち", () => {
     expect(memoryStatusLabel(factMemoryStatus("active"))).toBe("承認済み");

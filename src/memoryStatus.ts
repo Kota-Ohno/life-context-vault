@@ -49,7 +49,11 @@ export function factMemoryStatus(s: FactStatus): MemoryStatusKey {
 const STATUS_LABELS: Record<MemoryStatusKey, string> = {
   pending: "確認待ち",
   approved: "承認済み",
-  blocked: "非公開",
+  // "対象外" (set aside), deliberately NOT "非公開": a blocked_sensitive candidate can
+  // carry a `sensitive` tier (bucket 要確認) as well as `secret_never_send` (bucket 非公開,
+  // sensitivityBuckets.ts), so reusing 非公開 here would contradict the badge on the same
+  // card. 非公開 stays reserved for the secret sensitivity bucket + its exclusion reason.
+  blocked: "対象外",
   superseded: "置き換え済み",
   expired: "期限切れ",
   hidden: "非表示",
