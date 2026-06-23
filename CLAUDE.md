@@ -21,7 +21,7 @@ npm install
 npm run tauri:dev          # full app: vite + cargo + Tauri window + encrypted vault + AI access
 
 # Browser preview (UI review ONLY — see Gotchas)
-npm run dev                # vite on 127.0.0.1:5173; localStorage fallback; no vault/MCP/relay
+npm run dev                # vite on 127.0.0.1:5173; localStorage fallback; no vault/MCP
 
 # Frontend
 npm test                   # vitest run
@@ -30,15 +30,15 @@ npm run build              # tsc --noEmit + vite build
 # Rust
 cargo test   --manifest-path src-tauri/Cargo.toml
 cargo fmt    --manifest-path src-tauri/Cargo.toml --check
-npm run mcp:build | relay:build | agent:build | capture:build   # individual sidecars (release)
+npm run mcp:build              # build lcv-mcp sidecar (release)
 
 # Production
-npm run sidecars:prepare   # stage 4 sidecar binaries into src-tauri/binaries/<triple>/
+npm run sidecars:prepare   # stage sidecar binary into src-tauri/binaries/<triple>/
 npm run tauri:build        # production binary (stages sidecars first)
 npm run tauri:bundle       # macOS .app bundle
 
 # Release gate — exactly what CI runs (use before pushing)
-npm run product:check      # tests, build, cargo fmt --check, cargo test, build --bins, relay smoke, hosted-relay checks, git diff --check
+npm run product:check      # tests, build, cargo fmt --check, cargo test, cargo build --bins, git diff --check
 npm run product:check:full # also: tauri:build sidecar integration + large retrieval benchmark
 
 # Optional
@@ -50,15 +50,12 @@ to main/master, plus a weekly cron. Commits/pushes are NOT automated — do them
 
 ## Architecture
 
-**One Rust crate → 5 binaries.** `src-tauri/` is a single crate that builds the Tauri app
+**One Rust crate → 2 binaries.** `src-tauri/` is a single crate that builds the Tauri app
 plus four sidecar binaries. **All sidecars call the same `*_at_path` core functions in
 `lib.rs`**, so the security boundary is enforced in exactly one place regardless of transport.
 
 - `life-context-vault` (app) — Tauri shell, ~35 IPC commands, tray/login-item, AI access supervisor
 - `lcv-mcp` — local MCP stdio sidecar (4 tools only)
-- `lcv-relay` — hand-written HTTP MCP relay + OAuth (Code+PKCE+DCR+CIMD) + WebSocket `/agent/ws`
-- `lcv-agent` — local Vault Agent; WebSocket client bridging relay → `lcv-mcp`
-- `lcv-capture-host` — Chrome Native Messaging host (passive capture → unapproved candidates)
 
 Rust is **fully synchronous** (`std::thread` + `std::sync::Mutex`, no async runtime).
 
@@ -106,8 +103,7 @@ Pack invalidation is automatic and cascading: any Source/Fact lifecycle change c
 - **Key** (`vault_crypto.rs::vault_key`): `LCV_VAULT_DB_KEY` (≥32 chars) → macOS Keychain
   (service `dev.life-context-vault.poc.vault-key`, auto-generated) → `LCV_VAULT_KEY_FILE` (0600).
 - **Vault path:** `~/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3`
-  (override `LCV_VAULT_DB_PATH`). Desktop app, `lcv-mcp`, and `lcv-capture-host` open the same DB;
-  the relay does **not** touch the vault (metadata-only by design).
+  (override `LCV_VAULT_DB_PATH`). The desktop app and `lcv-mcp` open the same DB.
 - Plaintext→encrypted migration is automatic; backup removed unless `LCV_KEEP_PLAINTEXT_MIGRATION_BACKUP=1`.
 
 ## Key files
@@ -148,10 +144,6 @@ Pack invalidation is automatic and cascading: any Source/Fact lifecycle change c
 | `LCV_OCR_COMMAND` | OCR provider for images (else images rejected) |
 | `LCV_LEGACY_OFFICE_COMMAND` | LibreOffice `soffice` for `.doc/.xls/.ppt` (else rejected) |
 | `LCV_EXTENSION_ID` | Chrome extension id for native-host manifest |
-| `LCV_RELAY_BIND` / `LCV_RELAY_ALLOWED_ORIGINS` / `LCV_RELAY_TENANT_ID` | Relay surface (non-loopback bind requires the latter two) |
-| `LCV_RELAY_ALLOWED_CIMD_HOSTS` | CIMD (`https://` client-id) host allowlist; default `chatgpt.com` |
-| `LCV_RELAY_HANDOFF_SECRET` | HMAC secret for relay handoff |
-| `LCV_AGENT_RELAY_WS` | WebSocket URL the agent pairs with (`wss://.../agent/ws?pairing_code=...`) |
 
 Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_vault_key()`.
 
@@ -159,8 +151,8 @@ Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_v
 
 1. **`npm run dev` ≠ `npm run tauri:dev`.** The browser preview is UI-review-only: it uses
    `localStorage` and the pure-TS `vault.ts`; `nativeStorage.ts` silently returns `null` outside
-   Tauri, so encrypted persistence, MCP, relay/agent, capture, and hosted-relay pairing are all
-   inert. Use `npm run tauri:dev` for any feature work.
+   Tauri, so encrypted persistence and MCP are all inert. Use `npm run tauri:dev` for any
+   feature work.
 2. **Sidecar build ordering matters.** `tauri:build`/`tauri:bundle` run
    `prepare-tauri-sidecars.mjs`, which builds all 4 binaries in release and copies them to
    `src-tauri/binaries/<host-triple>/` with a triple suffix (Tauri `externalBin` requirement).
@@ -173,15 +165,12 @@ Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_v
    confirmation before being returned to the AI.
 4. **Projection tables are derived.** The canonical data is the `vault_state` JSON blob; the
    normalized tables + FTS5 rebuild from it. Don't write to them directly.
-5. **Agent readiness is explicit.** A running `lcv-agent` process is NOT "connected" until the
-   relay sends an `agent_ready` ACK and a fresh `agent-status.json` (per-spawn `statusToken` +
-   `processId`) is written. Distinguish liveness from pairing readiness.
-6. **Non-macOS needs an explicit key.** Set `LCV_VAULT_DB_KEY` or `LCV_VAULT_KEY_FILE`, or the
+5. **Non-macOS needs an explicit key.** Set `LCV_VAULT_DB_KEY` or `LCV_VAULT_KEY_FILE`, or the
    vault won't open.
-7. **Document extraction is bounded & provider-gated.** Max input 12 MiB, max ZIP entry 8 MiB,
+6. **Document extraction is bounded & provider-gated.** Max input 12 MiB, max ZIP entry 8 MiB,
    max extracted text 1M chars. Images require `LCV_OCR_COMMAND`; legacy Office formats require
    `LCV_LEGACY_OFFICE_COMMAND`. Provider stdout is capped (4 MiB) to avoid deadlocks.
-8. **App.tsx is one ~8k-line file with no router.** Grep, don't navigate.
+7. **App.tsx is one ~8k-line file with no router.** Grep, don't navigate.
 
 ## Testing patterns
 
@@ -190,7 +179,6 @@ Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_v
   style for boundary changes.
 - Rust tests live in `#[cfg(test)] mod tests` per file. The large-scale retrieval benchmark is an
   `#[ignore]` test behind `npm run retrieval:bench`.
-- Integration smokes: `npm run relay:smoke`, `npm run relay:sse-soak`, `npm run hosted-relay:smoke`.
 
 ## When changing boundary-relevant code
 

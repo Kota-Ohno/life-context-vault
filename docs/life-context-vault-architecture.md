@@ -15,10 +15,10 @@ The PoC architecture must support:
 - Memory Inbox review before durable memory.
 - Life Context Home with a user-editable Background Snapshot.
 - Hybrid retrieval across text, vectors, entities, dates, sensitivity, and validity.
-- AI access from first-party UI, local MCP clients, remote MCP relay clients, and copy/export fallback.
+- AI access from first-party UI, local MCP clients, and copy/export fallback.
 - Context Pack preview before sensitive or consequential context leaves the Vault boundary.
 
-The product-grade direction starts with AI access as a first-class surface. The first-party app remains the trust and control surface, while MCP and relay adapters are constrained to Context Pack requests and memory proposals.
+The product-grade direction starts with AI access as a first-class surface. The first-party app remains the trust and control surface, while the local MCP adapter is constrained to Context Pack requests and memory proposals.
 
 ## Recommended Stack
 
@@ -69,10 +69,8 @@ flowchart LR
 
   Core --> DB["Encrypted SQLite Vault"]
   Access --> MCP["Local MCP Sidecar"]
-  Access --> Relay["Remote MCP Relay"]
   Access --> Copy["Copy/Export Fallback"]
   MCP --> Pack
-  Relay --> Pack
   Copy --> Pack
   Retrieval --> DB
   Retrieval --> Pack["Context Pack Builder"]
@@ -266,19 +264,17 @@ Context Pack confirmation is also a Vault Core operation. Before confirmation, t
 
 AI Access Layer is the only external-facing surface for everyday AI clients.
 
-It supports three routes:
+It supports two routes:
 
 - Local MCP sidecar for same-device clients such as Claude Desktop and Codex-like tools.
-- Remote MCP relay for hosted clients such as ChatGPT or Claude web/API connectors.
-- Copy/export fallback for AI clients that cannot call tools.
+- Copy/export fallback for AI clients that cannot call tools (e.g., ChatGPT, Claude web).
 
 Required behavior:
 
 - External clients create `ContextPackRequest` records; they do not read the Vault directly.
 - External clients may create `MemoryCandidate` proposals; they do not create `ApprovedFact` records.
-- The relay never stores the full Vault or raw long-term Sources.
-- Relay-held Context Packs are short lived. The default TTL is 10 minutes.
-- Request, confirmation, denial, and fulfillment are recorded as audit events without storing unnecessary Pack body in relay logs.
+- Context Packs are short lived. The default TTL is 10 minutes.
+- Request, confirmation, denial, and fulfillment are recorded as audit events.
 
 Initial tool surface:
 
@@ -566,7 +562,7 @@ Do not expose:
 
 MCP clients receive Context Packs, not unrestricted database access.
 
-Remote MCP relay uses the same tool and Context Pack boundary. Hosted deployments keep the Relay metadata-only: Vault search, policy checks, and Context Pack generation stay on the user's device through the paired local Agent.
+Cloud AI clients (ChatGPT, Claude web) use the copy/export fallback path — the user copies the Context Pack payload manually. No hosted relay exists; the local MCP path is the only programmatic access route.
 
 ## Implementation Milestones
 

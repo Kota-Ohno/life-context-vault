@@ -23,9 +23,8 @@ Status of the public-release plan. Branch: `feat/p0-public-release`
   scripts/connections. (Tauri 2 custom commands aren't capability-gated, so
   `core:default` is correct — the plan's capability-coverage assertion was a
   model misunderstanding, dropped.)
-- **P0-F rate limiting + hardening** — per-IP `RateLimiter` on the public relay
-  (TDD; memory-bounded, fail-closed; boundary-spike tradeoff documented).
-- **P0-F ops runbook** — `docs/relay-operations.md`.
+- **P0-F rate limiting + hardening** — per-IP `RateLimiter` on the relay (TDD; memory-bounded, fail-closed). *(Relay removed in Simplify 1.1.)*
+- **P0-F ops runbook** — `docs/relay-operations.md`. *(File removed in Simplify 1.1 — relay binary deleted.)*
 - **P0-G legal/privacy (draft)** — `SECURITY.md`, `docs/privacy-policy.md`,
   `docs/data-deletion.md`.
 - **P0-A scaffold** — updater config, macOS entitlements, `release.yml`
@@ -46,9 +45,7 @@ Status of the public-release plan. Branch: `feat/p0-public-release`
    missing ops layer (rate limiting + runbook).
 
 ### Remaining P0
-- **P0-B full one-click** — needs a relay-side pairing-issuance endpoint the app
-  can call (currently pairing is admin-initiated). `managedRelay.ts` foundation
-  is in place; the relay API + Connections UI wiring is the follow-up.
+- **P0-B full one-click** — *(relay-based pairing removed in Simplify 1.1; `managedRelay.ts` is dead code).*
 - **P0-C scheduled backup** + **recovery full-flow** (open DB with the recovered
   key via a new `open-with-key` path + re-establish Keychain). Backup-restore
   already covers cross-machine recovery via the passphrase.
@@ -57,8 +54,7 @@ Status of the public-release plan. Branch: `feat/p0-public-release`
   Settings UI (independent of signing).
 - **P0-G decisions** — license (OSS vs proprietary), telemetry stance,
   maintainer contact (user).
-- **P0-F module split** of `lcv-relay.rs` (6k lines) — maintainability, not
-  security.
+- **P0-F module split** of `lcv-relay.rs` — *(relay binary removed in Simplify 1.1; no longer applicable).*
 
 ## P1 / P2 (not started)
 - P1-A i18n (EN/JA) + App.tsx split; P1-B sqlite-vec semantic retrieval
@@ -69,7 +65,7 @@ Status of the public-release plan. Branch: `feat/p0-public-release`
 
 ## How to resume
 The branch compiles and all tests pass. Highest-value next increments:
-1. P0-B relay pairing API + Connections one-click UI.
-2. P1-A i18n + App.tsx module split.
-3. P0-C scheduled backup + recovery full-flow.
-4. P1-B sqlite-vec spike (de-risk before committing).
+1. P1-A i18n + App.tsx module split.
+2. P0-C scheduled backup + recovery full-flow.
+3. P1-B sqlite-vec spike (de-risk before committing).
+*(P0-B relay pairing removed — relay binary deleted in Simplify 1.1.)*

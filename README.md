@@ -4,7 +4,7 @@ Local-first Control Center and AI Access Layer for a personal life-context vault
 
 ## Run As Desktop App
 
-Life Context Vault is a desktop-first product. Use the Tauri app when you want AI Access, encrypted native persistence, Local MCP, Hosted Relay Agent pairing, or browser capture.
+Life Context Vault is a desktop-first product. Use the Tauri app when you want AI Access, encrypted native persistence, or Local MCP.
 
 ```bash
 npm install
@@ -25,7 +25,7 @@ npm run tauri:bundle
 
 ## Run Browser Preview
 
-Browser dev mode is for UI review and fallback storage only. It cannot start the Vault Agent, manage encrypted native persistence, pair with Hosted Relay, or install local AI integrations.
+Browser dev mode is for UI review and fallback storage only. It cannot manage encrypted native persistence or install local AI integrations.
 
 ```bash
 npm run dev
@@ -40,9 +40,6 @@ npm test
 npm run build
 npm run sidecars:prepare
 npm run mcp:build
-npm run relay:build
-npm run agent:build
-npm run capture:build
 npm run tauri:build
 npm run tauri:bundle
 ```
@@ -63,10 +60,6 @@ npm run tauri:bundle
 - Tauri desktop wrapper with SQLCipher-backed encrypted native persistence
 - Normalized SQLite projection tables plus native FTS retrieval for product-grade search
 - Local MCP stdio sidecar for same-device AI clients
-- App-managed AI Access Service that starts/stops the bundled HTTP MCP relay and local Vault Agent
-- OAuth-capable HTTP MCP relay plus local Vault Agent WebSocket bridge, with metadata-only relay state persistence for Remote-MCP-style testing
-- Hosted Relay Agent connection from the Control Center using short-lived `wss://.../agent/ws?pairing_code=...` URLs
-- Chrome browser capture extension and Native Messaging host
 - Restore preview and typed confirmation before encrypted backup restore or destructive Vault clear
 
 The browser fallback uses `localStorage`. In the Tauri runtime, the same Vault state is persisted to an encrypted SQLCipher database in the app data directory, keyed by the OS secure credential store, and projected into normalized tables.
@@ -88,45 +81,13 @@ The MCP sidecar exposes controlled tools only:
 
 See `docs/local-mcp-sidecar.md` for setup, safety boundaries, and a stdio smoke test.
 
-## Run HTTP MCP Relay
-
-```bash
-npm run relay:build
-npm run agent:build
-```
-
-Then open **Connections** and copy the relay, pairing, and local Agent commands.
-
-In the Tauri desktop app, open **Connections** and use **AI連携を開始** to launch the bundled Relay and Agent. The manual relay, pairing, and Agent commands remain as a fallback.
-
-For day-to-day use, **Connections** also includes operations controls to launch the app at macOS login and to auto-start AI Access when the app opens. This keeps the Agent available after reboot while preserving the same Context Pack confirmation boundary.
-
-The relay defaults to `http://127.0.0.1:8765/mcp`, exposes OAuth metadata and dynamic client registration, persists OAuth client registrations plus request metadata only, and forwards requests through a paired local Agent WebSocket. See `docs/http-mcp-relay.md`.
-
-For a hosted HTTPS relay, start with the guarded config initializer using your real public host and certificate email:
-
-```bash
-npm run hosted-relay:init -- --public-host relay.example.com --email ops@example.com --tenant-id personal
-```
-
-Then deploy `deploy/relay/Dockerfile`, start pairing from the relay's trusted admin path, and paste the returned `agentWebSocketUrl` into **Connections -> Hosted Relay Agent**. The desktop app accepts only `wss://.../agent/ws?pairing_code=...`, starts the local Agent process, clears the short-lived URL from the UI, and keeps the Vault work on the user's device. The Relay sends an explicit `agent_ready` ACK after pairing succeeds; only then does the Agent write fresh local `agent-status.json` metadata without the pairing secret, and Control Center marks Hosted as ready. See `docs/hosted-relay-deployment.md`.
-
-## Run Browser Capture Extension
-
-```bash
-npm run capture:build
-```
-
-Then load `browser-extension/` as an unpacked Chrome extension. In the Tauri desktop app, open **Connections**, paste the generated Chrome extension id, and use **Native Hostを追加** to write the Native Messaging host manifest. The manual `LCV_EXTENSION_ID=<Chrome extension id> npm run extension:host-manifest` command remains available as a fallback. See `docs/browser-capture-extension.md`.
-
 ## Try The Product-Grade Slice
 
 1. Open **Home** and add a small piece of life background.
 2. Review the generated candidate in **Inbox** and save it as an ApprovedFact.
-3. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task. Use copy fallback first if MCP/Relay is not connected yet.
-4. Open **Connections** when you want to make the route persistent: Claude Desktop/local MCP, ChatGPT or Claude Web via hosted HTTPS Relay, browser capture, or copy fallback.
-5. Use Passive Capture only if you want AI chat fragments to become unapproved Inbox candidates.
-6. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
-7. Open **Audit** to see what was captured, saved, requested, generated, copied, or denied.
+3. Open **Requests** and prepare a Context Pack for a ChatGPT or Claude-style task. Use copy fallback first if Local MCP is not connected yet.
+4. Open **Connections** when you want to make the route persistent: Claude Desktop/local MCP or copy fallback.
+5. Confirm exactly what will be AI-bound, or copy the Pack for an AI that cannot use MCP yet.
+6. Open **Audit** to see what was saved, requested, generated, copied, or denied.
 
-See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for hosted connector certification, bundled document providers, and future semantic memory upgrades.
+See `docs/product-grade-implementation-status.md` for what is implemented now and what remains for bundled document providers and future semantic memory upgrades.
