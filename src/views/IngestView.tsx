@@ -330,7 +330,7 @@ export function IngestView({
                 {conflictFactIds.length > 0 && (
                   <div className="qv-ingest__warning-line">
                     <ShieldAlert size={14} />
-                    {candidate.conflictReason ?? "既存のFactと異なる可能性があります。保存前に置き換えるか確認してください。"}
+                    {candidate.conflictReason ?? "既存の記憶と異なる可能性があります。保存前に置き換えるか確認してください。"}
                   </div>
                 )}
 
