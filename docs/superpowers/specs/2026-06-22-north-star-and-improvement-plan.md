@@ -133,6 +133,14 @@ and pass `npm run product:check`, per repo convention.
   env, and unactionable dev/preview errors.)* Streamline local MCP setup and broaden supported clients.
 - **P4 — scope discipline.** Explicitly decline auto-mass-capture; keep ingestion curated. Document the
   boundary so future work doesn't drift toward surveillance.
+
+  **Scope boundary (recorded 2026-06-23):** The product's "universal" means universally *readable* by
+  AI clients, not universally *captured*. Ingestion is and must remain curated and deliberate — manual
+  entry, file uploads, and opt-in browser capture. Automatic mass-ingestion of email, notes, calendar,
+  or browsing history is explicitly out of scope: it recreates the surveillance the product opposes and
+  multiplies classifier risk (every additional passive source widens the blast radius of a
+  mis-classification). Future contributors proposing passive-vacuum ingestion should treat this note as
+  a deliberate design decision, not an oversight.
 - **Cross-cutting — CI hygiene (R3).** Add `rustfmt.toml` (2-space) so `product:check`'s
   `cargo fmt --check` passes without a repo-wide reformat, making the release gate meaningful again.
 

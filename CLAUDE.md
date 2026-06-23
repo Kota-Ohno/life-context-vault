@@ -10,6 +10,15 @@ Codex, …) without ever giving them the raw vault, raw sources, or unapproved m
 candidates. The **trust boundary is the product**; it is the organizing principle of
 the whole codebase. Respect it in every change.
 
+## Scope discipline
+
+"Universal" in the product vision means **universally readable by AI clients** — not
+universally captured. Ingestion stays **curated and deliberate**: manual entry, file
+uploads, and opt-in browser capture only. **Auto-mass-capture of email, notes,
+calendar, or browsing history is explicitly out of scope.** It recreates the
+surveillance the product opposes and multiplies classifier risk. Do not add
+passive-vacuum ingestion paths; if a proposed feature crosses this line, push back.
+
 ## Commands
 
 All commands run from the repo root. Node 22, Rust stable (min 1.77.2).

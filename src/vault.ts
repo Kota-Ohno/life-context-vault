@@ -1746,12 +1746,25 @@ function contextPackPolicyViolation(
   // After all per-item checks pass, check zero-touch degradation.
   // Only fail if an item was classified at build time but is now unclassified
   // (a previously-verified fact silently becoming unverified is a fail-closed signal).
+  // For zero-touch packs (not_required), also re-apply the per-client confidence bar: if any
+  // item now falls below the bar (e.g. confidence dropped or bar was tightened), the pack is
+  // downgraded. User-confirmed packs are exempt — a human reviewed them.
+  const isZeroTouch = pack.confirmationStatus === "not_required";
+  const requiresApprovalAbove = isZeroTouch
+    ? policyRequiresApprovalAboveForClient(state, request.clientId)
+    : null;
+  const zeroTouchBar = isZeroTouch
+    ? policyZeroTouchConfidenceBarForClient(state, request.clientId)
+    : null;
   for (const item of pack.items) {
     const fact = state.facts.find((candidate) => candidate.id === item.factId);
     if (!fact) continue; // already caught above
     const itemWasClassified = item.sensitivityClassified ?? false;
     const factIsNowClassified = fact.sensitivityClassified ?? false;
     if (itemWasClassified && !factIsNowClassified) return "sensitivity_policy";
+    if (isZeroTouch && !zeroTouchEligible(fact, { requiresApprovalAbove: requiresApprovalAbove!, zeroTouchConfidenceBar: zeroTouchBar ?? undefined })) {
+      return "sensitivity_policy";
+    }
   }
   return null;
 }
