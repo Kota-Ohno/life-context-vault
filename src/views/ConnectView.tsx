@@ -33,7 +33,7 @@ export function ConnectView({
       <PageHeader
         eyebrow="設定 · 接続"
         title="接続とAIアクセス"
-        lede="AIクライアントを接続すると、あなたが審査・承認した情報だけをContext Packとして渡します。金庫の中身がそのまま渡されることはありません。"
+        lede="AIクライアントを接続すると、あなたが審査・承認した記憶だけをAIに渡す内容（記憶）として渡します。金庫の中身がそのまま渡されることはありません。"
       />
 
       <div className="qv-connect__cards">
@@ -48,7 +48,7 @@ export function ConnectView({
           </div>
 
           <p className="qv-connect-card__desc">
-            Claude Desktopの設定ファイルにMCPサーバーを追加します。接続後、Claude DesktopからContext Packを要求できます。毎回の要求はあなたの確認を経てから返されます。
+            Claude Desktopの設定ファイルにMCPサーバーを追加します。接続後、Claude DesktopからAIに渡す内容（記憶）を要求できます。毎回の要求はあなたの確認を経てから返されます。
           </p>
 
           <div className="qv-connect-card__actions">
@@ -104,7 +104,7 @@ export function ConnectView({
           </div>
 
           <p className="qv-connect-card__desc">
-            MCPを使わず、RequestsでContext Packを作成してコピーし、ChatGPTやClaudeなど任意のAIに貼り付けられます。設定は不要です。
+            MCPを使わず、RequestsでAIに渡す内容（記憶）を作成してコピーし、ChatGPTやClaudeなど任意のAIに貼り付けられます。設定は不要です。
           </p>
 
           <div className="qv-connect-card__actions">

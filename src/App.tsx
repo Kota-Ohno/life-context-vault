@@ -1858,7 +1858,7 @@ export function App() {
             />
             {state.accessPolicies.length > 0 && (
               <div className="qv-connect" style={{ paddingTop: 0 }}>
-                <SectionDivider label="自動配信 Standing Delivery" />
+                <SectionDivider label="AIに自動で渡す" />
                 <Card>
                   {state.accessPolicies.map((policy) => {
                     const clientKind = policy.clientId.replace(/^conn_/, "");
@@ -1881,21 +1881,20 @@ export function App() {
                     })();
                     return (
                       <div key={policy.clientId} className="qv-standing-row">
-                        <div className="qv-standing-row__info">
-                          <p className="qv-standing-row__name">{displayName}</p>
-                          <p className="qv-standing-row__threshold">{thresholdLabel}</p>
-                        </div>
                         <Toggle
                           id={`standing-${policy.clientId}`}
                           checked={policy.standingDeliveryEnabled === true}
                           onChange={(checked) => setStandingDelivery(policy.clientId, checked)}
-                          label={`${displayName} の自動配信`}
+                          label={`${displayName}：自動で渡す（低感度のみ）／毎回確認`}
                         />
+                        <DetailsDisclosure>
+                          <span>確認のしきい値: {thresholdLabel}</span>
+                        </DetailsDisclosure>
                       </div>
                     );
                   })}
                   <p className="qv-standing-note">
-                    有効にすると、この接続の閾値以下のContext PackはAIへ自動で返されます。閾値を超えるPackは引き続きあなたの確認が必要です。
+                    オンにすると低感度の記憶はAIへ自動で渡されます。感度が高い記憶は引き続きあなたの確認が必要です。
                   </p>
                 </Card>
               </div>
