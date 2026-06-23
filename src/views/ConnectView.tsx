@@ -119,7 +119,7 @@ export function ConnectView({
           <div className="qv-connect-card__actions">
             <Button variant="ghost" size="md" onClick={goRequests}>
               <MessageSquare size={14} aria-hidden="true" />
-              Requestsへ
+              AI要求へ
             </Button>
           </div>
         </Card>
