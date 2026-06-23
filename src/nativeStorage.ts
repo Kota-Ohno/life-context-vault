@@ -183,6 +183,7 @@ export interface ClaudeDesktopConfigInstallResult {
   backupPath: string | null;
   serverName: string;
   alreadyConfigured: boolean;
+  warning?: string | null;
 }
 
 export interface LoginItemStatus {
