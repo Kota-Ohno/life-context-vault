@@ -447,6 +447,20 @@ export async function saveNativeRuntimePreferences(
 }
 
 /**
+ * Persist the delivery-notifications opt-in flag.  Returns the persisted
+ * value, or null outside Tauri.  The caller is responsible for requesting
+ * OS permission via tauri-plugin-notification's `requestPermission()` when
+ * enabling.
+ */
+export async function setNativeDeliveryNotificationsEnabled(
+  enabled: boolean
+): Promise<boolean | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("set_delivery_notifications_enabled", { enabled });
+}
+
+/**
  * Request a managed-relay pairing URL from the operator's hosted relay
  * (`POST /pair`, no admin token). The returned `agentWebSocketUrl` is then
  * passed to `startAiAccessAgentForRelay` to complete one-click pairing.

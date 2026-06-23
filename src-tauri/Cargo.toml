@@ -39,6 +39,7 @@ getrandom = "0.2"
 tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
 tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
+tauri-plugin-notification = "2"
 pdf-extract = "0.7.12"
 quick-xml = "0.31.0"
 zip = "0.6.6"

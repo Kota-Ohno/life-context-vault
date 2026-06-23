@@ -8,6 +8,7 @@ export interface RuntimePreferences {
   legacyOfficeCommand: string;
   legacyOfficeArgs: string;
   legacyOfficeTimeoutSeconds: number;
+  deliveryNotificationsEnabled: boolean;
 }
 
 const defaultRuntimePreferences: RuntimePreferences = {
@@ -17,7 +18,8 @@ const defaultRuntimePreferences: RuntimePreferences = {
   ocrTimeoutSeconds: 30,
   legacyOfficeCommand: "",
   legacyOfficeArgs: "--headless --convert-to {target_ext} --outdir {output_dir} {input}",
-  legacyOfficeTimeoutSeconds: 60
+  legacyOfficeTimeoutSeconds: 60,
+  deliveryNotificationsEnabled: false,
 };
 
 export function loadRuntimePreferences(): RuntimePreferences {

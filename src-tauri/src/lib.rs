@@ -9206,6 +9206,19 @@ fn update_native_fact_metadata(
   })
 }
 
+/// Persist the delivery-notifications opt-in flag in `runtimePreferences`.
+/// When `enabled` is true the caller is responsible for requesting OS
+/// permission from the TS side (tauri-plugin-notification's
+/// `requestPermission()`).  This command only persists the user intent.
+#[tauri::command]
+fn set_delivery_notifications_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+  let path = vault_db_path(&app)?;
+  let mut prefs = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+  prefs["deliveryNotificationsEnabled"] = json!(enabled);
+  save_runtime_preferences_at_path(&path, &prefs)?;
+  Ok(enabled)
+}
+
 pub fn run() {
   tauri::Builder::default()
     .on_window_event(|window, event| {
@@ -9265,7 +9278,8 @@ pub fn run() {
       recover_vault_with_recovery_key,
       write_recovery_envelope,
       get_native_runtime_preferences,
-      save_native_runtime_preferences
+      save_native_runtime_preferences,
+      set_delivery_notifications_enabled
     ])
     .setup(|app| {
       app.set_activation_policy(ActivationPolicy::Regular);
@@ -9292,6 +9306,7 @@ pub fn run() {
       window.set_focus()?;
       eprintln!("Life Context Vault main window is visible");
 
+      app.handle().plugin(tauri_plugin_notification::init())?;
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -9748,6 +9763,44 @@ mod tests {
     save_runtime_preferences_at_path(&path, &prefs).expect("save prefs");
     let loaded = get_runtime_preferences_at_path(&path).expect("load prefs");
     assert_eq!(loaded, prefs);
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn delivery_notifications_enabled_persists_in_runtime_preferences() {
+    use_test_vault_key();
+    let path = temp_vault_path("delivery-notif");
+    // default: field absent → treated as false
+    let initial = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+    assert_eq!(
+      initial
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      None,
+      "field should be absent before first write"
+    );
+    // enable: persist true
+    let mut prefs = get_runtime_preferences_at_path(&path).unwrap_or_else(|_| json!({}));
+    prefs["deliveryNotificationsEnabled"] = json!(true);
+    save_runtime_preferences_at_path(&path, &prefs).expect("save enabled");
+    let after_enable = get_runtime_preferences_at_path(&path).expect("load after enable");
+    assert_eq!(
+      after_enable
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      Some(true),
+    );
+    // disable: persist false
+    let mut prefs2 = after_enable;
+    prefs2["deliveryNotificationsEnabled"] = json!(false);
+    save_runtime_preferences_at_path(&path, &prefs2).expect("save disabled");
+    let after_disable = get_runtime_preferences_at_path(&path).expect("load after disable");
+    assert_eq!(
+      after_disable
+        .get("deliveryNotificationsEnabled")
+        .and_then(|v| v.as_bool()),
+      Some(false),
+    );
     remove_temp_vault(&path);
   }
 
