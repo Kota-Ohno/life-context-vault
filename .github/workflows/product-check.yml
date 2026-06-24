@@ -47,6 +47,11 @@ jobs:
       CI_INCLUDE_BENCH: ${{ github.event.inputs.include_bench || 'false' }}
       CI_BENCH_FACTS: ${{ github.event.inputs.bench_facts || '10000' }}
       CI_BENCH_CHUNKS_PER_FACT: ${{ github.event.inputs.bench_chunks_per_fact || '5' }}
+      # Inject the documented test vault key so encrypted-vault tests use it instead
+      # of the macOS Keychain. The headless CI runner cannot store a key in Keychain
+      # (`security` fails with exit 45), which broke the lcv-mcp bin tests. This is a
+      # throwaway test-fixture key (per CLAUDE.md), not a secret.
+      LCV_VAULT_DB_KEY: "0123456789abcdef0123456789abcdef"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
