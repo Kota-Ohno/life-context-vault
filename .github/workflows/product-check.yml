@@ -36,12 +36,22 @@ concurrency:
 jobs:
   product-check:
     name: Product Release Checks
-    runs-on: ubuntu-latest
+    # macOS runner: this is a macOS-first product (Keychain, ~/Library/Application
+    # Support, Tauri set_activation_policy). Building/testing on macos-latest matches
+    # the shipping target and the green local `npm run product:check`; on Linux the
+    # Tauri app crate needs GTK/glib AND macOS-only APIs (set_activation_policy) that
+    # are not cfg-gated, so it cannot compile there.
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       CI_INCLUDE_BENCH: ${{ github.event.inputs.include_bench || 'false' }}
       CI_BENCH_FACTS: ${{ github.event.inputs.bench_facts || '10000' }}
       CI_BENCH_CHUNKS_PER_FACT: ${{ github.event.inputs.bench_chunks_per_fact || '5' }}
+      # Inject the documented test vault key so encrypted-vault tests use it instead
+      # of the macOS Keychain. The headless CI runner cannot store a key in Keychain
+      # (`security` fails with exit 45), which broke the lcv-mcp bin tests. This is a
+      # throwaway test-fixture key (per CLAUDE.md), not a secret.
+      LCV_VAULT_DB_KEY: "0123456789abcdef0123456789abcdef"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
