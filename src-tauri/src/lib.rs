@@ -9735,7 +9735,10 @@ fn migrate_trust_consent_if_needed(connection: &mut Connection) -> Result<(), St
   if current_version >= TRUST_CONSENT_MIGRATION_VERSION {
     return Ok(());
   }
-  if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+  if let Some(policies) = vault
+    .get_mut("accessPolicies")
+    .and_then(Value::as_array_mut)
+  {
     for policy in policies.iter_mut() {
       policy["standingDeliveryEnabled"] = Value::Bool(false);
     }
@@ -11922,7 +11925,11 @@ mod tests {
     };
 
     // Direct token match wins even when the domain differs.
-    let f = make("Passport expires in March", "documents_and_evidence", "document_ref");
+    let f = make(
+      "Passport expires in March",
+      "documents_and_evidence",
+      "document_ref",
+    );
     assert_eq!(
       context_inclusion_reason(&f, "finance_and_benefits", "renew passport"),
       "質問の語に直接一致する記憶です。"
@@ -12335,8 +12342,12 @@ mod tests {
       "Morning routine is a walk at 7am.",
     )
     .expect("source");
-    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
-      .expect("approve candidate");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
     let built = create_context_pack_request_at_path(
       &path,
       "conn_chatgpt",
@@ -12389,8 +12400,12 @@ mod tests {
       "Morning routine is a walk at 7am.",
     )
     .expect("source");
-    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
-      .expect("approve candidate");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
     let built = create_context_pack_request_at_path(
       &path,
       "conn_chatgpt",
@@ -14195,8 +14210,12 @@ mod tests {
       "Contact alice@example.com for schedule details.",
     )
     .expect("source");
-    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
-      .expect("approve candidate");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
 
     // Force the fact unclassified (legacy / no classifier configured) — the email
     // would normally be classified=true, so this isolates the classification gate.
@@ -14227,13 +14246,19 @@ mod tests {
       "trusted connection must auto-deliver a low-sensitivity fact even if unclassified"
     );
     // And it must be a non-vacuous pack (an empty pack trivially needs no confirmation).
-    let pack = auto.context_pack.as_ref().expect("auto-delivered pack returned");
+    let pack = auto
+      .context_pack
+      .as_ref()
+      .expect("auto-delivered pack returned");
     let item_count = pack
       .get("items")
       .and_then(Value::as_array)
       .map(|items| items.len())
       .unwrap_or(0);
-    assert!(item_count >= 1, "auto-delivered pack must include the matching fact (got {item_count})");
+    assert!(
+      item_count >= 1,
+      "auto-delivered pack must include the matching fact (got {item_count})"
+    );
     remove_temp_vault(&path);
   }
 
@@ -14248,7 +14273,11 @@ mod tests {
       let mut connection = open_vault_db_at_path(&path).expect("open vault");
       let mut vault = empty_vault_json();
       ensure_access_policy_for_client(&mut vault, "conn_chatgpt");
-      for policy in vault["accessPolicies"].as_array_mut().expect("policies").iter_mut() {
+      for policy in vault["accessPolicies"]
+        .as_array_mut()
+        .expect("policies")
+        .iter_mut()
+      {
         policy["standingDeliveryEnabled"] = json!(true);
       }
       // Simulate a pre-upgrade vault: no trust-consent migration marker yet.
