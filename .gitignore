@@ -16,5 +16,6 @@ deploy/relay/compose.env
 .takt/
 *.png
 
-# Local Claude Code settings (machine-specific, never commit)
-.claude/settings.local.json
+# Local Claude Code settings (machine-specific, never commit).
+# Glob also covers macOS Finder duplicates like "settings.local 2.json".
+.claude/settings.local*.json

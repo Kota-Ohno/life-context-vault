@@ -506,7 +506,7 @@ export function IngestView({
                       <RefreshCw size={13} aria-hidden="true" />
                       <span>古い記憶を置き換える場合だけ選択します。置き換えた記憶はAIに渡らなくなり、履歴に残ります。</span>
                     </div>
-                    <div className="qv-ingest__supersede-options">
+                    <div className="qv-ingest__supersede-options" id={`supersede-options-${candidate.id}`}>
                       {replacementOptions.map((fact) => (
                         <label className="qv-ingest__supersede-option" key={fact.id}>
                           <input
@@ -527,6 +527,7 @@ export function IngestView({
                         size="sm"
                         onClick={() => toggleSupersedeExpanded(candidate.id)}
                         aria-expanded={supersedeExpanded}
+                        aria-controls={`supersede-options-${candidate.id}`}
                       >
                         {supersedeExpanded
                           ? "置き換え候補を閉じる"

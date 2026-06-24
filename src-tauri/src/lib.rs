@@ -5778,12 +5778,29 @@ fn sanitize_secret_material_line(line: &str) -> String {
       .map(|next| next.to_lowercase().starts_with("key"))
       .unwrap_or(false);
 
-    if (lower == "api" && next_is_key) || is_secret_indicator(&lower) {
-      // Redact the indicator and the remainder of the line.
+    // High confidence (api-key pattern, or a whole-word / pluralized keyword):
+    // redact the indicator AND the rest of the line, so a value separated from
+    // its keyword by >=2 tokens ("password is hunter2") cannot survive.
+    if (lower == "api" && next_is_key) || is_strong_secret_indicator(&lower) {
       for _ in index..tokens.len() {
         sanitized.push("[REDACTED_SECRET]".to_string());
       }
       break;
+    }
+
+    // Low confidence (keyword only as a substring, e.g. an unseparated compound
+    // like "secretkey"): keep the baseline bounded blast — the indicator plus the
+    // next token — so we never under-redact versus substring matching, without
+    // nuking a whole line on a false positive like "secretary".
+    if is_secret_indicator(&lower) {
+      sanitized.push("[REDACTED_SECRET]".to_string());
+      if index + 1 < tokens.len() {
+        sanitized.push("[REDACTED_SECRET]".to_string());
+        index += 2;
+      } else {
+        index += 1;
+      }
+      continue;
     }
 
     sanitized.push(token.to_string());
@@ -5793,13 +5810,66 @@ fn sanitize_secret_material_line(line: &str) -> String {
 }
 
 fn sanitize_source_body(text: &str) -> String {
+  // Map the per-line sanitizer directly over lines — sanitize_secret_material is
+  // itself line-aware now, so calling it here would split on '\n' a second time.
   text
     .lines()
-    .map(sanitize_secret_material)
+    .map(sanitize_secret_material_line)
     .collect::<Vec<_>>()
     .join("\n")
 }
 
+/// True if `needle` occurs in `token` as a whole word — delimited by
+/// non-alphanumeric chars (or string boundaries) on the left, and on the right
+/// by a boundary OR only a plural/possessive suffix ("s"/"es") before a boundary.
+/// Matches "password=x", "x-api-key", "my_secret", and the plurals
+/// "passwords"/"tokens"/"secrets", while rejecting false positives like
+/// "secretary", "tokenize", "subtoken". `needle` is ASCII, so byte offsets from
+/// `find` always land on char boundaries in UTF-8 input.
+fn contains_secret_word(token: &str, needle: &str) -> bool {
+  let mut start = 0;
+  while let Some(pos) = token[start..].find(needle) {
+    let abs = start + pos;
+    let before_ok = abs == 0
+      || !token[..abs]
+        .chars()
+        .next_back()
+        .map(|c| c.is_alphanumeric())
+        .unwrap_or(false);
+    if before_ok {
+      // The keyword may be followed only by a plural/possessive suffix before a
+      // boundary: accept "secrets"/"tokens"/"passwords", reject "secretary".
+      let suffix: String = token[abs + needle.len()..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric())
+        .collect();
+      if matches!(suffix.as_str(), "" | "s" | "es") {
+        return true;
+      }
+    }
+    start = abs + 1;
+  }
+  false
+}
+
+/// High-confidence indicator: the token IS a secret keyword (whole word or
+/// pluralized), or a Japanese keyword. Triggers the to-end-of-line redaction.
+fn is_strong_secret_indicator(lower: &str) -> bool {
+  contains_secret_word(lower, "password")
+    || contains_secret_word(lower, "token")
+    || contains_secret_word(lower, "secret")
+    || contains_secret_word(lower, "api_key")
+    || contains_secret_word(lower, "apikey")
+    || contains_secret_word(lower, "passcode")
+    || lower.contains("パスワード")
+    || lower.contains("秘密鍵")
+}
+
+/// Low-confidence indicator: the keyword appears anywhere as a substring
+/// (e.g. an unseparated compound like "secretkey"). Used only for the bounded
+/// fallback redaction so we never under-redact versus substring matching.
+/// NOTE: redaction is at-rest masking only; classification via detect_sensitivity
+/// is independent, so neither matcher affects the trust boundary.
 fn is_secret_indicator(lower: &str) -> bool {
   lower.contains("password")
     || lower.contains("token")
@@ -11698,6 +11768,40 @@ mod tests {
     // Lines with no indicator are untouched.
     let clean = sanitize_secret_material("Tone preference: concise and calm.");
     assert_eq!(clean, "Tone preference: concise and calm.");
+
+    // False positives (a word merely CONTAINING a keyword) must NOT nuke the
+    // whole line — only the baseline bounded blast applies, so the tail survives.
+    let secretary = sanitize_secret_material("My secretary scheduled the meeting for Tuesday");
+    assert!(
+      secretary.contains("the meeting for Tuesday"),
+      "false-positive over-redacted to end of line: {secretary}"
+    );
+
+    // Genuine keywords still match even with adjacent punctuation.
+    let punct = sanitize_secret_material("token: abc123");
+    assert!(
+      !punct.contains("abc123"),
+      "punctuated keyword missed: {punct}"
+    );
+    let kv = sanitize_secret_material("password=hunter2 and more");
+    assert!(!kv.contains("hunter2"), "kv secret leaked: {kv}");
+
+    // Pluralized/suffixed keywords must NOT bypass redaction — a value >=2 tokens
+    // after a plural keyword must still be masked (the security-review regression).
+    let plural = sanitize_secret_material("my passwords are hunter2 and swordfish");
+    assert!(
+      !plural.contains("hunter2"),
+      "plural keyword bypassed redaction: {plural}"
+    );
+    assert!(
+      !plural.contains("swordfish"),
+      "plural keyword bypassed redaction: {plural}"
+    );
+    let toks = sanitize_secret_material("api tokens: tok_abc tok_def");
+    assert!(
+      !toks.contains("tok_abc"),
+      "plural keyword bypassed redaction: {toks}"
+    );
   }
 
   #[test]
