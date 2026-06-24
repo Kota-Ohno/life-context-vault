@@ -407,11 +407,22 @@ export function App() {
     useState<ClaudeDesktopConfigInstallResult | null>(null);
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
+  // Always-current view of `state`. setState is async, so a synchronous batch
+  // loop (multi-file upload, batch approve) in the localStorage-fallback path
+  // would otherwise recompute every iteration from the same stale render-time
+  // closure and overwrite all but the last. Writers update this ref synchronously
+  // so the next iteration folds onto the latest state; an effect keeps it in sync
+  // for any other setState path.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   // Commit a native core result: sync the revision ref + state in one place so a
   // handler can't forget to advance nativeRevisionRef (which would reintroduce
   // stale-revision save conflicts).
   function commitNativeResult(result: { updatedAt: string | null; state: VaultState }) {
     nativeRevisionRef.current = result.updatedAt;
+    stateRef.current = result.state;
     setNativeRevision(result.updatedAt);
     setState(result.state);
   }
@@ -756,6 +767,7 @@ export function App() {
   const sourceLabel = sourceLabelForCapabilities(ocrExtractionAvailable, legacyOfficeConversionAvailable);
 
   function apply(next: VaultState, message?: string) {
+    stateRef.current = next;
     setState(next);
     if (message) setNotice(message);
   }
@@ -891,7 +903,9 @@ export function App() {
       `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`
     );
     if (addStatus === "unavailable") {
-      const next = addSourceWithCandidates(state, {
+      // Read the freshest state (not the render-time closure) so a sequential
+      // multi-file upload folds each file onto the previous result.
+      const next = addSourceWithCandidates(stateRef.current, {
         kind: "document",
         origin: "user_upload",
         title: file.name,
@@ -1175,12 +1189,15 @@ export function App() {
         return;
       }
     }
-    if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
+    // Fallback path: read the freshest state (not the render-time closure) so a
+    // batch approve folds each candidate onto the previous result.
+    const base = stateRef.current;
+    if (candidate.sourceIds.some((sourceId) => base.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
       setNotice("削除または消去された取り込み元由来の記憶は承認できません。取り込み元を復元するか、新しい取り込み元として追加してください。");
       return;
     }
-    const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
-    const next = approveCandidate(state, candidate.id, { editedText: edited, supersedeFactIds });
+    const invalidatedPackCount = packsForFacts(base, supersedeFactIds).length;
+    const next = approveCandidate(base, candidate.id, { editedText: edited, supersedeFactIds });
     setCandidateSupersedes((current) => {
       const nextSelections = { ...current };
       delete nextSelections[candidate.id];
