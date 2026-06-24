@@ -2180,6 +2180,20 @@ export function sensitivityLabel(sensitivity: SensitivityTier): string {
 }
 
 /**
+ * Group facts by LifeContextDomain in canonical (domainLabels) order, dropping
+ * empty domains. Used by the in-app "what the vault knows about me" overview
+ * (the Search view when browsing) to organize memories by area at a glance.
+ * Callers pass the already-filtered set (e.g. active facts).
+ */
+export function factsByDomain(
+  facts: VaultState["facts"]
+): Array<{ domain: LifeContextDomain; facts: VaultState["facts"] }> {
+  return allLifeDomains
+    .map((domain) => ({ domain, facts: facts.filter((fact) => fact.domain === domain) }))
+    .filter((group) => group.facts.length > 0);
+}
+
+/**
  * Render the user's APPROVED, currently-valid facts as a plaintext Markdown
  * document for portability ("take my reviewed context to another tool"). This is
  * a user-initiated egress of data that is ALREADY past the trust boundary

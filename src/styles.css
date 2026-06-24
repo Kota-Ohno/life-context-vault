@@ -1823,6 +1823,25 @@ button:focus-visible {
   line-height: 1.4;
 }
 
+/* Memory overview: facts grouped by domain when browsing (記憶 view, no query). */
+.memory-domain-group {
+  margin-bottom: 18px;
+}
+
+.memory-domain-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.memory-domain-heading strong {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
 .answer-box {
   overflow: auto;
   max-height: 440px;
