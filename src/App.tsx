@@ -1318,14 +1318,14 @@ export function App() {
         });
         if (built) {
           commitNativeResult(built);
-          setNotice("Vault CoreでAI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
+          setNotice("Vault CoreでAI要求を受け取り、短命のAIに送る内容を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
           setQuestion("");
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を生成できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに送った内容を生成できませんでした。"));
         return;
       }
     }
@@ -1337,7 +1337,7 @@ export function App() {
       approvalMode: "explicit_sensitive"
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
-    apply(built.state, "AI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
+    apply(built.state, "AI要求を受け取り、短命のAIに送る内容を生成しました。");
     setActiveRequestId(requested.request.id);
     setActivePackId(built.pack?.id ?? null);
     setQuestion("");
@@ -1359,7 +1359,7 @@ export function App() {
   }
 
   async function changePackItemVisibility(pack: ContextPack, factId: string, included: boolean) {
-    const verb = included ? "AIに渡す内容（記憶）へ戻しました。" : "このAIには渡さないようAIに渡す内容（記憶）から外しました。";
+    const verb = included ? "AIに送る内容へ戻しました。" : "このAIには渡さないようAIに送る内容から外しました。";
     if (nativePath) {
       try {
         const updated = await updateNativeContextPackItemVisibility({
@@ -1375,7 +1375,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を更新できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに送った内容を更新できませんでした。"));
         return;
       }
     }
@@ -1388,10 +1388,10 @@ export function App() {
       : null;
     if (pack.confirmationStatus === "confirmed" && request?.status === "fulfilled") {
       if (!canSendContextPackToAi(state, pack)) {
-        setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーでは送信できません。新しくAIに渡す内容（記憶）を作成してください。");
+        setNotice("このAIに送る内容は現在のAI接続ポリシーでは送信できません。新しくAIに送る内容を作成してください。");
         return;
       }
-      setNotice("このAIに渡す内容（記憶）はすでにAIへ返せる状態です。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+      setNotice("このAIに送る内容はすでにAIへ返せる状態です。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
       return;
     }
     if (nativePath) {
@@ -1401,11 +1401,11 @@ export function App() {
           commitNativeResult(updated);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
-          setNotice("AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+          setNotice("AIに送る内容を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
           return;
         }
       } catch (error) {
-        setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
+        setNotice(formatVaultError(error, "Vault CoreでAIに送った内容を承認できませんでした。"));
         return;
       }
     }
@@ -1414,11 +1414,11 @@ export function App() {
     if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
       apply(
         confirmedState,
-        "このAIに渡す内容（記憶）は現在のAI接続ポリシーでは承認できません。新しくAIに渡す内容（記憶）を作成してください。"
+        "このAIに送る内容は現在のAI接続ポリシーでは承認できません。新しくAIに送る内容を作成してください。"
       );
       return;
     }
-    apply(confirmedState, "AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
+    apply(confirmedState, "AIに送る内容を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
   }
 
   async function copyPackForAi(pack: ContextPack) {
@@ -1427,7 +1427,7 @@ export function App() {
       : null;
     const shouldConfirm = pack.confirmationStatus !== "confirmed" || request?.status !== "fulfilled";
     if (!shouldConfirm && !canSendContextPackToAi(state, pack)) {
-      setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
+      setNotice("このAIに送る内容は現在のAI接続ポリシーではコピーできません。新しくAIに送る内容を作成してください。");
       return;
     }
     let payloadPack = shouldConfirm
@@ -1443,12 +1443,12 @@ export function App() {
             if (updated.requestId) setActiveRequestId(updated.requestId);
             payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
             if (!canSendContextPackToAi(updated.state, payloadPack)) {
-              setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
+              setNotice("このAIに送る内容は現在のAI接続ポリシーではコピーできません。新しくAIに送る内容を作成してください。");
               return;
             }
           }
         } catch (error) {
-          setNotice(formatVaultError(error, "Vault CoreでAIに渡した内容（記憶）を承認できませんでした。"));
+          setNotice(formatVaultError(error, "Vault CoreでAIに送った内容を承認できませんでした。"));
           return;
         }
       } else {
@@ -1456,7 +1456,7 @@ export function App() {
         const confirmedPack = confirmedState.contextPacks.find((item) => item.id === pack.id);
         if (!confirmedPack || !canSendContextPackToAi(confirmedState, confirmedPack)) {
           setState(confirmedState);
-          setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーではコピーできません。新しくAIに渡す内容（記憶）を作成してください。");
+          setNotice("このAIに送る内容は現在のAI接続ポリシーではコピーできません。新しくAIに送る内容を作成してください。");
           return;
         }
         setState(confirmedState);
@@ -1485,7 +1485,7 @@ export function App() {
     const copied = await copyText(
       payloadText,
       shouldConfirm
-        ? "AIに渡す内容（記憶）を承認し、ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
+        ? "AIに送る内容を承認し、ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
         : "ChatGPT/Claude向けプロンプトをコピーしました。そのまま貼り付けてください。"
     );
     if (copied) {
@@ -1510,7 +1510,7 @@ export function App() {
     const pack = state.contextPacks.find((item) => item.id === packId);
     if (!pack || !canSendContextPackToAi(state, pack)) {
       setManualCopyPayload(null);
-      setNotice("このAIに渡す内容（記憶）は現在のAI接続ポリシーでは記録できません。新しくAIに渡す内容（記憶）を作成してください。");
+      setNotice("このAIに送る内容は現在のAI接続ポリシーでは記録できません。新しくAIに送る内容を作成してください。");
       return;
     }
     setState((current) =>
@@ -2177,7 +2177,7 @@ function ContextRequestsView({
       : unreturnedLowRiskRequests.length > 0
         ? "低リスクでも、AIへ返す前に送信内容をここで確認できます。"
         : showCopyFallbackStarter
-          ? "新しいAI要求が届くとここに並びます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
+          ? "新しいAI要求が届くとここに並びます。MCPなしで使う場合は下でAIに送る内容を作成します。"
           : "新しいAI要求が届くとここに並びます。手動テストは下の折りたたみから試せます。";
   const requestComposer = (buttonLabel: string) => (
     <div className="form-stack">
@@ -2198,7 +2198,7 @@ function ContextRequestsView({
         <Sparkles size={16} aria-hidden="true" />
         {buttonLabel}
       </button>
-      <p className="muted">MCPなしでも、AIへ渡す前に同じ内容（記憶）の確認と監査ログを通します。</p>
+      <p className="muted">MCPなしでも、AIへ渡す前に同じ送る内容の確認と監査ログを通します。</p>
     </div>
   );
   const packPanelRef = useRef<HTMLDivElement | null>(null);
@@ -2250,12 +2250,12 @@ function ContextRequestsView({
           {requests.length === 0 && (
             <EmptyState
               title="まだAI要求はありません"
-              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこの取り込みで確認できます。MCPなしで使う場合は下でAIに渡す内容（記憶）を作成します。"
+              body="ChatGPT/Claudeなどから要求が届くと、AIへ返す前にこの取り込みで確認できます。MCPなしで使う場合は下でAIに送る内容を作成します。"
             />
           )}
           {requests.length === 0 && (
             <p className="qv-inbox-hint">
-              Claude Desktopを再起動し、何か質問してみてください。要求はここに表示されます。MCPを使わない場合は下で「AIに渡す内容（記憶）」を作成できます。
+              Claude Desktopを再起動し、何か質問してみてください。要求はここに表示されます。MCPを使わない場合は下で「AIに送る内容」を作成できます。
             </p>
           )}
         </div>
@@ -2264,7 +2264,7 @@ function ContextRequestsView({
             <div className="panel-heading compact-heading">
               <div>
                 <p className="eyebrow">コピー送信</p>
-                <h3>MCPなしでAIに渡す内容（記憶）を作る</h3>
+                <h3>MCPなしでAIに送る内容を作る</h3>
               </div>
               <Clipboard size={18} aria-hidden="true" />
             </div>
@@ -2272,11 +2272,11 @@ function ContextRequestsView({
               <ShieldCheck size={16} aria-hidden="true" />
               <span>ここで作った記憶も、確認画面で許可またはコピーするまでAIには渡りません。</span>
             </div>
-            {requestComposer("確認用にAIに渡す内容（記憶）を作成")}
+            {requestComposer("確認用にAIに送る内容を作成")}
           </div>
         ) : (
           <details className="advanced-panel request-test-panel">
-            <summary>手動でAIに渡す内容（記憶）を試す</summary>
+            <summary>手動でAIに送る内容を試す</summary>
             {requestComposer("テスト要求を作成")}
           </details>
         )}
@@ -2359,7 +2359,7 @@ function ContextRequestsView({
                 {currentPack.items.length}件の記憶と{currentPack.sourceSnippets?.length ?? 0}件の根拠の抜粋だけを送信予定。除外は{currentPack.excludedItems.length}件です。
               </span>
             </div>
-            <div className="pack-boundary-receipt-grid" aria-label="AIに渡した内容（記憶）配信境界">
+            <div className="pack-boundary-receipt-grid" aria-label="AIに送った内容配信境界">
               {boundaryReceiptItems.map((item) => (
                 <div className={`pack-boundary-receipt ${item.tone}`} key={item.label}>
                   <span>{item.label}</span>
@@ -2602,7 +2602,7 @@ function SearchView({
           </div>
           <div className="trust-note">
             <ShieldAlert size={16} aria-hidden="true" />
-            <span>取り込み元が停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の内容（記憶）も無効化されます。</span>
+            <span>取り込み元が停止・本文消去・本文更新された記憶です。保持するとAIに渡す記憶へ戻り、非表示/削除すると既存の送る内容も無効化されます。</span>
           </div>
           <div className="domain-list">
             {reviewFacts.map((fact) => (
@@ -2811,7 +2811,7 @@ function SettingsView({
                 <Metric label="元データ" value={restorePreview.counts.sources} />
                 <Metric label="保存済みの記憶" value={restorePreview.counts.facts} />
                 <Metric label="取り込み候補" value={restorePreview.counts.candidates} />
-                <Metric label="AIに渡した内容（記憶）" value={restorePreview.counts.packs} />
+                <Metric label="AIに送った内容" value={restorePreview.counts.packs} />
                 <Metric label="依頼" value={restorePreview.counts.requests} />
                 <Metric label="キャプチャ" value={restorePreview.counts.captureEvents} />
                 <Metric label="AI接続" value={restorePreview.counts.connectorSessions} />
@@ -3217,7 +3217,7 @@ function SettingsView({
           <div className="danger-zone">
             <div className="trust-note attention-note">
               <ShieldAlert size={16} aria-hidden="true" />
-              <span>Vaultをクリアすると、取り込み元、記憶、AIに渡した内容（記憶）、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
+              <span>Vaultをクリアすると、取り込み元、記憶、AIに送った内容、接続監査が空になります。バックアップが必要なら先にバックアップを作成してください。</span>
             </div>
             <div className="clear-impact-list" aria-label="消去の影響">
               {clearImpactSections.map((section) => (
@@ -3272,7 +3272,7 @@ function auditReceiptTitle(event: AuditEvent): string {
   }
   if (event.eventType === "context_pack_confirmed") return `${client}が取得できる状態にしました`;
   if (event.eventType === "context_pack_denied") return `${client}へのAI要求を拒否しました`;
-  return `${client}へAIに渡す内容（記憶）を送信不可にしました`;
+  return `${client}へAIに送る内容を送信不可にしました`;
 }
 
 export function auditReceiptBody(event: AuditEvent): string {
@@ -3290,14 +3290,14 @@ export function auditReceiptBody(event: AuditEvent): string {
     typeof excludedCount === "number" ? `${excludedCount}件を除外` : null,
     ttl ? `有効期限は約${Math.max(1, Math.round(ttl / 60))}分` : null
   ].filter(Boolean);
-  const summary = pieces.length > 0 ? pieces.join("、") : "AIに渡した内容（記憶）の本文は監査ログに保存していません";
+  const summary = pieces.length > 0 ? pieces.join("、") : "AIに送った内容の本文は監査ログに保存していません";
   return `${summary}。取り込み元の原文と確認待ちの記憶は含めていません。`;
 }
 
 function deliveryChannelLabel(channel: string): string {
   if (channel === "clipboard_copy") return "コピー";
 
-  return channel || "AIに渡した内容（記憶）";
+  return channel || "AIに送った内容";
 }
 
 function isKnownLifeDomain(value: string): value is LifeContextDomain {
@@ -3809,10 +3809,10 @@ function packDeliveryTitle(state: ContextPackDeliveryState | null): string {
 
 function packDeliveryBody(state: ContextPackDeliveryState | null): string {
   if (state?.expired) {
-    return "この短命のAIに渡す内容（記憶）は期限切れです。再度AIに渡す内容（記憶）を作成すると、現在のポリシーで確認できます。";
+    return "この短命のAIに送る内容は期限切れです。再度AIに送る内容を作成すると、現在のポリシーで確認できます。";
   }
   if (state?.canDeliver) {
-    return "外部AIはget_request_statusで、このAIに渡す内容（記憶）だけを取得できます。";
+    return "外部AIはget_request_statusで、このAIに送る内容だけを取得できます。";
   }
   if (state?.awaitingReturn) {
     return "確認不要ですが、返却またはコピーするまで外部AIには記憶の内容を返しません。";
@@ -3916,9 +3916,9 @@ function sourceLifecycleNotice(
     return `取り込み元を復元しました。${affectedFactCount}件の記憶を再びAIに渡す記憶に戻しました。`;
   }
   if (action === "purge_body") {
-    return `取り込み元の原文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `取り込み元の原文を消去しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
   }
-  return `取り込み元を使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を使用停止しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
 }
 
 type RestoreRecordCounts = RestorePreview["counts"];
@@ -3997,7 +3997,7 @@ function restoreReceiptSections(input: {
       detail:
         input.promotedSourceCount > 0
           ? `${input.promotedSourceCount}件は長期保存取り込み元です。復元しても自動でAIへ送信されません。`
-          : "保存された取り込み元の原文は復元されます。AIへ渡るのは承認済みのAIに渡す内容（記憶）だけです。",
+          : "保存された取り込み元の原文は復元されます。AIへ渡るのは承認済みのAIに送る内容だけです。",
       tone: input.counts.sources > 0 ? "attention" : "ready"
     },
     {
@@ -4029,7 +4029,7 @@ function restoreReceiptSections(input: {
       value: `${input.counts.auditEvents}件`,
       detail:
         input.highestSensitivity === "secret_never_send"
-          ? "最高感度に非公開データを含みます。AIに渡す内容（記憶）の境界とポリシーを確認してください。"
+          ? "最高感度に非公開データを含みます。AIに送る内容の境界とポリシーを確認してください。"
           : "AIに渡った事実の本文ではなく、配達先・件数・感度などの監査メタデータです。",
       tone: input.highestSensitivity === "secret_never_send" ? "attention" : "ready"
     }
@@ -4067,7 +4067,7 @@ function restoreAiBoundarySections(input: ReturnType<typeof restoreAiBoundarySum
       detail:
         input.deliverablePackCount > 0
           ? "復元後も期限内の確認済みの記憶があります。AI要求一覧で内容と期限を確認してください。"
-          : "復元後すぐ外部AIへ返せる内容（記憶）はありません。必要なら新しくAIに渡す内容（記憶）を作成します。",
+          : "復元後すぐ外部AIへ送れる内容はありません。必要なら新しくAIに送る内容を作成します。",
       tone: input.deliverablePackCount > 0 ? "attention" : "ready"
     },
     {
@@ -4126,7 +4126,7 @@ export function clearVaultImpactSections(state: VaultState): ClearImpactSection[
       detail:
         hasAiBoundaryRecords
           ? `${aiBoundary.deliverablePackCount}件の取得可能な記憶、${aiBoundary.pendingRequestCount}件の確認/返却待ち、${aiBoundary.expiredPackCount}件の期限切れの記憶のローカル履歴を削除します。`
-          : "AI要求とAIに渡した内容（記憶）はありません。",
+          : "AI要求とAIに送った内容はありません。",
       tone: hasAiBoundaryRecords ? "attention" : "ready"
     },
     {
@@ -4269,7 +4269,7 @@ export function homeCaptureSafetySummary(
       tone: "ready",
       title: "許可サイトだけをローカルで記憶化中",
       body:
-        "AI会話連携は確認待ちの記憶を作るだけです。承認とAI送信は、取り込みとAIに渡した内容（記憶）の確認を通ります。",
+        "AI会話連携は確認待ちの記憶を作るだけです。承認とAI送信は、取り込みとAIに送った内容の確認を通ります。",
       allowedSitesLabel,
       lastCaptureLabel,
       lastPreview,
@@ -4331,7 +4331,7 @@ function captureEventStatusLabel(
 }
 
 function sourceMetadataNotice(invalidatedPackCount: number): string {
-  return `取り込み元を更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元を更新しました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
 }
 
 function sourceBodyNotice(
@@ -4339,7 +4339,7 @@ function sourceBodyNotice(
   affectedFactCount: number,
   invalidatedPackCount: number
 ): string {
-  return `取り込み元の原文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `取り込み元の原文を保存し、${candidateCount}件の記憶を再生成しました。${affectedFactCount}件の記憶を再確認待ちにし、${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
 }
 
 function unsupportedFileFeedback(
@@ -4622,23 +4622,23 @@ function factLifecycleNotice(action: FactLifecycleAction, invalidatedPackCount: 
     return "記憶を保持し、AIへ渡す対象へ戻しました。";
   }
   if (action === "hide") {
-    return `記憶をAIへ渡す対象から非表示にしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `記憶をAIへ渡す対象から非表示にしました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
   }
   if (action === "delete") {
-    return `記憶を削除済みにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `記憶を削除済みにしました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
   }
-  return `記憶を再確認待ちにしました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `記憶を再確認待ちにしました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
 }
 
 function factMetadataNotice(invalidatedPackCount: number): string {
-  return `記憶を更新しました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+  return `記憶を更新しました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
 }
 
 function candidateApprovalNotice(supersededFactCount: number, invalidatedPackCount: number): string {
   if (supersededFactCount > 0) {
-    return `新しい記憶として保存し、${supersededFactCount}件の古い記憶を置き換えました。${invalidatedPackCount}件のAIに渡した内容（記憶）を無効化しました。`;
+    return `新しい記憶として保存し、${supersededFactCount}件の古い記憶を置き換えました。${invalidatedPackCount}件のAIに送った内容を無効化しました。`;
   }
-  return "承認済みの記憶として保存しました。AIへ渡るのはAIに渡す内容（記憶）の確認後だけです。";
+  return "承認済みの記憶として保存しました。AIへ渡るのはAIに送る内容の確認後だけです。";
 }
 
 function activeFactPackCount(state: VaultState, factId: string): number {

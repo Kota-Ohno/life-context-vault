@@ -635,7 +635,7 @@ describe("AI access UI safety", () => {
     expect(summary.lastPreview).toContain("来月引っ越す予定");
     expect(summary.purgeableCount).toBe(1);
     expect(summary.body).toContain("確認待ちの記憶");
-    expect(summary.body).toContain("AIに渡した内容（記憶）の確認");
+    expect(summary.body).toContain("AIに送った内容の確認");
     const longPreview = homeCaptureSafetySummary(
       settings,
       [event],
