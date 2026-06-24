@@ -15,3 +15,6 @@ deploy/relay/compose.env
 .serena/
 .takt/
 *.png
+
+# Local Claude Code settings (machine-specific, never commit)
+.claude/settings.local.json
