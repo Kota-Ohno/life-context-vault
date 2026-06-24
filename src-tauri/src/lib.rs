@@ -1244,7 +1244,6 @@ fn create_native_context_pack_request_in_connection(
   }
 
   let now = now_iso();
-  let expires_at = minutes_from_now(10);
   let request_id = new_id("req");
   let pack_id = new_id("pack");
   let task_domain = classify_domain(task_text);
@@ -1358,6 +1357,16 @@ fn create_native_context_pack_request_in_connection(
     "pending_user_confirmation"
   } else {
     "fulfilled"
+  };
+  // Decouple the confirmation window from the delivery TTL. A confirmation-required
+  // request stays confirmable for a long window so the user isn't racing a clock;
+  // the short 10-minute delivery TTL is (re)stamped at confirmation time
+  // (confirm_context_pack_at_path). A zero-touch pack is delivered immediately, so
+  // its 10-minute delivery TTL runs from creation as before.
+  let expires_at = if requires_confirmation {
+    days_from_now(1)
+  } else {
+    minutes_from_now(10)
   };
 
   let request = json!({
@@ -1603,9 +1612,15 @@ pub fn confirm_context_pack_at_path(
   ensure_context_pack_allowed_by_current_policy(&vault, &pack)?;
   let request_id = optional_str_field(&pack, "requestId");
   let now = now_iso();
+  // Re-stamp the short delivery TTL from the moment of human confirmation, so the
+  // 10-minute retrieval window starts now (not at request creation). Pending packs
+  // carry a long confirmation window; this narrows it back to the secure delivery
+  // window once approved.
+  let delivery_expires_at = minutes_from_now(10);
   mutate_vault_item_by_id(&mut vault, "contextPacks", pack_id, |pack| {
     pack["confirmationStatus"] = Value::String("confirmed".to_string());
     pack["confirmedAt"] = Value::String(now.clone());
+    pack["expiresAt"] = Value::String(delivery_expires_at.clone());
   })?;
   if let Some(request_id) = request_id.as_deref() {
     set_context_request_status(&mut vault, request_id, "fulfilled");
@@ -12246,6 +12261,109 @@ mod tests {
       Err(error) => error,
     };
     assert!(mixed_domain_error.contains("unsupported life context domain"));
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn pending_context_pack_has_a_long_confirmation_window() {
+    // A confirmation-required request must stay confirmable well beyond the
+    // 10-minute delivery TTL, so the user can approve at their leisure instead
+    // of racing a 10-minute clock.
+    use_test_vault_key();
+    let path = temp_vault_path("pending-pack-long-confirm-window");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Schedule note",
+      "Morning routine is a walk at 7am.",
+    )
+    .expect("source");
+    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me plan my morning.",
+      None,
+      Some("personal"),
+      Some("always_review"),
+    )
+    .expect("context pack");
+    assert_eq!(built.confirmation_status, "pending_user_confirmation");
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let saved = load_vault_json_from_connection(&connection).expect("vault json");
+    let pack = find_vault_item_by_id(&saved, "contextPacks", &built.pack_id).expect("pack");
+    let request =
+      find_vault_item_by_id(&saved, "contextPackRequests", &built.request_id).expect("request");
+    let in_eleven_minutes = chrono::Utc::now() + chrono::Duration::minutes(11);
+    let pack_expiry = chrono::DateTime::parse_from_rfc3339(&str_field(&pack, "expiresAt"))
+      .expect("pack expiresAt")
+      .with_timezone(&chrono::Utc);
+    let request_expiry = chrono::DateTime::parse_from_rfc3339(&str_field(&request, "expiresAt"))
+      .expect("request expiresAt")
+      .with_timezone(&chrono::Utc);
+    assert!(
+      pack_expiry > in_eleven_minutes,
+      "pending pack must not expire within 10 minutes: {}",
+      str_field(&pack, "expiresAt")
+    );
+    assert!(
+      request_expiry > in_eleven_minutes,
+      "pending request must not expire within 10 minutes: {}",
+      str_field(&request, "expiresAt")
+    );
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn confirming_pack_restamps_delivery_ttl_from_confirmation() {
+    // The 10-minute delivery window must be measured from the moment of human
+    // confirmation, not from request creation, so a confirmed pack is retrievable
+    // for a full short window afterwards (and not longer).
+    use_test_vault_key();
+    let path = temp_vault_path("confirm-restamps-delivery-ttl");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Schedule note",
+      "Morning routine is a walk at 7am.",
+    )
+    .expect("source");
+    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "Help me plan my morning.",
+      None,
+      Some("personal"),
+      Some("always_review"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let saved = load_vault_json_from_connection(&connection).expect("vault json");
+    let pack = find_vault_item_by_id(&saved, "contextPacks", &built.pack_id).expect("pack");
+    let now = chrono::Utc::now();
+    let pack_expiry = chrono::DateTime::parse_from_rfc3339(&str_field(&pack, "expiresAt"))
+      .expect("pack expiresAt")
+      .with_timezone(&chrono::Utc);
+    assert!(
+      pack_expiry > now,
+      "confirmed pack must not be already expired: {}",
+      str_field(&pack, "expiresAt")
+    );
+    assert!(
+      pack_expiry <= now + chrono::Duration::minutes(11),
+      "confirmed pack delivery TTL must be re-stamped to ~10 minutes from confirmation: {}",
+      str_field(&pack, "expiresAt")
+    );
     remove_temp_vault(&path);
   }
 
