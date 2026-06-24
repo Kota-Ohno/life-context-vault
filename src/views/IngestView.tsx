@@ -180,7 +180,7 @@ export interface IngestViewProps {
   setManualTitle: (value: string) => void;
   setManualBody: (value: string) => void;
   addManualSource: () => void;
-  handleFileUpload: (file: File) => void | Promise<void>;
+  handleFilesUpload: (files: File[]) => void | Promise<void>;
   ocrExtractionAvailable: boolean;
   ocrProviderLabel: string | null;
   legacyOfficeConversionAvailable: boolean;
@@ -215,7 +215,7 @@ export function IngestView({
   setManualTitle,
   setManualBody,
   addManualSource,
-  handleFileUpload,
+  handleFilesUpload,
   ocrExtractionAvailable,
   ocrProviderLabel,
   legacyOfficeConversionAvailable,
@@ -256,17 +256,11 @@ export function IngestView({
     });
   }
 
-  // Upload N files sequentially with per-file error isolation: one failed file
-  // must not abort the rest, and sequential keeps per-file feedback + avoids
-  // native save contention.
-  async function uploadFiles(files: FileList | File[]) {
-    for (const file of Array.from(files)) {
-      try {
-        await handleFileUpload(file);
-      } catch {
-        // handleFileUpload surfaces its own feedback; keep going for remaining files.
-      }
-    }
+  // Delegate the whole selection to the App-level batch orchestrator, which
+  // processes files sequentially, navigates once, and surfaces a combined
+  // outcome (per-file error isolation + single navigation live there).
+  function uploadFiles(files: FileList | File[]) {
+    void handleFilesUpload(Array.from(files));
   }
 
   function toggleSelectionMode() {

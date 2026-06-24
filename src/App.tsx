@@ -800,7 +800,19 @@ export function App() {
     setManualBody("");
   }
 
-  async function handleFileUpload(file: File) {
+  async function handleFileUpload(
+    file: File,
+    options?: { navigateOnSuccess?: boolean; surfaceFeedback?: boolean }
+  ): Promise<boolean> {
+    // navigateOnSuccess/surfaceFeedback default true so a single upload behaves as
+    // before; the batch orchestrator (handleFilesUpload) passes false and handles
+    // navigation + a combined summary once after the whole batch.
+    const navigate = options?.navigateOnSuccess !== false;
+    const surface = options?.surfaceFeedback !== false;
+    const fail = (feedback: UploadFeedback): boolean => {
+      if (surface) setUploadFeedback(feedback);
+      return false;
+    };
     const support = describeSourceFile(
       file,
       Boolean(nativePath),
@@ -828,15 +840,14 @@ export function App() {
             setNotice(
               `${file.name} を保留中取り込み元として保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
             );
-            setView("sources");
-            return;
+            if (navigate) setView("sources");
+            return true;
           }
         } catch (error) {
           setNotice(formatVaultError(error, "保留中の取り込み元の保存に失敗しました。"));
         }
       }
-      setUploadFeedback(unsupportedFileFeedback(file, support.reason));
-      return;
+      return fail(unsupportedFileFeedback(file, support.reason));
     }
 
     let text = "";
@@ -845,21 +856,19 @@ export function App() {
       try {
         text = await file.text();
       } catch {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "ファイルを読めませんでした",
           body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、「会話・メモから追加」に貼り付けてください。"
         });
-        return;
       }
 
       if (!looksLikeReadableText(text)) {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "テキストとして読めませんでした",
           body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないため取り込めませんでした。"
         });
-        return;
       }
     } else {
       try {
@@ -875,13 +884,12 @@ export function App() {
           legacyOfficeTimeoutSeconds: runtimeLegacyOfficeAvailable ? configuredLegacyOfficeTimeoutSeconds : null
         });
         if (!extracted) {
-          setUploadFeedback(unsupportedFileFeedback(file, "native_required"));
-          return;
+          return fail(unsupportedFileFeedback(file, "native_required"));
         }
         text = extracted.text;
         extractionDetail = ` ${documentExtractionLabel(extracted.detectedKind)}としてローカル抽出しました。${extracted.warnings.join(" ")}`;
       } catch (error) {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "文書を抽出できませんでした",
           body:
@@ -889,7 +897,6 @@ export function App() {
               ? error.message
               : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合は「会話・メモから追加」に貼り付けてください。"
         });
-        return;
       }
     }
 
@@ -900,7 +907,8 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`
+      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`,
+      navigate
     );
     if (addStatus === "unavailable") {
       // Read the freshest state (not the render-time closure) so a sequential
@@ -912,9 +920,39 @@ export function App() {
         body: text
       });
       apply(next, `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`);
-      setView("sources");
+      if (navigate) setView("sources");
+      return true;
     }
-    if (addStatus !== "failed") setUploadFeedback(null);
+    if (addStatus === "saved" && surface) setUploadFeedback(null);
+    return addStatus === "saved";
+  }
+
+  // Batch orchestrator for multi-file upload: process files sequentially WITHOUT
+  // per-file navigation (which would unmount IngestView mid-batch), clear prior
+  // feedback once, and surface a single outcome at the end — a combined notice
+  // for a real batch, or the detailed per-file feedback for a single file.
+  async function handleFilesUpload(files: File[]) {
+    if (files.length === 0) return;
+    const single = files.length === 1;
+    setUploadFeedback(null);
+    let saved = 0;
+    const failures: string[] = [];
+    for (const file of files) {
+      const ok = await handleFileUpload(file, {
+        navigateOnSuccess: false,
+        surfaceFeedback: single
+      });
+      if (ok) saved += 1;
+      else failures.push(file.name);
+    }
+    if (saved > 0) setView("sources");
+    if (!single) {
+      setNotice(
+        failures.length > 0
+          ? `${saved}件のファイルを取り込みました。${failures.length}件は取り込めませんでした（${failures.join("、")}）。`
+          : `${saved}件のファイルを取り込みました。`
+      );
+    }
   }
 
   async function addSourceThroughCore(
@@ -924,7 +962,8 @@ export function App() {
       title: string;
       body: string;
     },
-    message: string
+    message: string,
+    navigate = true
   ): Promise<"saved" | "unavailable" | "failed"> {
     if (!nativePath) return "unavailable";
     try {
@@ -934,7 +973,7 @@ export function App() {
       setNotice(
         `${message} ${added.candidateIds.length}件の記憶が作成されました。承認されるまでAIには使われません。`
       );
-      setView("sources");
+      if (navigate) setView("sources");
       return "saved";
     } catch (error) {
       setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
@@ -1159,7 +1198,7 @@ export function App() {
     return true;
   }
 
-  async function approve(candidate: MemoryCandidate) {
+  async function approve(candidate: MemoryCandidate): Promise<boolean> {
     const edited = candidateEdits[candidate.id];
     const supersedeFactIds = candidateSupersedes[candidate.id] ?? [];
     if (nativePath) {
@@ -1182,11 +1221,12 @@ export function App() {
             return next;
           });
           setNotice(candidateApprovalNotice(reviewed.supersededFactIds.length, reviewed.invalidatedPackCount));
-          return;
+          return true;
         }
+        return false;
       } catch (error) {
         setNotice(formatVaultError(error, "Vault Coreで候補を承認できませんでした。"));
-        return;
+        return false;
       }
     }
     // Fallback path: read the freshest state (not the render-time closure) so a
@@ -1194,7 +1234,7 @@ export function App() {
     const base = stateRef.current;
     if (candidate.sourceIds.some((sourceId) => base.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
       setNotice("削除または消去された取り込み元由来の記憶は承認できません。取り込み元を復元するか、新しい取り込み元として追加してください。");
-      return;
+      return false;
     }
     const invalidatedPackCount = packsForFacts(base, supersedeFactIds).length;
     const next = approveCandidate(base, candidate.id, { editedText: edited, supersedeFactIds });
@@ -1204,18 +1244,21 @@ export function App() {
       return nextSelections;
     });
     apply(next, candidateApprovalNotice(supersedeFactIds.length, invalidatedPackCount));
+    return true;
   }
 
   async function approveBatch(candidates: MemoryCandidate[]) {
     // Route each candidate through the existing per-item approve path, one at a time.
     // This preserves per-candidate classification, audit, supersession, and the
     // secret_never_send hard-reject gate in approveCandidate / approveNativeCandidate.
+    // Count by approve()'s actual outcome (it returns false on a swallowed failure)
+    // so the summary can't overstate how many became facts.
     let approved = 0;
     let skipped = 0;
     for (const candidate of candidates) {
       try {
-        await approve(candidate);
-        approved++;
+        if (await approve(candidate)) approved++;
+        else skipped++;
       } catch {
         skipped++;
       }
@@ -1858,7 +1901,7 @@ export function App() {
             setManualTitle={setManualTitle}
             setManualBody={setManualBody}
             addManualSource={addManualSource}
-            handleFileUpload={handleFileUpload}
+            handleFilesUpload={handleFilesUpload}
             ocrExtractionAvailable={ocrExtractionAvailable}
             ocrProviderLabel={ocrProviderLabel}
             legacyOfficeConversionAvailable={legacyOfficeConversionAvailable}
