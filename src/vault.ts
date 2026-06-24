@@ -2339,6 +2339,38 @@ export type TimelineDay = {
 };
 
 /**
+ * Caps how many timeline entries are materialized at once, without hiding any
+ * permanently: the Home tab promises "everything stays here", so this is a
+ * render-window (progressive "もっと見る" reveal), not a filter. Days are assumed
+ * already sorted newest-first with entries newest-first (as buildActivityTimeline
+ * emits); the first `limit` entries across days are kept, days are regrouped, and
+ * any day fully beyond the limit is dropped so no empty section renders. A
+ * non-positive or non-finite `limit` means "no windowing" (show everything).
+ */
+export function windowActivityTimeline(
+  days: TimelineDay[],
+  limit: number
+): { days: TimelineDay[]; total: number; shown: number; hasMore: boolean } {
+  let total = 0;
+  for (const day of days) total += day.entries.length;
+
+  const unbounded = !Number.isFinite(limit) || limit <= 0;
+  if (unbounded || total <= limit) {
+    return { days, total, shown: total, hasMore: false };
+  }
+
+  const windowed: TimelineDay[] = [];
+  let remaining = limit;
+  for (const day of days) {
+    if (remaining <= 0) break;
+    const entries = day.entries.slice(0, remaining);
+    remaining -= entries.length;
+    windowed.push({ ...day, entries });
+  }
+  return { days: windowed, total, shown: limit, hasMore: true };
+}
+
+/**
  * Derives the Home disclosure-ledger timeline from VaultState.
  *
  * @param state      - current VaultState

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VaultState } from "./types";
+import type { TimelineDay, TimelineEntry } from "./vault";
 import {
   addPassiveCaptureEvent,
   addSourceWithCandidates,
@@ -8,6 +9,7 @@ import {
   buildContextPack,
   buildContextPackForRequest,
   buildActivityTimeline,
+  windowActivityTimeline,
   canSendContextPackToAi,
   confirmContextPack,
   createContextPackRequest,
@@ -2028,5 +2030,74 @@ describe("migrateTrustConsentIfNeeded (via normalizeVaultState)", () => {
     };
     const again = normalizeVaultState(reTrusted as Parameters<typeof normalizeVaultState>[0]);
     expect(again.accessPolicies.some((p) => p.standingDeliveryEnabled === true)).toBe(true);
+  });
+});
+
+describe("windowActivityTimeline", () => {
+  // Build N days, each with `perDay` entries, sorted desc (newest first) like
+  // buildActivityTimeline emits. Entry timestamps embed day+index for ordering.
+  function makeDays(dayCount: number, perDay: number): TimelineDay[] {
+    const days: TimelineDay[] = [];
+    for (let d = 0; d < dayCount; d++) {
+      const entries: TimelineEntry[] = [];
+      for (let e = 0; e < perDay; e++) {
+        entries.push({
+          packId: `pack_${d}_${e}`,
+          clientId: "conn_chatgpt",
+          clientName: "ChatGPT",
+          task: `task ${d}-${e}`,
+          at: `2026-06-${String(20 - d).padStart(2, "0")}T${String(23 - e).padStart(2, "0")}:00:00.000Z`,
+          disclosure: "auto",
+          maxSensitivity: "personal",
+          facts: [],
+        });
+      }
+      days.push({ dayKey: `2026-06-${String(20 - d).padStart(2, "0")}`, label: `day ${d}`, entries });
+    }
+    return days;
+  }
+
+  it("returns all days untouched when total entries <= limit", () => {
+    const days = makeDays(2, 3); // 6 entries
+    const out = windowActivityTimeline(days, 10);
+    expect(out.total).toBe(6);
+    expect(out.shown).toBe(6);
+    expect(out.hasMore).toBe(false);
+    expect(out.days).toEqual(days);
+  });
+
+  it("truncates to the first `limit` entries across days, preserving order", () => {
+    const days = makeDays(3, 3); // 9 entries; days desc, entries desc
+    const out = windowActivityTimeline(days, 4);
+    expect(out.total).toBe(9);
+    expect(out.shown).toBe(4);
+    expect(out.hasMore).toBe(true);
+    // First day keeps all 3, second day keeps only its first entry.
+    expect(out.days).toHaveLength(2);
+    expect(out.days[0].entries).toHaveLength(3);
+    expect(out.days[1].entries).toHaveLength(1);
+    expect(out.days[1].entries[0].packId).toBe("pack_1_0");
+  });
+
+  it("drops days fully beyond the limit (no empty day sections)", () => {
+    const days = makeDays(3, 2); // 6 entries
+    const out = windowActivityTimeline(days, 2);
+    expect(out.shown).toBe(2);
+    expect(out.days).toHaveLength(1);
+    expect(out.days[0].dayKey).toBe(days[0].dayKey);
+  });
+
+  it("treats a non-positive or non-finite limit as no windowing", () => {
+    const days = makeDays(2, 2); // 4 entries
+    expect(windowActivityTimeline(days, 0).shown).toBe(4);
+    expect(windowActivityTimeline(days, 0).hasMore).toBe(false);
+    expect(windowActivityTimeline(days, Number.POSITIVE_INFINITY).shown).toBe(4);
+  });
+
+  it("does not mutate the input days array", () => {
+    const days = makeDays(2, 3);
+    const snapshot = JSON.parse(JSON.stringify(days));
+    windowActivityTimeline(days, 2);
+    expect(days).toEqual(snapshot);
   });
 });

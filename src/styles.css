@@ -2937,6 +2937,24 @@ button:focus-visible {
   gap: var(--space-4);
 }
 
+.qv-tl-more {
+  align-self: center;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.qv-tl-more:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
 /* --- Day section ------------------------------------------- */
 .qv-tl-day {
   display: flex;
