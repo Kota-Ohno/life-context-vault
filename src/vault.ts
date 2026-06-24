@@ -2179,6 +2179,78 @@ export function sensitivityLabel(sensitivity: SensitivityTier): string {
   }[sensitivity];
 }
 
+/**
+ * Render the user's APPROVED, currently-valid facts as a plaintext Markdown
+ * document for portability ("take my reviewed context to another tool"). This is
+ * a user-initiated egress of data that is ALREADY past the trust boundary
+ * (approved facts only) — never raw sources, candidates, packs, or audit bodies.
+ *
+ * What is included (defence in depth — the UI also warns the file is unencrypted):
+ *  - only status === "active" facts (no superseded/expired/needs_review/hidden/deleted),
+ *  - secret_never_send (tier 4) is ALWAYS excluded — it can never legitimately be
+ *    a Fact, so its presence is anomalous and it must never reach a plaintext file,
+ *  - facts past their validUntil are excluded, matching how pack retrieval
+ *    withholds temporally-expired facts (so the export can't ship stale context).
+ * Facts whose domain is not a known LifeContextDomain are NOT dropped silently —
+ * they are collected under a fallback heading so "all approved facts" is honest.
+ * Each line is labelled with its sensitivity tier and resolvable source titles;
+ * newlines in user text are flattened so a factText can't forge Markdown headers.
+ */
+export function exportApprovedFactsMarkdown(state: VaultState, nowMs: number = Date.now()): string {
+  const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim();
+  const facts = state.facts.filter(
+    (fact) =>
+      fact.status === "active" &&
+      fact.sensitivity !== "secret_never_send" &&
+      !(fact.validUntil && Date.parse(fact.validUntil) < nowMs)
+  );
+
+  const lines: string[] = [
+    "# Life Context — 承認済みファクト",
+    "",
+    "> ⚠️ このファイルは暗号化されていません。承認済みファクトのみを含みます（取り込み元の原文・未承認候補・送信履歴は含みません）。取り扱いに注意してください。",
+    ""
+  ];
+
+  if (facts.length === 0) {
+    lines.push("（エクスポートできる承認済みファクトはまだありません）");
+    return lines.join("\n");
+  }
+
+  const renderFact = (fact: VaultState["facts"][number]): string => {
+    const sourceTitles = fact.sourceIds
+      .map((id) => state.sources.find((source) => source.id === id)?.title)
+      .filter((title): title is string => Boolean(title))
+      .map(oneLine);
+    const meta = [sensitivityLabel(fact.sensitivity)];
+    if (sourceTitles.length > 0) meta.push(`出典: ${sourceTitles.join(", ")}`);
+    return `- ${oneLine(fact.factText)}  （${meta.join(" · ")}）`;
+  };
+
+  const emitted = new Set<string>();
+  for (const domain of allLifeDomains) {
+    const inDomain = facts.filter((fact) => fact.domain === domain);
+    if (inDomain.length === 0) continue;
+    lines.push(`## ${domainLabel(domain)}`, "");
+    for (const fact of inDomain) {
+      emitted.add(fact.id);
+      lines.push(renderFact(fact));
+    }
+    lines.push("");
+  }
+
+  // Facts with an unknown/legacy domain still belong to the user — surface them
+  // rather than silently dropping them.
+  const orphans = facts.filter((fact) => !emitted.has(fact.id));
+  if (orphans.length > 0) {
+    lines.push("## その他", "");
+    for (const fact of orphans) lines.push(renderFact(fact));
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd() + "\n";
+}
+
 // ── Activity Timeline (pure selector for Home disclosure ledger) ──────────────
 
 export type TimelineDisclosure = "auto" | "pending" | "confirmed" | "cancelled";

@@ -119,6 +119,7 @@ import {
   denyContextPackRequest,
   domainLabel,
   allLifeDomains,
+  exportApprovedFactsMarkdown,
   exportEncryptedBackup,
   generateLocalAnswer,
   importEncryptedBackup,
@@ -1628,6 +1629,28 @@ export function App() {
     }
   }
 
+  function exportFactsMarkdown() {
+    // Plaintext egress of approved facts only. Confirm first because the file is
+    // NOT encrypted (unlike the backup above).
+    const ok = window.confirm(
+      "承認済みファクトを暗号化されていないMarkdownファイルとして書き出します。取り込み元の原文や未承認候補は含まれません。続けますか？"
+    );
+    if (!ok) return;
+    try {
+      const markdown = exportApprovedFactsMarkdown(state);
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = "life-context-facts.md";
+      link.click();
+      URL.revokeObjectURL(href);
+      setNotice("承認済みファクトを書き出しました（このファイルは暗号化されていません）。");
+    } catch (error) {
+      setNotice(formatVaultError(error, "ファクトの書き出しに失敗しました。"));
+    }
+  }
+
   async function previewRestoreBackup() {
     try {
       const restored = isTauriRuntime()
@@ -2037,6 +2060,7 @@ export function App() {
             backupText={backupText}
             setBackupText={setBackupText}
             exportBackup={exportBackup}
+            exportFactsMarkdown={exportFactsMarkdown}
             previewRestoreBackup={previewRestoreBackup}
             restoreBackup={restoreBackup}
             restorePreview={restorePreview}
@@ -2694,6 +2718,7 @@ function SettingsView({
   backupText,
   setBackupText,
   exportBackup,
+  exportFactsMarkdown,
   previewRestoreBackup,
   restoreBackup,
   restorePreview,
@@ -2719,6 +2744,7 @@ function SettingsView({
   backupText: string;
   setBackupText: (value: string) => void;
   exportBackup: () => void;
+  exportFactsMarkdown: () => void;
   previewRestoreBackup: () => void;
   restoreBackup: () => void;
   restorePreview: RestorePreview | null;
@@ -2849,6 +2875,15 @@ function SettingsView({
           ) : (
             <p className="muted">復元前にバックアップJSONを復号し、件数と感度を確認します。確認前に現在のVaultは変更されません。</p>
           )}
+          <SectionDivider label="承認済みファクトの書き出し（平文）" />
+          <div className="trust-note attention-note">
+            <ShieldAlert size={16} aria-hidden="true" />
+            <span>承認済みファクトだけをMarkdownで書き出します（取り込み元の原文・未承認候補・送信履歴は含みません）。このファイルは暗号化されません。保管・共有に注意してください。</span>
+          </div>
+          <button className="secondary-button" onClick={exportFactsMarkdown} type="button">
+            <Download size={16} aria-hidden="true" />
+            ファクトをMarkdownで書き出す
+          </button>
         </div>
       </div>
       <div className="panel">

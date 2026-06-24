@@ -13,6 +13,7 @@ import {
   createContextPackRequest,
   createEmptyVault,
   domainLabel,
+  exportApprovedFactsMarkdown,
   exportEncryptedBackup,
   importEncryptedBackup,
   makeAiContextPackPayload,
@@ -1837,3 +1838,77 @@ function typedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 function bytesToBase64ForTest(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
+
+describe("exportApprovedFactsMarkdown", () => {
+  const now = "2026-06-12T00:00:00.000Z";
+  const mkFact = (over: Partial<VaultState["facts"][number]>): VaultState["facts"][number] => ({
+    id: "fact_x",
+    factText: "プレースホルダ",
+    domain: "identity_and_profile",
+    factType: "identity",
+    sourceIds: [],
+    sensitivity: "personal",
+    confidence: "user_asserted",
+    status: "active",
+    createdAt: now,
+    approvedAt: now,
+    updatedAt: now,
+    supersedesFactIds: [],
+    sensitivityClassified: true,
+    sensitivityConfidence: "high",
+    ...over
+  });
+
+  const nowMs = Date.parse("2026-06-12T00:00:00.000Z");
+
+  it("exports active approved facts but never secret_never_send, non-active, expired, or raw sources", () => {
+    const state = normalizeVaultState({
+      ...createEmptyVault(),
+      facts: [
+        mkFact({ id: "f1", factText: "好きな色は青", sensitivity: "personal", status: "active" }),
+        mkFact({ id: "f2", factText: "API キー sk-leak-123", sensitivity: "secret_never_send", status: "active" }),
+        mkFact({ id: "f3", factText: "古い住所", sensitivity: "personal", status: "superseded" }),
+        mkFact({
+          id: "f4",
+          factText: "期限切れの予定",
+          sensitivity: "personal",
+          status: "active",
+          validUntil: "2026-01-01T00:00:00.000Z"
+        })
+      ]
+    });
+
+    const md = exportApprovedFactsMarkdown(state, nowMs);
+
+    expect(md).toContain("好きな色は青");
+    expect(md).not.toContain("sk-leak-123"); // secret_never_send must never reach a plaintext file
+    expect(md).not.toContain("古い住所"); // non-active excluded
+    expect(md).not.toContain("期限切れの予定"); // past validUntil excluded (matches pack retrieval)
+    expect(md).toContain("暗号化されていません"); // plaintext warning present
+  });
+
+  it("surfaces unknown-domain facts under a fallback heading and flattens newlines", () => {
+    const state = normalizeVaultState({
+      ...createEmptyVault(),
+      facts: [
+        mkFact({
+          id: "f5",
+          factText: "行1\n## 偽の見出し",
+          domain: "not_a_real_domain" as VaultState["facts"][number]["domain"],
+          status: "active"
+        })
+      ]
+    });
+
+    const md = exportApprovedFactsMarkdown(state, nowMs);
+
+    expect(md).toContain("## その他"); // not silently dropped
+    expect(md).toContain("行1 ## 偽の見出し"); // newline flattened, no forged header
+    expect(md.match(/^## /gm)?.length).toBe(1); // exactly one real heading (その他)
+  });
+
+  it("returns a friendly placeholder when there is nothing to export", () => {
+    const md = exportApprovedFactsMarkdown(createEmptyVault());
+    expect(md).toContain("まだありません");
+  });
+});
