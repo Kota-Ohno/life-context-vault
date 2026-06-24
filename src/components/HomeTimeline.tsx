@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   buildActivityTimeline,
+  windowActivityTimeline,
   type TimelineEntry,
   type TimelineDay,
 } from "../vault";
@@ -338,6 +339,10 @@ const SCOPE_LABELS: Record<Scope, string> = {
   all: "すべて",
 };
 
+// How many disclosure entries to render before the "もっと見る" reveal. Keeps the
+// DOM bounded even when "すべて" spans a long history; tapping reveals another page.
+const TIMELINE_PAGE_SIZE = 30;
+
 export function HomeTimeline({
   state,
   goSources,
@@ -349,8 +354,15 @@ export function HomeTimeline({
   onRevoke,
 }: HomeTimelineProps) {
   const [scope, setScope] = useState<Scope>("week");
+  const [visible, setVisible] = useState(TIMELINE_PAGE_SIZE);
+  // Changing scope re-scopes the whole list, so start the render window over.
+  useEffect(() => setVisible(TIMELINE_PAGE_SIZE), [scope]);
+
   const days = buildActivityTimeline(state, { scope });
   const { total, pending } = summarize(days);
+  // Render only the newest `visible` entries; everything stays reachable via
+  // "もっと見る" so we never break the "すべてここに残ります" promise.
+  const window = windowActivityTimeline(days, visible);
 
   const factCount = useMemo(
     () => state.facts.filter((f) => f.status === "active").length,
@@ -404,7 +416,7 @@ export function HomeTimeline({
         />
       ) : (
         <div className="qv-tl-body">
-          {days.map((day) => (
+          {window.days.map((day) => (
             <DaySection
               key={day.dayKey}
               day={day}
@@ -413,6 +425,15 @@ export function HomeTimeline({
               onRevoke={onRevoke}
             />
           ))}
+          {window.hasMore ? (
+            <button
+              type="button"
+              className="qv-tl-more"
+              onClick={() => setVisible((v) => v + TIMELINE_PAGE_SIZE)}
+            >
+              もっと見る（残り{window.total - window.shown}件）
+            </button>
+          ) : null}
         </div>
       )}
     </div>
