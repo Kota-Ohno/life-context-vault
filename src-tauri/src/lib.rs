@@ -1322,11 +1322,7 @@ fn create_native_context_pack_request_in_connection(
       "id": new_id("ctxitem"),
       "factId": fact.id.clone(),
       "itemText": fact.fact_text.clone(),
-      "reasonIncluded": if fact.domain == task_domain {
-        "質問の領域と一致しています。"
-      } else {
-        "本人の背景情報として回答を調整できます。"
-      },
+      "reasonIncluded": context_inclusion_reason(&fact, task_domain, task_text),
       "sensitivity": fact.sensitivity.clone(),
       "sourceTitles": source_titles,
       "validFrom": fact.valid_from.clone(),
@@ -3825,10 +3821,12 @@ fn restore_fact_to_context_pack(
     return Err("Fact is outside this AI client's allowed life domains.".to_string());
   }
   let task_domain = str_field(pack, "taskDomain");
+  let task_text = str_field(pack, "taskText");
   items.push(context_pack_item_from_fact(
     connection,
     &fact,
     &task_domain,
+    &task_text,
     ceiling,
   )?);
   let excluded_items = pack
@@ -3872,17 +3870,14 @@ fn context_pack_item_from_fact(
   connection: &Connection,
   fact: &NativeFactSearchResult,
   task_domain: &str,
+  task_text: &str,
   ceiling: &str,
 ) -> Result<Value, String> {
   Ok(json!({
     "id": new_id("ctxitem"),
     "factId": fact.id,
     "itemText": fact.fact_text,
-    "reasonIncluded": if fact.domain == task_domain {
-      "質問の領域と一致しています。"
-    } else {
-      "本人の背景情報として回答を調整できます。"
-    },
+    "reasonIncluded": context_inclusion_reason(fact, task_domain, task_text),
     "sensitivity": fact.sensitivity,
     "sourceTitles": source_titles_in_connection(connection, &fact.source_ids, ceiling)?,
     "validFrom": fact.valid_from,
@@ -4107,6 +4102,35 @@ fn rank_context_facts_in_connection(
       .map(|(_, fact)| fact)
       .collect(),
   )
+}
+
+/// A short, human-readable reason a fact was included in a context pack, chosen
+/// by the dominant QUALITATIVE signal in priority order (direct token match >
+/// same domain > cross-domain bridge > stable background). Using priority order
+/// rather than the raw additive score avoids mislabeling from signals living on
+/// different numeric scales. Centralizes the wording shared by every build path.
+fn context_inclusion_reason(
+  fact: &NativeFactSearchResult,
+  task_domain: &str,
+  task_text: &str,
+) -> &'static str {
+  let haystack = format!(
+    "{} {}",
+    fact.fact_text.to_lowercase(),
+    fact.domain.to_lowercase()
+  );
+  let tokens = search_tokens(task_text);
+  if !tokens.is_empty() && tokens.iter().any(|token| haystack.contains(token.as_str())) {
+    "質問の語に直接一致する記憶です。"
+  } else if fact.domain == task_domain {
+    "質問の領域と一致しています。"
+  } else if cross_domain_bridge_score(&task_text.to_lowercase(), &fact.domain) > 0 {
+    "関連する領域からの橋渡しとして含めています。"
+  } else if is_stable_background_fact(fact) {
+    "安定した背景情報として回答を調整できます。"
+  } else {
+    "本人の背景情報として回答を調整できます。"
+  }
 }
 
 fn context_candidate_facts_in_connection(
@@ -11801,6 +11825,50 @@ mod tests {
     assert!(
       !toks.contains("tok_abc"),
       "plural keyword bypassed redaction: {toks}"
+    );
+  }
+
+  #[test]
+  fn context_inclusion_reason_prefers_strongest_signal() {
+    let make = |fact_text: &str, domain: &str, fact_type: &str| NativeFactSearchResult {
+      id: "fact_x".into(),
+      fact_text: fact_text.into(),
+      domain: domain.into(),
+      fact_type: fact_type.into(),
+      source_ids: vec![],
+      sensitivity: "personal_sensitive".into(),
+      confidence: "high".into(),
+      status: "active".into(),
+      valid_from: None,
+      valid_until: None,
+      due_date: None,
+      created_at: String::new(),
+      approved_at: String::new(),
+      updated_at: String::new(),
+      rank: 0.0,
+      sensitivity_classified: true,
+      sensitivity_confidence: "high".into(),
+    };
+
+    // Direct token match wins even when the domain differs.
+    let f = make("Passport expires in March", "documents_and_evidence", "document_ref");
+    assert_eq!(
+      context_inclusion_reason(&f, "finance_and_benefits", "renew passport"),
+      "質問の語に直接一致する記憶です。"
+    );
+
+    // Same domain when there is no token overlap.
+    let f = make("血圧の薬を朝に飲む", "health_and_care", "routine");
+    assert_eq!(
+      context_inclusion_reason(&f, "health_and_care", "週末の旅行"),
+      "質問の領域と一致しています。"
+    );
+
+    // Stable background as a fallback (no token, different domain, no bridge).
+    let f = make("名前は太郎", "identity_and_profile", "background_profile");
+    assert_eq!(
+      context_inclusion_reason(&f, "finance_and_benefits", "zzz"),
+      "安定した背景情報として回答を調整できます。"
     );
   }
 

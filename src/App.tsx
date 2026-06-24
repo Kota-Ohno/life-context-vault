@@ -118,6 +118,7 @@ import {
   createEmptyVault,
   denyContextPackRequest,
   domainLabel,
+  allLifeDomains,
   exportEncryptedBackup,
   generateLocalAnswer,
   importEncryptedBackup,
@@ -314,22 +315,9 @@ type ManualCopyPayload = {
   createdAt: string;
 };
 
-const domainOptions: Array<LifeContextDomain | "all"> = [
-  "all",
-  "identity_and_profile",
-  "values_goals_and_preferences",
-  "life_events_and_plans",
-  "routines_and_logistics",
-  "home_and_places",
-  "documents_and_evidence",
-  "contracts_and_policies",
-  "procedures_and_obligations",
-  "health_and_care",
-  "finance_and_benefits",
-  "work_and_education",
-  "relationships_and_household",
-  "constraints_and_accessibility"
-];
+// Derived from the single source of truth (domainLabels in vault.ts) so the
+// filter/allowlist UI can never drift from the LifeContextDomain type.
+const domainOptions: Array<LifeContextDomain | "all"> = ["all", ...allLifeDomains];
 
 const policyDomainOptions = domainOptions.filter(
   (domain): domain is LifeContextDomain => domain !== "all"
@@ -386,7 +374,7 @@ export function App() {
   const [manualBody, setManualBody] = useState("");
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [question, setQuestion] = useState("");
-  const [requestClientId, setRequestClientId] = useState("conn_chatgpt");
+  const [requestClientId, setRequestClientId] = useState("");
   const [activePackId, setActivePackId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [manualCopyPayload, setManualCopyPayload] = useState<ManualCopyPayload | null>(null);
@@ -419,6 +407,40 @@ export function App() {
     useState<ClaudeDesktopConfigInstallResult | null>(null);
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
+  // Always-current view of `state`. setState is async, so a synchronous batch
+  // loop (multi-file upload, batch approve) in the localStorage-fallback path
+  // would otherwise recompute every iteration from the same stale render-time
+  // closure and overwrite all but the last. Writers update this ref synchronously
+  // so the next iteration folds onto the latest state; an effect keeps it in sync
+  // for any other setState path.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  // Commit a native core result: sync the revision ref + state in one place so a
+  // handler can't forget to advance nativeRevisionRef (which would reintroduce
+  // stale-revision save conflicts).
+  function commitNativeResult(result: { updatedAt: string | null; state: VaultState }) {
+    nativeRevisionRef.current = result.updatedAt;
+    stateRef.current = result.state;
+    setNativeRevision(result.updatedAt);
+    setState(result.state);
+  }
+
+  // Keep the AI-request target pointed at a real, eligible connection. Default
+  // to the first connector that can receive a context-pack request (preferring
+  // a connected one) instead of a hardcoded id that may not exist; self-heal if
+  // the selected connection disappears.
+  useEffect(() => {
+    const eligible = state.connectorSessions.filter((session) =>
+      session.scopes.includes("context_pack.request")
+    );
+    if (eligible.length === 0) return;
+    if (!eligible.some((session) => session.id === requestClientId)) {
+      const preferred = eligible.find((session) => session.status === "connected") ?? eligible[0];
+      setRequestClientId(preferred.id);
+    }
+  }, [state.connectorSessions, requestClientId]);
   // Set when the encrypted native vault FAILS to load (corrupt DB / wrong key /
   // decrypt error). While true, the auto-save effect must NOT write in-memory
   // state to the native vault — that would overwrite recoverable data with the
@@ -593,6 +615,12 @@ export function App() {
     let cancelled = false;
 
     async function syncNativeExternalChanges() {
+      // While the native vault failed to load, the auto-save effect is blocked to
+      // protect recoverable data. Suspend external sync too: otherwise a later
+      // successful snapshot read would blindly setState over in-memory edits (no
+      // merge), discarding exactly the data the guard exists to protect — and
+      // contradict the "saves are stopped" banner.
+      if (nativeLoadFailedRef.current) return;
       try {
         const snapshot = await loadNativeVaultSnapshot();
         if (
@@ -604,9 +632,7 @@ export function App() {
           return;
         }
 
-        nativeRevisionRef.current = snapshot.updatedAt;
-        setNativeRevision(snapshot.updatedAt);
-        setState(snapshot.state);
+        commitNativeResult({ updatedAt: snapshot.updatedAt, state: snapshot.state });
 
         const pendingRequest = snapshot.state.contextPackRequests.find((request) => requestNeedsUserAction(request));
         if (pendingRequest) {
@@ -747,6 +773,7 @@ export function App() {
   const sourceLabel = sourceLabelForCapabilities(ocrExtractionAvailable, legacyOfficeConversionAvailable);
 
   function apply(next: VaultState, message?: string) {
+    stateRef.current = next;
     setState(next);
     if (message) setNotice(message);
   }
@@ -779,7 +806,19 @@ export function App() {
     setManualBody("");
   }
 
-  async function handleFileUpload(file: File) {
+  async function handleFileUpload(
+    file: File,
+    options?: { navigateOnSuccess?: boolean; surfaceFeedback?: boolean }
+  ): Promise<boolean> {
+    // navigateOnSuccess/surfaceFeedback default true so a single upload behaves as
+    // before; the batch orchestrator (handleFilesUpload) passes false and handles
+    // navigation + a combined summary once after the whole batch.
+    const navigate = options?.navigateOnSuccess !== false;
+    const surface = options?.surfaceFeedback !== false;
+    const fail = (feedback: UploadFeedback): boolean => {
+      if (surface) setUploadFeedback(feedback);
+      return false;
+    };
     const support = describeSourceFile(
       file,
       Boolean(nativePath),
@@ -803,21 +842,18 @@ export function App() {
             title: file.name
           });
           if (added) {
-            nativeRevisionRef.current = added.updatedAt;
-            setNativeRevision(added.updatedAt);
-            setState(added.state);
+            commitNativeResult(added);
             setNotice(
               `${file.name} を保留中取り込み元として保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
             );
-            setView("sources");
-            return;
+            if (navigate) setView("sources");
+            return true;
           }
         } catch (error) {
           setNotice(formatVaultError(error, "保留中の取り込み元の保存に失敗しました。"));
         }
       }
-      setUploadFeedback(unsupportedFileFeedback(file, support.reason));
-      return;
+      return fail(unsupportedFileFeedback(file, support.reason));
     }
 
     let text = "";
@@ -826,21 +862,19 @@ export function App() {
       try {
         text = await file.text();
       } catch {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "ファイルを読めませんでした",
           body: "ローカルで本文を開けませんでした。内容をテキストとしてコピーできる場合は、「会話・メモから追加」に貼り付けてください。"
         });
-        return;
       }
 
       if (!looksLikeReadableText(text)) {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "テキストとして読めませんでした",
           body: "このファイルはテキスト形式として指定されていますが、本文が読めませんでした。誤った記憶を作らないため取り込めませんでした。"
         });
-        return;
       }
     } else {
       try {
@@ -856,13 +890,12 @@ export function App() {
           legacyOfficeTimeoutSeconds: runtimeLegacyOfficeAvailable ? configuredLegacyOfficeTimeoutSeconds : null
         });
         if (!extracted) {
-          setUploadFeedback(unsupportedFileFeedback(file, "native_required"));
-          return;
+          return fail(unsupportedFileFeedback(file, "native_required"));
         }
         text = extracted.text;
         extractionDetail = ` ${documentExtractionLabel(extracted.detectedKind)}としてローカル抽出しました。${extracted.warnings.join(" ")}`;
       } catch (error) {
-        setUploadFeedback({
+        return fail({
           tone: "attention",
           title: "文書を抽出できませんでした",
           body:
@@ -870,7 +903,6 @@ export function App() {
               ? error.message
               : "ローカル抽出で本文を取り出せませんでした。内容をテキスト化できる場合は「会話・メモから追加」に貼り付けてください。"
         });
-        return;
       }
     }
 
@@ -881,19 +913,52 @@ export function App() {
         title: file.name,
         body: text
       },
-      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`
+      `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`,
+      navigate
     );
     if (addStatus === "unavailable") {
-      const next = addSourceWithCandidates(state, {
+      // Read the freshest state (not the render-time closure) so a sequential
+      // multi-file upload folds each file onto the previous result.
+      const next = addSourceWithCandidates(stateRef.current, {
         kind: "document",
         origin: "user_upload",
         title: file.name,
         body: text
       });
       apply(next, `${file.name} を取り込み元として保存し、取り込みに記憶を追加しました。${extractionDetail}`);
-      setView("sources");
+      if (navigate) setView("sources");
+      return true;
     }
-    if (addStatus !== "failed") setUploadFeedback(null);
+    if (addStatus === "saved" && surface) setUploadFeedback(null);
+    return addStatus === "saved";
+  }
+
+  // Batch orchestrator for multi-file upload: process files sequentially WITHOUT
+  // per-file navigation (which would unmount IngestView mid-batch), clear prior
+  // feedback once, and surface a single outcome at the end — a combined notice
+  // for a real batch, or the detailed per-file feedback for a single file.
+  async function handleFilesUpload(files: File[]) {
+    if (files.length === 0) return;
+    const single = files.length === 1;
+    setUploadFeedback(null);
+    let saved = 0;
+    const failures: string[] = [];
+    for (const file of files) {
+      const ok = await handleFileUpload(file, {
+        navigateOnSuccess: false,
+        surfaceFeedback: single
+      });
+      if (ok) saved += 1;
+      else failures.push(file.name);
+    }
+    if (saved > 0) setView("sources");
+    if (!single) {
+      setNotice(
+        failures.length > 0
+          ? `${saved}件のファイルを取り込みました。${failures.length}件は取り込めませんでした（${failures.join("、")}）。`
+          : `${saved}件のファイルを取り込みました。`
+      );
+    }
   }
 
   async function addSourceThroughCore(
@@ -903,19 +968,18 @@ export function App() {
       title: string;
       body: string;
     },
-    message: string
+    message: string,
+    navigate = true
   ): Promise<"saved" | "unavailable" | "failed"> {
     if (!nativePath) return "unavailable";
     try {
       const added = await addNativeSourceWithCandidates(input);
       if (!added) return "unavailable";
-      nativeRevisionRef.current = added.updatedAt;
-      setNativeRevision(added.updatedAt);
-      setState(added.state);
+      commitNativeResult(added);
       setNotice(
         `${message} ${added.candidateIds.length}件の記憶が作成されました。承認されるまでAIには使われません。`
       );
-      setView("sources");
+      if (navigate) setView("sources");
       return "saved";
     } catch (error) {
       setNotice(formatVaultError(error, "Vault Coreで取り込み元を保存できませんでした。"));
@@ -933,9 +997,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceLifecycle({ sourceId, action });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceLifecycleNotice(updated.action, updated.affectedFactCount, updated.invalidatedPackCount));
           return;
         }
@@ -1026,9 +1088,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceMetadata(sourceId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceMetadataNotice(updated.invalidatedPackCount));
           return true;
         }
@@ -1062,9 +1122,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceBody(sourceId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceBodyNotice(
             updated.candidateIds.length,
             updated.affectedFactCount,
@@ -1097,9 +1155,7 @@ export function App() {
       try {
         const updated = await updateNativeFactLifecycle({ factId, action });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(factLifecycleNotice(updated.action, updated.invalidatedPackCount));
           return;
         }
@@ -1132,9 +1188,7 @@ export function App() {
       try {
         const updated = await updateNativeFactMetadata(factId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(factMetadataNotice(updated.invalidatedPackCount));
           return true;
         }
@@ -1150,7 +1204,7 @@ export function App() {
     return true;
   }
 
-  async function approve(candidate: MemoryCandidate) {
+  async function approve(candidate: MemoryCandidate): Promise<boolean> {
     const edited = candidateEdits[candidate.id];
     const supersedeFactIds = candidateSupersedes[candidate.id] ?? [];
     if (nativePath) {
@@ -1161,9 +1215,7 @@ export function App() {
           supersedeFactIds
         });
         if (reviewed) {
-          nativeRevisionRef.current = reviewed.updatedAt;
-          setNativeRevision(reviewed.updatedAt);
-          setState(reviewed.state);
+          commitNativeResult(reviewed);
           setCandidateEdits((current) => {
             const next = { ...current };
             delete next[candidate.id];
@@ -1175,37 +1227,44 @@ export function App() {
             return next;
           });
           setNotice(candidateApprovalNotice(reviewed.supersededFactIds.length, reviewed.invalidatedPackCount));
-          return;
+          return true;
         }
+        return false;
       } catch (error) {
         setNotice(formatVaultError(error, "Vault Coreで候補を承認できませんでした。"));
-        return;
+        return false;
       }
     }
-    if (candidate.sourceIds.some((sourceId) => state.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
+    // Fallback path: read the freshest state (not the render-time closure) so a
+    // batch approve folds each candidate onto the previous result.
+    const base = stateRef.current;
+    if (candidate.sourceIds.some((sourceId) => base.sources.find((source) => source.id === sourceId)?.deletionState !== "active")) {
       setNotice("削除または消去された取り込み元由来の記憶は承認できません。取り込み元を復元するか、新しい取り込み元として追加してください。");
-      return;
+      return false;
     }
-    const invalidatedPackCount = packsForFacts(state, supersedeFactIds).length;
-    const next = approveCandidate(state, candidate.id, { editedText: edited, supersedeFactIds });
+    const invalidatedPackCount = packsForFacts(base, supersedeFactIds).length;
+    const next = approveCandidate(base, candidate.id, { editedText: edited, supersedeFactIds });
     setCandidateSupersedes((current) => {
       const nextSelections = { ...current };
       delete nextSelections[candidate.id];
       return nextSelections;
     });
     apply(next, candidateApprovalNotice(supersedeFactIds.length, invalidatedPackCount));
+    return true;
   }
 
   async function approveBatch(candidates: MemoryCandidate[]) {
     // Route each candidate through the existing per-item approve path, one at a time.
     // This preserves per-candidate classification, audit, supersession, and the
     // secret_never_send hard-reject gate in approveCandidate / approveNativeCandidate.
+    // Count by approve()'s actual outcome (it returns false on a swallowed failure)
+    // so the summary can't overstate how many became facts.
     let approved = 0;
     let skipped = 0;
     for (const candidate of candidates) {
       try {
-        await approve(candidate);
-        approved++;
+        if (await approve(candidate)) approved++;
+        else skipped++;
       } catch {
         skipped++;
       }
@@ -1229,9 +1288,7 @@ export function App() {
           status
         });
         if (reviewed) {
-          nativeRevisionRef.current = reviewed.updatedAt;
-          setNativeRevision(reviewed.updatedAt);
-          setState(reviewed.state);
+          commitNativeResult(reviewed);
           setNotice(message);
           return;
         }
@@ -1259,9 +1316,7 @@ export function App() {
           approvalMode: "explicit_sensitive"
         });
         if (built) {
-          nativeRevisionRef.current = built.updatedAt;
-          setNativeRevision(built.updatedAt);
-          setState(built.state);
+          commitNativeResult(built);
           setNotice("Vault CoreでAI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
@@ -1312,9 +1367,7 @@ export function App() {
           included
         });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
           setNotice(verb);
@@ -1344,9 +1397,7 @@ export function App() {
       try {
         const updated = await confirmNativeContextPack(pack.id);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
           setNotice("AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
@@ -1386,9 +1437,7 @@ export function App() {
         try {
           const updated = await confirmNativeContextPack(pack.id);
           if (updated) {
-            nativeRevisionRef.current = updated.updatedAt;
-            setNativeRevision(updated.updatedAt);
-            setState(updated.state);
+            commitNativeResult(updated);
             setActivePackId(updated.packId ?? pack.id);
             if (updated.requestId) setActiveRequestId(updated.requestId);
             payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
@@ -1479,9 +1528,7 @@ export function App() {
       try {
         const updated = await denyNativeContextPackRequest(activeRequestId);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId);
           setActiveRequestId(updated.requestId ?? activeRequestId);
           setNotice("このAI要求を拒否しました。");
@@ -1513,9 +1560,7 @@ export function App() {
           ...settings
         });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice("AI接続ポリシーをVault Coreで保存しました。");
           return;
         }
@@ -1532,9 +1577,7 @@ export function App() {
       try {
         const updated = await setNativeConnectionStandingDelivery({ clientId, enabled });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(enabled ? "自動配信を有効にしました。" : "自動配信を無効にしました。");
           return;
         }
@@ -1864,7 +1907,7 @@ export function App() {
             setManualTitle={setManualTitle}
             setManualBody={setManualBody}
             addManualSource={addManualSource}
-            handleFileUpload={handleFileUpload}
+            handleFilesUpload={handleFilesUpload}
             ocrExtractionAvailable={ocrExtractionAvailable}
             ocrProviderLabel={ocrProviderLabel}
             legacyOfficeConversionAvailable={legacyOfficeConversionAvailable}
@@ -3526,7 +3569,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "未承認で止める",
-      value: `${reviewCandidateCount} candidates`,
+      value: `${reviewCandidateCount} 件の候補`,
       detail:
         reviewCandidateCount > 0
           ? "取り込みで保存するまで、記憶はAIの確定文脈に使いません。"
@@ -3535,7 +3578,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "確認/返却待ち",
-      value: `${actionableRequestCount} requests`,
+      value: `${actionableRequestCount} 件の要求`,
       detail:
         actionableRequestCount > 0
           ? "承認、返却、またはコピー操作までは記憶の内容を外部AIへ返しません。"
@@ -3544,7 +3587,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "AIへ返せる記憶",
-      value: `${deliverablePackCount} ready`,
+      value: `${deliverablePackCount} 件`,
       detail:
         expiredPackCount > 0
           ? `${expiredPackCount}件の期限切れの記憶はAIへ返せません。`
@@ -3599,7 +3642,7 @@ export function contextPackBoundaryReceipt(
     {
       label: "AIに渡らない",
       tone: pack.excludedItems.length > 0 ? "attention" : "ready",
-      value: `${pack.excludedItems.length} exclusions`,
+      value: `${pack.excludedItems.length}件を除外`,
       detail: exclusionDetail
     },
     {
