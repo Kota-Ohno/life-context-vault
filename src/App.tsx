@@ -375,6 +375,9 @@ export function App() {
   const [showGallery, setShowGallery] = useState(SHOW_QV_GALLERY);
   const [state, setState] = useState<VaultState>(() => loadVault());
   const [storageReady, setStorageReady] = useState(false);
+  // True when the encrypted native vault failed to load — drives a persistent
+  // warning banner and (via nativeLoadFailedRef) blocks auto-save overwrite.
+  const [nativeLoadFailed, setNativeLoadFailed] = useState(false);
   const [nativePath, setNativePath] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
@@ -416,6 +419,11 @@ export function App() {
     useState<ClaudeDesktopConfigInstallResult | null>(null);
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
+  // Set when the encrypted native vault FAILS to load (corrupt DB / wrong key /
+  // decrypt error). While true, the auto-save effect must NOT write in-memory
+  // state to the native vault — that would overwrite recoverable data with the
+  // empty default state. Ref (not just state) so the save effect reads it live.
+  const nativeLoadFailedRef = useRef(false);
   const autoStartAttemptedRef = useRef(false);
   const nativePrefsSyncedRef = useRef(false);
 
@@ -450,33 +458,43 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     async function hydrateNativeStorage() {
+      // CRITICAL path: load the encrypted vault on its own. A real failure here
+      // (corrupt DB / wrong key / decrypt error) must NOT silently degrade to an
+      // empty vault that then gets auto-saved over the recoverable data. In
+      // browser preview loadNativeVaultSnapshot() resolves to null (no throw), so
+      // this catch only fires on a genuine native load failure.
       try {
-        const [
-          nativeSnapshot,
-          path,
-          configTemplate,
-          extractionCapabilities,
-          detectedOcrProviders,
-          detectedLegacyOfficeProviders
-        ] = await Promise.all([
-          loadNativeVaultSnapshot(),
-          getNativeVaultPath(),
-          getClaudeDesktopConfigTemplate(),
-          getNativeDocumentExtractionCapabilities().catch(() => null),
-          detectNativeOcrProviderCandidates().catch(() => []),
-          detectNativeLegacyOfficeProviderCandidates().catch(() => [])
-        ]);
+        const nativeSnapshot = await loadNativeVaultSnapshot();
         if (cancelled) return;
         if (nativeSnapshot?.state) setState(nativeSnapshot.state);
         nativeRevisionRef.current = nativeSnapshot?.updatedAt ?? null;
         setNativeRevision(nativeSnapshot?.updatedAt ?? null);
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Native vault load failed", error);
+        nativeLoadFailedRef.current = true;
+        setNativeLoadFailed(true);
+        setNotice(
+          "暗号化Vaultを読み込めませんでした。データを上書きしないよう自動保存を停止しています。設定からバックアップの復元をお試しください。"
+        );
+      }
+      // Ancillary native data — non-critical. Each failure is isolated and never
+      // blocks saves or signals data loss.
+      try {
+        const [path, configTemplate, extractionCapabilities, detectedOcrProviders, detectedLegacyOfficeProviders] =
+          await Promise.all([
+            getNativeVaultPath().catch(() => null),
+            getClaudeDesktopConfigTemplate().catch(() => null),
+            getNativeDocumentExtractionCapabilities().catch(() => null),
+            detectNativeOcrProviderCandidates().catch(() => []),
+            detectNativeLegacyOfficeProviderCandidates().catch(() => [])
+          ]);
+        if (cancelled) return;
         setNativePath(path);
         setDocumentExtractionCapabilities(extractionCapabilities);
         setOcrProviderCandidates(detectedOcrProviders);
         setLegacyOfficeProviderCandidates(detectedLegacyOfficeProviders);
         if (configTemplate) setClaudeConfig(configTemplate);
-      } catch (error) {
-        console.warn("Native storage unavailable", error);
       } finally {
         if (!cancelled) setStorageReady(true);
       }
@@ -516,6 +534,13 @@ export function App() {
 
   useEffect(() => {
     if (!storageReady) return;
+    // If the native vault failed to load, persist only to the local fallback and
+    // never call saveNativeVault — writing in-memory (empty/default) state to the
+    // native vault would overwrite the recoverable encrypted data.
+    if (nativeLoadFailedRef.current) {
+      saveVault(state);
+      return;
+    }
     let cancelled = false;
     saveVault(state);
     const expectedUpdatedAt = nativeRevisionRef.current;
@@ -1743,6 +1768,17 @@ export function App() {
       />
 
       <main className="workspace">
+        {nativeLoadFailed && (
+          <div className="vault-load-warning" role="alert">
+            <ShieldAlert size={16} aria-hidden="true" />
+            <span>
+              暗号化Vaultを読み込めませんでした。データ保護のため自動保存を停止しています。設定からバックアップの復元をお試しください。
+            </span>
+            <button className="secondary-button" onClick={() => setView("settings")} type="button">
+              設定を開く
+            </button>
+          </div>
+        )}
         <header className="topbar">
           {!VIEWS_WITH_OWN_HEADER.has(view) && (
             <div>

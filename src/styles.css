@@ -238,6 +238,24 @@ button {
   color: var(--ink);
 }
 
+/* Persistent data-loss alert when the encrypted native vault fails to load. */
+.vault-load-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--tone-blocked);
+  border-radius: 8px;
+  background: var(--tone-blocked-soft);
+  color: var(--ink);
+}
+.vault-load-warning span {
+  flex: 1;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 .trust-note {
   display: grid;
   grid-template-columns: 18px 1fr;
