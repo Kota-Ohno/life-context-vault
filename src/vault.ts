@@ -67,7 +67,7 @@ const domainLabels: Record<LifeContextDomain, string> = {
   constraints_and_accessibility: "制約・配慮"
 };
 
-const allLifeDomains = Object.keys(domainLabels) as LifeContextDomain[];
+export const allLifeDomains = Object.keys(domainLabels) as LifeContextDomain[];
 const cautiousLifeDomains = allLifeDomains.filter(
   (domain) =>
     ![

@@ -118,6 +118,7 @@ import {
   createEmptyVault,
   denyContextPackRequest,
   domainLabel,
+  allLifeDomains,
   exportEncryptedBackup,
   generateLocalAnswer,
   importEncryptedBackup,
@@ -314,22 +315,9 @@ type ManualCopyPayload = {
   createdAt: string;
 };
 
-const domainOptions: Array<LifeContextDomain | "all"> = [
-  "all",
-  "identity_and_profile",
-  "values_goals_and_preferences",
-  "life_events_and_plans",
-  "routines_and_logistics",
-  "home_and_places",
-  "documents_and_evidence",
-  "contracts_and_policies",
-  "procedures_and_obligations",
-  "health_and_care",
-  "finance_and_benefits",
-  "work_and_education",
-  "relationships_and_household",
-  "constraints_and_accessibility"
-];
+// Derived from the single source of truth (domainLabels in vault.ts) so the
+// filter/allowlist UI can never drift from the LifeContextDomain type.
+const domainOptions: Array<LifeContextDomain | "all"> = ["all", ...allLifeDomains];
 
 const policyDomainOptions = domainOptions.filter(
   (domain): domain is LifeContextDomain => domain !== "all"
@@ -386,7 +374,7 @@ export function App() {
   const [manualBody, setManualBody] = useState("");
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [question, setQuestion] = useState("");
-  const [requestClientId, setRequestClientId] = useState("conn_chatgpt");
+  const [requestClientId, setRequestClientId] = useState("");
   const [activePackId, setActivePackId] = useState<string | null>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [manualCopyPayload, setManualCopyPayload] = useState<ManualCopyPayload | null>(null);
@@ -419,6 +407,29 @@ export function App() {
     useState<ClaudeDesktopConfigInstallResult | null>(null);
   const [claudeConfig, setClaudeConfig] = useState(() => makeClaudeDesktopConfig(null));
   const nativeRevisionRef = useRef<string | null>(null);
+  // Commit a native core result: sync the revision ref + state in one place so a
+  // handler can't forget to advance nativeRevisionRef (which would reintroduce
+  // stale-revision save conflicts).
+  function commitNativeResult(result: { updatedAt: string | null; state: VaultState }) {
+    nativeRevisionRef.current = result.updatedAt;
+    setNativeRevision(result.updatedAt);
+    setState(result.state);
+  }
+
+  // Keep the AI-request target pointed at a real, eligible connection. Default
+  // to the first connector that can receive a context-pack request (preferring
+  // a connected one) instead of a hardcoded id that may not exist; self-heal if
+  // the selected connection disappears.
+  useEffect(() => {
+    const eligible = state.connectorSessions.filter((session) =>
+      session.scopes.includes("context_pack.request")
+    );
+    if (eligible.length === 0) return;
+    if (!eligible.some((session) => session.id === requestClientId)) {
+      const preferred = eligible.find((session) => session.status === "connected") ?? eligible[0];
+      setRequestClientId(preferred.id);
+    }
+  }, [state.connectorSessions, requestClientId]);
   // Set when the encrypted native vault FAILS to load (corrupt DB / wrong key /
   // decrypt error). While true, the auto-save effect must NOT write in-memory
   // state to the native vault — that would overwrite recoverable data with the
@@ -604,9 +615,7 @@ export function App() {
           return;
         }
 
-        nativeRevisionRef.current = snapshot.updatedAt;
-        setNativeRevision(snapshot.updatedAt);
-        setState(snapshot.state);
+        commitNativeResult({ updatedAt: snapshot.updatedAt, state: snapshot.state });
 
         const pendingRequest = snapshot.state.contextPackRequests.find((request) => requestNeedsUserAction(request));
         if (pendingRequest) {
@@ -803,9 +812,7 @@ export function App() {
             title: file.name
           });
           if (added) {
-            nativeRevisionRef.current = added.updatedAt;
-            setNativeRevision(added.updatedAt);
-            setState(added.state);
+            commitNativeResult(added);
             setNotice(
               `${file.name} を保留中取り込み元として保存しました（抽出ランタイム未設定）。Settings で OCR / Office 変換を設定すると再処理できます。`
             );
@@ -909,9 +916,7 @@ export function App() {
     try {
       const added = await addNativeSourceWithCandidates(input);
       if (!added) return "unavailable";
-      nativeRevisionRef.current = added.updatedAt;
-      setNativeRevision(added.updatedAt);
-      setState(added.state);
+      commitNativeResult(added);
       setNotice(
         `${message} ${added.candidateIds.length}件の記憶が作成されました。承認されるまでAIには使われません。`
       );
@@ -933,9 +938,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceLifecycle({ sourceId, action });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceLifecycleNotice(updated.action, updated.affectedFactCount, updated.invalidatedPackCount));
           return;
         }
@@ -1026,9 +1029,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceMetadata(sourceId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceMetadataNotice(updated.invalidatedPackCount));
           return true;
         }
@@ -1062,9 +1063,7 @@ export function App() {
       try {
         const updated = await updateNativeSourceBody(sourceId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(sourceBodyNotice(
             updated.candidateIds.length,
             updated.affectedFactCount,
@@ -1097,9 +1096,7 @@ export function App() {
       try {
         const updated = await updateNativeFactLifecycle({ factId, action });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(factLifecycleNotice(updated.action, updated.invalidatedPackCount));
           return;
         }
@@ -1132,9 +1129,7 @@ export function App() {
       try {
         const updated = await updateNativeFactMetadata(factId, input);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(factMetadataNotice(updated.invalidatedPackCount));
           return true;
         }
@@ -1161,9 +1156,7 @@ export function App() {
           supersedeFactIds
         });
         if (reviewed) {
-          nativeRevisionRef.current = reviewed.updatedAt;
-          setNativeRevision(reviewed.updatedAt);
-          setState(reviewed.state);
+          commitNativeResult(reviewed);
           setCandidateEdits((current) => {
             const next = { ...current };
             delete next[candidate.id];
@@ -1229,9 +1222,7 @@ export function App() {
           status
         });
         if (reviewed) {
-          nativeRevisionRef.current = reviewed.updatedAt;
-          setNativeRevision(reviewed.updatedAt);
-          setState(reviewed.state);
+          commitNativeResult(reviewed);
           setNotice(message);
           return;
         }
@@ -1259,9 +1250,7 @@ export function App() {
           approvalMode: "explicit_sensitive"
         });
         if (built) {
-          nativeRevisionRef.current = built.updatedAt;
-          setNativeRevision(built.updatedAt);
-          setState(built.state);
+          commitNativeResult(built);
           setNotice("Vault CoreでAI要求を受け取り、短命のAIに渡す内容（記憶）を生成しました。");
           setActiveRequestId(built.requestId);
           setActivePackId(built.packId);
@@ -1312,9 +1301,7 @@ export function App() {
           included
         });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
           setNotice(verb);
@@ -1344,9 +1331,7 @@ export function App() {
       try {
         const updated = await confirmNativeContextPack(pack.id);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId ?? pack.id);
           if (updated.requestId) setActiveRequestId(updated.requestId);
           setNotice("AIに渡す内容（記憶）を承認しました。Claude Desktop等のMCPクライアントは get_request_status で取得できます。");
@@ -1386,9 +1371,7 @@ export function App() {
         try {
           const updated = await confirmNativeContextPack(pack.id);
           if (updated) {
-            nativeRevisionRef.current = updated.updatedAt;
-            setNativeRevision(updated.updatedAt);
-            setState(updated.state);
+            commitNativeResult(updated);
             setActivePackId(updated.packId ?? pack.id);
             if (updated.requestId) setActiveRequestId(updated.requestId);
             payloadPack = updated.state.contextPacks.find((item) => item.id === pack.id) ?? payloadPack;
@@ -1479,9 +1462,7 @@ export function App() {
       try {
         const updated = await denyNativeContextPackRequest(activeRequestId);
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setActivePackId(updated.packId);
           setActiveRequestId(updated.requestId ?? activeRequestId);
           setNotice("このAI要求を拒否しました。");
@@ -1513,9 +1494,7 @@ export function App() {
           ...settings
         });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice("AI接続ポリシーをVault Coreで保存しました。");
           return;
         }
@@ -1532,9 +1511,7 @@ export function App() {
       try {
         const updated = await setNativeConnectionStandingDelivery({ clientId, enabled });
         if (updated) {
-          nativeRevisionRef.current = updated.updatedAt;
-          setNativeRevision(updated.updatedAt);
-          setState(updated.state);
+          commitNativeResult(updated);
           setNotice(enabled ? "自動配信を有効にしました。" : "自動配信を無効にしました。");
           return;
         }
