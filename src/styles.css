@@ -3737,7 +3737,7 @@ button:focus-visible {
 .qv-ingest__empty-actions {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
   margin-top: var(--space-2);
 }
