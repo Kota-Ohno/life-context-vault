@@ -2072,6 +2072,19 @@ function ContextRequestsView({
           fact: facts.find((fact) => fact.id === item.referencedId)
         }))
     : [];
+  // Policy/lifecycle-driven exclusions (everything except the user-hidden set,
+  // which has its own "restore" section). The full local pack carries the
+  // referencedId for every excluded item, so the data owner can see WHICH of
+  // their facts were withheld and WHY — and how to remediate. This stays on the
+  // trusted local UI; the AI payload narrows excludedItems to {reason} only.
+  const policyExcludedFacts = currentPack
+    ? currentPack.excludedItems
+        .filter((item) => item.reason !== "user_hidden")
+        .map((item) => ({
+          exclusion: item,
+          fact: facts.find((fact) => fact.id === item.referencedId)
+        }))
+    : [];
   const activeManualCopyPayload = manualCopyPayloadForPack(manualCopyPayload, currentPack);
   const pendingReviewRequests = requests.filter(
     (request) => effectiveRequestStatus(request, nowMs) === "pending_user_confirmation"
@@ -2377,11 +2390,27 @@ function ContextRequestsView({
             {currentPack.excludedItems.length > 0 && (
               <div className="exclusion-list">
                 <strong>{currentPack.excludedItems.length}件は送信対象から除外</strong>
-                {currentPack.excludedItems.slice(0, 4).map((item) => (
-                  <span key={`${item.referencedId}-${item.reason}`}>
-                    {exclusionReasonLabel(item.reason)}
-                  </span>
-                ))}
+                {policyExcludedFacts.length > 0 && (
+                  <div className="excluded-context-items">
+                    {policyExcludedFacts.map(({ exclusion, fact }) => {
+                      const hint = exclusionRemediationHint(exclusion.reason);
+                      return (
+                        <div
+                          className="excluded-context-item excluded-context-item--reason"
+                          key={`${exclusion.referencedId}-${exclusion.reason}`}
+                        >
+                          <div className="excluded-context-item__body">
+                            {fact?.factText && <span>{fact.factText}</span>}
+                            <span className="excluded-reason-tag">
+                              {exclusionReasonLabel(exclusion.reason)}
+                            </span>
+                          </div>
+                          {hint && <small className="excluded-reason-hint">{hint}</small>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
             {hiddenExcludedFacts.length > 0 && (
@@ -3760,6 +3789,35 @@ function exclusionReasonLabel(reason: ContextPack["excludedItems"][number]["reas
     secret_never_send: "非公開"
   };
   return labels[reason];
+}
+
+/**
+ * A short, boundary-respecting hint telling the data owner how an excluded fact
+ * could be made deliverable. Deliberately points to the policy/source settings
+ * rather than offering a one-click loosen-the-policy shortcut — relaxing the
+ * boundary should stay an intentional act. Returns null when there is no safe
+ * remediation (e.g. secret_never_send is non-deliverable by design).
+ */
+function exclusionRemediationHint(
+  reason: ContextPack["excludedItems"][number]["reason"]
+): string | null {
+  switch (reason) {
+    case "sensitivity_policy":
+      return "このAIの感度上限を上げると渡せるようになります（接続のポリシー設定）。";
+    case "domain_policy":
+      return "この領域を許可リストに追加すると渡せるようになります（接続のポリシー設定）。";
+    case "provider_policy":
+      return "AI接続ポリシーを見直すと渡せる場合があります（接続のポリシー設定）。";
+    case "expired":
+      return "Factの有効期限が切れています。検索から内容を更新できます。";
+    case "secret_never_send":
+      return "設計上、AIには送信できません。";
+    case "deleted":
+    case "not_relevant":
+    case "user_hidden":
+    default:
+      return null;
+  }
 }
 
 function sourceLifecycleLabel(state: VaultState["sources"][number]["deletionState"]): string {
