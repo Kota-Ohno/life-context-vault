@@ -4089,24 +4089,6 @@ function maxVaultSensitivity(state: VaultState): SensitivityTier | null {
   );
 }
 
-function isLocalhostUrl(value: string): boolean {
-  try {
-    const hostname = new URL(value).hostname;
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  } catch {
-    return value.includes("localhost") || value.includes("127.0.0.1");
-  }
-}
-
-function isPublicHttpsUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !isLocalhostUrl(value);
-  } catch {
-    return false;
-  }
-}
-
 function passiveCaptureSourceId(event: PassiveCaptureEvent): string | null {
   if (event.sourceId) return event.sourceId;
   const [sourceId] = event.textFragmentRef.split(":");
