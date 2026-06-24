@@ -84,7 +84,7 @@ export function Rail({
         />
         <RailSecondary
           icon={<Search size={14} />}
-          label="検索"
+          label="記憶"
           active={view === "search"}
           badge={reviewFactCount || undefined}
           onClick={() => setView("search")}

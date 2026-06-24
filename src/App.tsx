@@ -119,6 +119,7 @@ import {
   denyContextPackRequest,
   domainLabel,
   allLifeDomains,
+  factsByDomain,
   exportApprovedFactsMarkdown,
   exportEncryptedBackup,
   generateLocalAnswer,
@@ -2650,17 +2651,40 @@ function SearchView({
         <Badge>{results.length}件</Badge>
       </div>
       <div className="domain-list">
-        {results.map((fact) => (
-          <FactRow
-            fact={fact}
-            key={fact.id}
-            sources={sources}
-            variant="active"
-            changeFactLifecycle={changeFactLifecycle}
-            editFactMetadata={editFactMetadata}
-          />
-        ))}
-        {results.length === 0 && <p className="muted">一致する記憶がありません。</p>}
+        {query.trim()
+          ? results.map((fact) => (
+              <FactRow
+                fact={fact}
+                key={fact.id}
+                sources={sources}
+                variant="active"
+                changeFactLifecycle={changeFactLifecycle}
+                editFactMetadata={editFactMetadata}
+              />
+            ))
+          : factsByDomain(results).map((group) => (
+              <div className="memory-domain-group" key={group.domain}>
+                <div className="memory-domain-heading">
+                  <strong>{domainLabel(group.domain)}</strong>
+                  <Badge>{group.facts.length}</Badge>
+                </div>
+                {group.facts.map((fact) => (
+                  <FactRow
+                    fact={fact}
+                    key={fact.id}
+                    sources={sources}
+                    variant="active"
+                    changeFactLifecycle={changeFactLifecycle}
+                    editFactMetadata={editFactMetadata}
+                  />
+                ))}
+              </div>
+            ))}
+        {results.length === 0 && (
+          <p className="muted">
+            {query.trim() ? "一致する記憶がありません。" : "まだ記憶がありません。取り込みから追加できます。"}
+          </p>
+        )}
       </div>
       {filteredExcludedFacts.length > 0 && (
         <div className="memory-review-panel excluded-facts-panel">
@@ -4724,7 +4748,7 @@ function titleForView(view: View): string {
     sources: "取り込み",
     connections: "接続",
     requests: "AI要求",
-    search: "検索",
+    search: "記憶",
     audit: "監査ログ",
     settings: "設定"
   }[view];

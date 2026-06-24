@@ -14,6 +14,7 @@ import {
   createEmptyVault,
   domainLabel,
   exportApprovedFactsMarkdown,
+  factsByDomain,
   exportEncryptedBackup,
   importEncryptedBackup,
   makeAiContextPackPayload,
@@ -1910,5 +1911,45 @@ describe("exportApprovedFactsMarkdown", () => {
   it("returns a friendly placeholder when there is nothing to export", () => {
     const md = exportApprovedFactsMarkdown(createEmptyVault());
     expect(md).toContain("まだありません");
+  });
+});
+
+describe("factsByDomain", () => {
+  const now = "2026-06-12T00:00:00.000Z";
+  const mk = (id: string, domain: VaultState["facts"][number]["domain"]): VaultState["facts"][number] => ({
+    id,
+    factText: `fact ${id}`,
+    domain,
+    factType: "note",
+    sourceIds: [],
+    sensitivity: "personal",
+    confidence: "user_asserted",
+    status: "active",
+    createdAt: now,
+    approvedAt: now,
+    updatedAt: now,
+    supersedesFactIds: [],
+    sensitivityClassified: true,
+    sensitivityConfidence: "high"
+  });
+
+  it("groups facts by domain in canonical order and drops empty domains", () => {
+    const groups = factsByDomain([
+      mk("a", "health_and_care"),
+      mk("b", "identity_and_profile"),
+      mk("c", "health_and_care")
+    ]);
+    // Only the two populated domains appear, ordered as in allLifeDomains
+    // (identity_and_profile precedes health_and_care).
+    expect(groups.map((g) => g.domain)).toEqual([
+      "identity_and_profile",
+      "health_and_care"
+    ]);
+    expect(groups[0].facts.map((f) => f.id)).toEqual(["b"]);
+    expect(groups[1].facts.map((f) => f.id)).toEqual(["a", "c"]);
+  });
+
+  it("returns an empty array when there are no facts", () => {
+    expect(factsByDomain([])).toEqual([]);
   });
 });
