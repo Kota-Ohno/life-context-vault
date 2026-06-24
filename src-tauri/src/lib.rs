@@ -421,6 +421,7 @@ fn open_vault_db_at_path(path: &Path) -> Result<Connection, String> {
   initialize_vault_schema(&connection)?;
   sync_normalized_tables_if_stale(&mut connection)?;
   migrate_classification_if_needed(&mut connection)?;
+  migrate_trust_consent_if_needed(&mut connection)?;
   Ok(connection)
 }
 
@@ -9718,6 +9719,32 @@ fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), S
   Ok(())
 }
 
+const TRUST_CONSENT_MIGRATION_VERSION: u32 = 1;
+
+/// Trust became opt-in (standing delivery defaults OFF) AND now selects a relaxed
+/// tier-only auto-delivery path. A connection whose standingDeliveryEnabled=true was
+/// merely the OLD default (never an explicit user decision) must not silently gain
+/// the stronger relaxed meaning. Reset every connection to untrusted ONCE on upgrade
+/// so the user re-affirms trust through the explicit UI.
+fn migrate_trust_consent_if_needed(connection: &mut Connection) -> Result<(), String> {
+  let mut vault = load_vault_json_from_connection(connection)?;
+  let current_version = vault
+    .get("trustConsentMigrationVersion")
+    .and_then(Value::as_u64)
+    .unwrap_or(0) as u32;
+  if current_version >= TRUST_CONSENT_MIGRATION_VERSION {
+    return Ok(());
+  }
+  if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+    for policy in policies.iter_mut() {
+      policy["standingDeliveryEnabled"] = Value::Bool(false);
+    }
+  }
+  vault["trustConsentMigrationVersion"] = json!(TRUST_CONSENT_MIGRATION_VERSION);
+  save_vault_json_with_projection(connection, &vault)?;
+  Ok(())
+}
+
 // ─── Delivery notification selector (P2 OS notifications) ────────────────────
 
 /// Counts and client names only — NO fact/source/candidate text ever enters this struct.
@@ -14207,6 +14234,38 @@ mod tests {
       .map(|items| items.len())
       .unwrap_or(0);
     assert!(item_count >= 1, "auto-delivered pack must include the matching fact (got {item_count})");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn trust_consent_migration_resets_legacy_standing_delivery_to_false() {
+    // Pre-upgrade installs persisted standingDeliveryEnabled=true as the OLD default.
+    // After trust became opt-in + relaxed, that legacy true must NOT silently gain the
+    // stronger meaning; a one-time migration resets it so the user re-affirms trust.
+    use_test_vault_key();
+    let path = temp_vault_path("trust-consent-migration");
+    {
+      let mut connection = open_vault_db_at_path(&path).expect("open vault");
+      let mut vault = empty_vault_json();
+      ensure_access_policy_for_client(&mut vault, "conn_chatgpt");
+      for policy in vault["accessPolicies"].as_array_mut().expect("policies").iter_mut() {
+        policy["standingDeliveryEnabled"] = json!(true);
+      }
+      // Simulate a pre-upgrade vault: no trust-consent migration marker yet.
+      vault
+        .as_object_mut()
+        .expect("obj")
+        .remove("trustConsentMigrationVersion");
+      save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    }
+    {
+      let connection = open_vault_db_at_path(&path).expect("reopen vault");
+      let vault = load_vault_json_from_connection(&connection).expect("load vault");
+      assert!(
+        !connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+        "legacy standingDeliveryEnabled=true must reset to false on upgrade (re-affirm trust)"
+      );
+    }
     remove_temp_vault(&path);
   }
 

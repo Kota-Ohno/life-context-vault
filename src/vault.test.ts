@@ -2006,3 +2006,27 @@ describe("factsByDomain", () => {
     expect(factsByDomain([])).toEqual([]);
   });
 });
+
+describe("migrateTrustConsentIfNeeded (via normalizeVaultState)", () => {
+  it("resets legacy standingDeliveryEnabled to false once, then lets the user re-trust", () => {
+    const base = createEmptyVault();
+    const legacy = {
+      ...base,
+      trustConsentMigrationVersion: undefined,
+      accessPolicies: base.accessPolicies.map((p) => ({ ...p, standingDeliveryEnabled: true }))
+    };
+    const migrated = normalizeVaultState(
+      legacy as Parameters<typeof normalizeVaultState>[0]
+    );
+    expect(migrated.accessPolicies.every((p) => p.standingDeliveryEnabled === false)).toBe(true);
+    expect(migrated.trustConsentMigrationVersion).toBe(1);
+
+    // Idempotent: once migrated, an explicit re-trust must persist (no second reset).
+    const reTrusted = {
+      ...migrated,
+      accessPolicies: migrated.accessPolicies.map((p) => ({ ...p, standingDeliveryEnabled: true }))
+    };
+    const again = normalizeVaultState(reTrusted as Parameters<typeof normalizeVaultState>[0]);
+    expect(again.accessPolicies.some((p) => p.standingDeliveryEnabled === true)).toBe(true);
+  });
+});

@@ -128,7 +128,8 @@ export function createEmptyVault(): VaultState {
     contextPackRequests: [],
     contextPacks: [],
     auditEvents: [],
-    classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION
+    classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION,
+    trustConsentMigrationVersion: TRUST_CONSENT_MIGRATION_VERSION
   };
 }
 
@@ -184,6 +185,27 @@ export function reclassifyLegacyFacts(state: VaultState, absentClassificationIds
   return { ...state, facts, classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION };
 }
 
+const TRUST_CONSENT_MIGRATION_VERSION = 1;
+
+/**
+ * Mirrors the Rust migrate_trust_consent_if_needed. Trust became opt-in + relaxed,
+ * so a legacy default-on standingDeliveryEnabled must not silently gain the stronger
+ * (tier-only auto-delivery) meaning. Reset every connection to untrusted ONCE so the
+ * user re-affirms trust via the explicit UI.
+ */
+export function migrateTrustConsentIfNeeded(state: VaultState): VaultState {
+  if ((state.trustConsentMigrationVersion ?? 0) >= TRUST_CONSENT_MIGRATION_VERSION) return state;
+  const accessPolicies = state.accessPolicies.map((policy) => ({
+    ...policy,
+    standingDeliveryEnabled: false
+  }));
+  return {
+    ...state,
+    accessPolicies,
+    trustConsentMigrationVersion: TRUST_CONSENT_MIGRATION_VERSION
+  };
+}
+
 export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
   const empty = createEmptyVault();
   if (!parsed || typeof parsed !== "object") return empty;
@@ -224,9 +246,10 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     contextPackRequests: parsed.contextPackRequests ?? [],
     contextPacks: parsed.contextPacks ?? [],
     auditEvents: parsed.auditEvents ?? [],
-    classifierMigrationVersion: parsed.classifierMigrationVersion
+    classifierMigrationVersion: parsed.classifierMigrationVersion,
+    trustConsentMigrationVersion: parsed.trustConsentMigrationVersion
   };
-  return reclassifyLegacyFacts(normalized, absentClassificationIds);
+  return migrateTrustConsentIfNeeded(reclassifyLegacyFacts(normalized, absentClassificationIds));
 }
 
 function normalizeAccessPolicies(

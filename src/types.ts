@@ -449,6 +449,7 @@ export type VaultState = {
   contextPacks: ContextPack[];
   auditEvents: AuditEvent[];
   classifierMigrationVersion?: number;
+  trustConsentMigrationVersion?: number;
 };
 
 export type BackgroundSetupInput = {
