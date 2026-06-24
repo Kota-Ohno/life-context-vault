@@ -421,6 +421,7 @@ fn open_vault_db_at_path(path: &Path) -> Result<Connection, String> {
   initialize_vault_schema(&connection)?;
   sync_normalized_tables_if_stale(&mut connection)?;
   migrate_classification_if_needed(&mut connection)?;
+  migrate_trust_consent_if_needed(&mut connection)?;
   Ok(connection)
 }
 
@@ -1344,10 +1345,11 @@ fn create_native_context_pack_request_in_connection(
     .to_string();
   let warnings = context_pack_warnings(connection, &items, &excluded_items)?;
   let bar = policy_zero_touch_confidence_bar_for_client(vault, client_id);
+  let trusted = connection_standing_delivery_enabled(vault, client_id);
   let requires_confirmation = approval_mode == "always_review"
     || !items
       .iter()
-      .all(|it| zero_touch_eligible(it, &requires_approval_above, &bar));
+      .all(|it| auto_delivery_eligible(it, &requires_approval_above, &bar, trusted));
   let confirmation_status = if requires_confirmation {
     "pending_user_confirmation"
   } else {
@@ -3730,22 +3732,28 @@ fn ensure_context_pack_allowed_by_current_policy(
     //      still satisfy the current per-client confidence bar / approval threshold,
     //      evaluated against the current Fact. User-confirmed packs are exempt — a
     //      human reviewed them.
-    let item_was_classified = item
-      .get("sensitivityClassified")
-      .and_then(Value::as_bool)
-      .unwrap_or(false);
-    let fact_is_now_classified = fact
-      .get("sensitivityClassified")
-      .and_then(Value::as_bool)
-      .unwrap_or(false);
-    if item_was_classified && !fact_is_now_classified {
-      return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
+    // A user-trusted (standing-delivery) connection delivers by stored sensitivity
+    // tier and never relied on the classifier, so the classification-downgrade
+    // signal (a) does not apply to it; eligibility is re-checked by tier in (b).
+    let trusted = connection_standing_delivery_enabled(vault, &client_id);
+    if !trusted {
+      let item_was_classified = item
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+      let fact_is_now_classified = fact
+        .get("sensitivityClassified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+      if item_was_classified && !fact_is_now_classified {
+        return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
+      }
     }
     let pack_confirmation_status = str_field(pack, "confirmationStatus");
     if pack_confirmation_status == "not_required" {
       let bar = policy_zero_touch_confidence_bar_for_client(vault, &client_id);
       let requires_approval_above = policy_requires_approval_above_for_client(vault, &client_id);
-      if !zero_touch_eligible(&fact, &requires_approval_above, &bar) {
+      if !auto_delivery_eligible(&fact, &requires_approval_above, &bar, trusted) {
         return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
       }
     }
@@ -6128,7 +6136,10 @@ fn default_access_policy_for_client(client_id: &str, now: &str) -> Value {
     "sensitivityCeiling": default_policy_ceiling(client_id),
     "requiresApprovalAbove": "personal",
     "passiveCaptureAllowed": default_policy_passive_capture_allowed(client_id),
-    "standingDeliveryEnabled": true,
+    // Trust is opt-in: a new connection is NOT trusted until the user explicitly
+    // turns it on (first-request trust prompt / connection settings). Until then,
+    // packs are queued for confirmation rather than auto-delivered.
+    "standingDeliveryEnabled": false,
     "createdAt": now,
     "updatedAt": now
   })
@@ -9633,6 +9644,25 @@ fn zero_touch_eligible(item: &Value, threshold: &str, bar: &str) -> bool {
     && sensitivity_rank(tier) <= sensitivity_rank(threshold)
 }
 
+/// Whether an item may be auto-delivered without per-request confirmation.
+/// For a connection the user has explicitly TRUSTED (standing delivery on), the
+/// stored sensitivity tier being at/below the threshold is sufficient — the trust
+/// is the consent, and many vaults never run the sensitivity classifier. Untrusted
+/// connections keep the stricter zero_touch_eligible gate (classified + confidence
+/// + tier). The trust decision is the single source of truth and is applied
+/// identically at build time and at retrieval re-validation.
+fn auto_delivery_eligible(item: &Value, threshold: &str, bar: &str, trusted: bool) -> bool {
+  if trusted {
+    let tier = item
+      .get("sensitivity")
+      .and_then(Value::as_str)
+      .unwrap_or("secret_never_send");
+    sensitivity_rank(tier) <= sensitivity_rank(threshold)
+  } else {
+    zero_touch_eligible(item, threshold, bar)
+  }
+}
+
 /// Returns the `zeroTouchConfidenceBar` for a given client's access policy,
 /// defaulting to `"medium"` when absent or unrecognised.
 fn policy_zero_touch_confidence_bar_for_client(vault: &Value, client_id: &str) -> String {
@@ -9685,6 +9715,32 @@ fn migrate_classification_if_needed(connection: &mut Connection) -> Result<(), S
     }
   }
   vault["classifierMigrationVersion"] = json!(CLASSIFIER_MIGRATION_VERSION);
+  save_vault_json_with_projection(connection, &vault)?;
+  Ok(())
+}
+
+const TRUST_CONSENT_MIGRATION_VERSION: u32 = 1;
+
+/// Trust became opt-in (standing delivery defaults OFF) AND now selects a relaxed
+/// tier-only auto-delivery path. A connection whose standingDeliveryEnabled=true was
+/// merely the OLD default (never an explicit user decision) must not silently gain
+/// the stronger relaxed meaning. Reset every connection to untrusted ONCE on upgrade
+/// so the user re-affirms trust through the explicit UI.
+fn migrate_trust_consent_if_needed(connection: &mut Connection) -> Result<(), String> {
+  let mut vault = load_vault_json_from_connection(connection)?;
+  let current_version = vault
+    .get("trustConsentMigrationVersion")
+    .and_then(Value::as_u64)
+    .unwrap_or(0) as u32;
+  if current_version >= TRUST_CONSENT_MIGRATION_VERSION {
+    return Ok(());
+  }
+  if let Some(policies) = vault.get_mut("accessPolicies").and_then(Value::as_array_mut) {
+    for policy in policies.iter_mut() {
+      policy["standingDeliveryEnabled"] = Value::Bool(false);
+    }
+  }
+  vault["trustConsentMigrationVersion"] = json!(TRUST_CONSENT_MIGRATION_VERSION);
   save_vault_json_with_projection(connection, &vault)?;
   Ok(())
 }
@@ -14124,7 +14180,97 @@ mod tests {
   }
 
   #[test]
-  fn new_policy_created_by_ensure_defaults_standing_delivery_on() {
+  fn trusted_connection_auto_delivers_unclassified_low_sensitivity_fact() {
+    // A user-trusted (standing-delivery) connection should auto-deliver a fact
+    // whose stored sensitivity is at/below the threshold EVEN IF it is unclassified
+    // — the explicit per-connection trust is the consent, so we don't also require
+    // the classifier to have verified it (which never runs on many vaults).
+    use_test_vault_key();
+    let path = temp_vault_path("trusted-auto-unclassified");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Contact reminder",
+      "Contact alice@example.com for schedule details.",
+    )
+    .expect("source");
+    approve_candidate_at_path(&path, source.candidate_ids.first().expect("candidate"), None)
+      .expect("approve candidate");
+
+    // Force the fact unclassified (legacy / no classifier configured) — the email
+    // would normally be classified=true, so this isolates the classification gate.
+    let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
+    let mut vault = load_vault_json_from_connection(&connection).expect("vault");
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
+        fact["sensitivityConfidence"] = Value::String("low".to_string());
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    drop(connection);
+
+    set_connection_standing_delivery_at_path(&path, "conn_chatgpt", true).expect("enable trust");
+    let auto = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "How do I contact alice about the schedule?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      None,
+    )
+    .expect("pack");
+    assert_eq!(
+      auto.confirmation_status, "not_required",
+      "trusted connection must auto-deliver a low-sensitivity fact even if unclassified"
+    );
+    // And it must be a non-vacuous pack (an empty pack trivially needs no confirmation).
+    let pack = auto.context_pack.as_ref().expect("auto-delivered pack returned");
+    let item_count = pack
+      .get("items")
+      .and_then(Value::as_array)
+      .map(|items| items.len())
+      .unwrap_or(0);
+    assert!(item_count >= 1, "auto-delivered pack must include the matching fact (got {item_count})");
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn trust_consent_migration_resets_legacy_standing_delivery_to_false() {
+    // Pre-upgrade installs persisted standingDeliveryEnabled=true as the OLD default.
+    // After trust became opt-in + relaxed, that legacy true must NOT silently gain the
+    // stronger meaning; a one-time migration resets it so the user re-affirms trust.
+    use_test_vault_key();
+    let path = temp_vault_path("trust-consent-migration");
+    {
+      let mut connection = open_vault_db_at_path(&path).expect("open vault");
+      let mut vault = empty_vault_json();
+      ensure_access_policy_for_client(&mut vault, "conn_chatgpt");
+      for policy in vault["accessPolicies"].as_array_mut().expect("policies").iter_mut() {
+        policy["standingDeliveryEnabled"] = json!(true);
+      }
+      // Simulate a pre-upgrade vault: no trust-consent migration marker yet.
+      vault
+        .as_object_mut()
+        .expect("obj")
+        .remove("trustConsentMigrationVersion");
+      save_vault_json_with_projection(&mut connection, &vault).expect("save");
+    }
+    {
+      let connection = open_vault_db_at_path(&path).expect("reopen vault");
+      let vault = load_vault_json_from_connection(&connection).expect("load vault");
+      assert!(
+        !connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+        "legacy standingDeliveryEnabled=true must reset to false on upgrade (re-affirm trust)"
+      );
+    }
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn new_policy_created_by_ensure_defaults_standing_delivery_off() {
     use_test_vault_key();
     let path = temp_vault_path("new-policy-standing-default");
     let mut connection = open_vault_db_at_path(&path).expect("open vault");
@@ -14137,8 +14283,8 @@ mod tests {
     let connection = open_vault_db_at_path(&path).expect("reopen vault");
     let vault = load_vault_json_from_connection(&connection).expect("load vault");
     assert!(
-      connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
-      "brand-new policy must default standingDeliveryEnabled to true"
+      !connection_standing_delivery_enabled(&vault, "conn_chatgpt"),
+      "trust is opt-in: a brand-new policy must default standingDeliveryEnabled to false"
     );
     remove_temp_vault(&path);
   }
@@ -14179,7 +14325,7 @@ mod tests {
   }
 
   #[test]
-  fn fresh_default_vault_connections_have_standing_delivery_on() {
+  fn fresh_default_vault_connections_have_standing_delivery_off() {
     use_test_vault_key();
     let path = temp_vault_path("fresh-vault-standing");
     let mut connection = open_vault_db_at_path(&path).expect("open vault");
@@ -14205,8 +14351,8 @@ mod tests {
       "conn_codex",
     ] {
       assert!(
-        connection_standing_delivery_enabled(&vault, client_id),
-        "fresh install connection {client_id} must have standingDeliveryEnabled=true"
+        !connection_standing_delivery_enabled(&vault, client_id),
+        "trust is opt-in: fresh install connection {client_id} must have standingDeliveryEnabled=false"
       );
     }
     remove_temp_vault(&path);

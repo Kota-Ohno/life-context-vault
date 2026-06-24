@@ -24,7 +24,12 @@ import {
   SourceKind,
   VaultState
 } from "./types";
-import { classifySensitivity, zeroTouchEligible, SensitivityConfidence } from "./sensitivity";
+import {
+  classifySensitivity,
+  zeroTouchEligible,
+  autoDeliveryEligible,
+  SensitivityConfidence
+} from "./sensitivity";
 
 export const STORAGE_KEY = "life-context-vault-poc";
 const BACKUP_KDF_ITERATIONS = 600000;
@@ -123,7 +128,8 @@ export function createEmptyVault(): VaultState {
     contextPackRequests: [],
     contextPacks: [],
     auditEvents: [],
-    classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION
+    classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION,
+    trustConsentMigrationVersion: TRUST_CONSENT_MIGRATION_VERSION
   };
 }
 
@@ -179,6 +185,27 @@ export function reclassifyLegacyFacts(state: VaultState, absentClassificationIds
   return { ...state, facts, classifierMigrationVersion: CLASSIFIER_MIGRATION_VERSION };
 }
 
+const TRUST_CONSENT_MIGRATION_VERSION = 1;
+
+/**
+ * Mirrors the Rust migrate_trust_consent_if_needed. Trust became opt-in + relaxed,
+ * so a legacy default-on standingDeliveryEnabled must not silently gain the stronger
+ * (tier-only auto-delivery) meaning. Reset every connection to untrusted ONCE so the
+ * user re-affirms trust via the explicit UI.
+ */
+export function migrateTrustConsentIfNeeded(state: VaultState): VaultState {
+  if ((state.trustConsentMigrationVersion ?? 0) >= TRUST_CONSENT_MIGRATION_VERSION) return state;
+  const accessPolicies = state.accessPolicies.map((policy) => ({
+    ...policy,
+    standingDeliveryEnabled: false
+  }));
+  return {
+    ...state,
+    accessPolicies,
+    trustConsentMigrationVersion: TRUST_CONSENT_MIGRATION_VERSION
+  };
+}
+
 export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
   const empty = createEmptyVault();
   if (!parsed || typeof parsed !== "object") return empty;
@@ -219,9 +246,10 @@ export function normalizeVaultState(parsed: PersistedVaultState): VaultState {
     contextPackRequests: parsed.contextPackRequests ?? [],
     contextPacks: parsed.contextPacks ?? [],
     auditEvents: parsed.auditEvents ?? [],
-    classifierMigrationVersion: parsed.classifierMigrationVersion
+    classifierMigrationVersion: parsed.classifierMigrationVersion,
+    trustConsentMigrationVersion: parsed.trustConsentMigrationVersion
   };
-  return reclassifyLegacyFacts(normalized, absentClassificationIds);
+  return migrateTrustConsentIfNeeded(reclassifyLegacyFacts(normalized, absentClassificationIds));
 }
 
 function normalizeAccessPolicies(
@@ -1332,6 +1360,12 @@ function buildContextPackWithOptions(
     options.requiresApprovalAbove ?? "personal",
     "personal"
   );
+  // A user-trusted (standing-delivery) connection auto-delivers by stored tier;
+  // mirrors the Rust build/retrieval basis (connection_standing_delivery_enabled).
+  const trusted =
+    options.clientId !== undefined &&
+    state.accessPolicies.find((policy) => policy.clientId === options.clientId)
+      ?.standingDeliveryEnabled === true;
   const taskDomain = classifyDomain(taskText);
   const riskLevel = classifyRisk(taskText);
   const relevant = rankFactsForTask(state, taskText).slice(0, 12);
@@ -1407,10 +1441,14 @@ function buildContextPackWithOptions(
     confirmationStatus:
       options.approvalMode === "always_review" ||
       !items.every((item) =>
-        zeroTouchEligible(item, {
-          requiresApprovalAbove,
-          zeroTouchConfidenceBar: options.zeroTouchConfidenceBar
-        })
+        autoDeliveryEligible(
+          item,
+          {
+            requiresApprovalAbove,
+            zeroTouchConfidenceBar: options.zeroTouchConfidenceBar
+          },
+          trusted
+        )
       )
         ? "pending_user_confirmation"
         : "not_required"
@@ -1761,13 +1799,19 @@ function contextPackPolicyViolation(
   const zeroTouchBar = isZeroTouch
     ? policyZeroTouchConfidenceBarForClient(state, request.clientId)
     : null;
+  // A user-trusted (standing-delivery) connection delivers by stored tier and never
+  // relied on the classifier, so the classification-downgrade signal does not apply;
+  // eligibility is re-checked by tier via autoDeliveryEligible. Mirrors the Rust path.
+  const trusted =
+    state.accessPolicies.find((policy) => policy.clientId === request.clientId)
+      ?.standingDeliveryEnabled === true;
   for (const item of pack.items) {
     const fact = state.facts.find((candidate) => candidate.id === item.factId);
     if (!fact) continue; // already caught above
     const itemWasClassified = item.sensitivityClassified ?? false;
     const factIsNowClassified = fact.sensitivityClassified ?? false;
-    if (itemWasClassified && !factIsNowClassified) return "sensitivity_policy";
-    if (isZeroTouch && !zeroTouchEligible(fact, { requiresApprovalAbove: requiresApprovalAbove!, zeroTouchConfidenceBar: zeroTouchBar ?? undefined })) {
+    if (!trusted && itemWasClassified && !factIsNowClassified) return "sensitivity_policy";
+    if (isZeroTouch && !autoDeliveryEligible(fact, { requiresApprovalAbove: requiresApprovalAbove!, zeroTouchConfidenceBar: zeroTouchBar ?? undefined }, trusted)) {
       return "sensitivity_policy";
     }
   }
@@ -2819,7 +2863,8 @@ function createDefaultAccessPolicy(clientId: string, createdAt: string): AccessP
           : "private_consequential",
     requiresApprovalAbove: clientId === "conn_browser_capture" ? "public" : "personal",
     passiveCaptureAllowed: false,
-    standingDeliveryEnabled: true,
+    // Trust is opt-in: a new connection is NOT trusted until the user turns it on.
+    standingDeliveryEnabled: false,
     createdAt,
     updatedAt: createdAt
   };
