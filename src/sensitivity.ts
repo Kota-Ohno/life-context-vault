@@ -240,6 +240,32 @@ export function zeroTouchEligible(
   );
 }
 
+/**
+ * Whether an item may be auto-delivered without per-request confirmation. Mirrors
+ * the Rust `auto_delivery_eligible`: a user-TRUSTED (standing-delivery) connection
+ * needs only the stored sensitivity tier at/below the threshold (the explicit trust
+ * is the consent, and the classifier may never have run); untrusted connections
+ * keep the stricter zeroTouchEligible gate (classified + confidence + tier).
+ */
+export function autoDeliveryEligible(
+  item: {
+    sensitivity?: SensitivityTier;
+    sensitivityConfidence?: SensitivityConfidence;
+    sensitivityClassified?: boolean;
+  },
+  policy: {
+    requiresApprovalAbove?: SensitivityTier;
+    zeroTouchConfidenceBar?: SensitivityConfidence;
+  },
+  trusted: boolean
+): boolean {
+  if (trusted) {
+    const threshold = policy.requiresApprovalAbove ?? "personal";
+    return sensitivityRank(item.sensitivity as SensitivityTier) <= sensitivityRank(threshold);
+  }
+  return zeroTouchEligible(item, policy);
+}
+
 export function classifySensitivity(text: string): SensitivityResult {
   const matched = SIGNALS.filter((s) =>
     typeof s.test === "function" ? s.test(text) : s.test.test(text)

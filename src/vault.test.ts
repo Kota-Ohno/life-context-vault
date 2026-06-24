@@ -1303,18 +1303,64 @@ describe("vault flow", () => {
       ],
       accessPolicies: base.accessPolicies.map((p) =>
         p.clientId === "conn_chatgpt"
-          ? { ...p, standingDeliveryEnabled: true, requiresApprovalAbove: "sensitive" as const }
+          ? { ...p, standingDeliveryEnabled: false, requiresApprovalAbove: "sensitive" as const }
           : p
       )
     };
+    // Untrusted connection in explicit_sensitive mode: the strict gate
+    // (classified+confidence+tier) applies, so an unclassified item blocks
+    // auto-delivery. (A trusted connection would relax to tier-only.)
     const requested = createContextPackRequest(state, {
       clientId: "conn_chatgpt",
       clientName: "ChatGPT",
       taskText: "Help me with my plans",
+      approvalMode: "explicit_sensitive",
       ttlMinutes: 10
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
     expect(built.pack?.confirmationStatus).toBe("pending_user_confirmation");
+  });
+
+  it("trusted connection auto-delivers an unclassified low-sensitivity fact (tier-only)", () => {
+    const base = createEmptyVault();
+    const now = "2026-06-21T00:00:00.000Z";
+    const state: VaultState = {
+      ...base,
+      facts: [
+        {
+          id: "fact_unclassified_low",
+          factText: "Preferred name: Kota",
+          domain: "identity_and_profile" as const,
+          factType: "background_profile" as const,
+          sourceIds: [],
+          sensitivity: "public" as const,
+          confidence: "source_backed" as const,
+          status: "active" as const,
+          createdAt: now,
+          approvedAt: now,
+          updatedAt: now,
+          supersedesFactIds: [],
+          sensitivityClassified: false,
+          sensitivityConfidence: "low" as const
+        }
+      ],
+      accessPolicies: base.accessPolicies.map((p) =>
+        p.clientId === "conn_chatgpt"
+          ? { ...p, standingDeliveryEnabled: true, requiresApprovalAbove: "personal" as const }
+          : p
+      )
+    };
+    // Trusted connection: tier (public ≤ personal) alone makes it eligible, so the
+    // unclassified fact auto-delivers without per-request confirmation.
+    const requested = createContextPackRequest(state, {
+      clientId: "conn_chatgpt",
+      clientName: "ChatGPT",
+      taskText: "What is my preferred name?",
+      ttlMinutes: 10
+    });
+    const built = buildContextPackForRequest(requested.state, requested.request.id);
+    expect(built.pack?.confirmationStatus).toBe("not_required");
+    expect(built.pack?.items.length ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it("always_review short-circuit: even all-eligible items → pending_user_confirmation", () => {
@@ -1544,17 +1590,19 @@ describe("vault flow", () => {
         p.clientId === "conn_chatgpt"
           ? {
               ...p,
-              standingDeliveryEnabled: true,
+              standingDeliveryEnabled: false,
               zeroTouchConfidenceBar: "high" as const, // bar set to high → medium is below
               requiresApprovalAbove: "sensitive" as const
             }
           : p
       )
     };
+    // Untrusted + explicit_sensitive: the strict confidence bar applies.
     const requested = createContextPackRequest(state, {
       clientId: "conn_chatgpt",
       clientName: "ChatGPT",
       taskText: "Help me",
+      approvalMode: "explicit_sensitive",
       ttlMinutes: 10
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
@@ -1586,14 +1634,17 @@ describe("vault flow", () => {
       ],
       accessPolicies: base.accessPolicies.map((p) =>
         p.clientId === "conn_chatgpt"
-          ? { ...p, standingDeliveryEnabled: true, requiresApprovalAbove: "sensitive" as const }
+          ? { ...p, standingDeliveryEnabled: false, requiresApprovalAbove: "sensitive" as const }
           : p
       )
     };
+    // Untrusted + explicit_sensitive: classification still gates eligibility, so a
+    // fact going unclassified after build makes the pack non-deliverable.
     const requested = createContextPackRequest(state, {
       clientId: "conn_chatgpt",
       clientName: "ChatGPT",
       taskText: "What is my name?",
+      approvalMode: "explicit_sensitive",
       ttlMinutes: 10
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
@@ -1643,17 +1694,19 @@ describe("vault flow", () => {
         p.clientId === "conn_chatgpt"
           ? {
               ...p,
-              standingDeliveryEnabled: true,
+              standingDeliveryEnabled: false,
               requiresApprovalAbove: "sensitive" as const,
               zeroTouchConfidenceBar: "medium" as const // medium bar → medium confidence passes
             }
           : p
       )
     };
+    // Untrusted + explicit_sensitive: the per-client confidence bar gates eligibility.
     const requested = createContextPackRequest(stateWithMediumBar, {
       clientId: "conn_chatgpt",
       clientName: "ChatGPT",
       taskText: "What is my name?",
+      approvalMode: "explicit_sensitive",
       ttlMinutes: 10
     });
     const built = buildContextPackForRequest(requested.state, requested.request.id);
