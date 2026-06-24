@@ -14,6 +14,7 @@ use std::{
   io::{Cursor, Read, Write},
   path::{Path, PathBuf},
   process::{Command, Output, Stdio},
+  sync::mpsc,
   thread,
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -43,6 +44,10 @@ const MAX_NATIVE_XML_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS: usize = 1_000_000;
 const MAX_PROVIDER_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROVIDER_STDERR_BYTES: usize = 128 * 1024;
+// Bound how long we wait for a provider's stdout/stderr reader threads to reach
+// EOF. child.kill() does not close a pipe write-end inherited by a lingering
+// grandchild, so an unbounded join() could hang forever and defeat the timeout.
+const PROVIDER_READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 const SOURCE_CHUNK_TARGET_CHARS: usize = 4_000;
 const SOURCE_CHUNK_OVERLAP_CHARS: usize = 300;
 
@@ -2001,7 +2006,9 @@ pub fn propose_memory_at_path(
   let source_id = new_id("src");
   let candidate_id = new_id("cand");
   let sensitivity = detect_sensitivity(text).to_string();
-  let sanitized = sanitize_secret_material(text);
+  // Use the line-aware sanitizer (same path as add_source / passive capture) so
+  // secret redaction stays per-line and consistent across every ingest path.
+  let sanitized = sanitize_source_body(text);
   let source = json!({
     "id": source_id,
     "kind": "mcp_proposal",
@@ -3701,15 +3708,33 @@ fn ensure_context_pack_allowed_by_current_policy(
         return Err("ContextPack Fact no longer has an AI-eligible active Source.".to_string());
       }
     }
-    // Task 7: if the pack was delivered without user confirmation (zero-touch), every item
-    // must still be eligible at retrieval time.  An item that became unclassified or dropped
-    // below the confidence bar after pack creation must cause re-validation to fail.
-    // Packs that went through user confirmation ("confirmed") are exempt — a human reviewed them.
+    // Task 7: re-validate classification/zero-touch eligibility at retrieval time
+    // against the CURRENT Fact (not the frozen pack item). Mirrors the TS analogue
+    // in vault.ts so the production (Rust) path is not strictly weaker than the
+    // fallback (TS) path:
+    //  (a) An item that was classified at build time but whose current Fact is now
+    //      unclassified is a fail-closed signal — a silently-unverified fact must
+    //      not ride along, regardless of how the pack was delivered.
+    //  (b) Packs delivered without user confirmation (zero-touch) must additionally
+    //      still satisfy the current per-client confidence bar / approval threshold,
+    //      evaluated against the current Fact. User-confirmed packs are exempt — a
+    //      human reviewed them.
+    let item_was_classified = item
+      .get("sensitivityClassified")
+      .and_then(Value::as_bool)
+      .unwrap_or(false);
+    let fact_is_now_classified = fact
+      .get("sensitivityClassified")
+      .and_then(Value::as_bool)
+      .unwrap_or(false);
+    if item_was_classified && !fact_is_now_classified {
+      return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
+    }
     let pack_confirmation_status = str_field(pack, "confirmationStatus");
     if pack_confirmation_status == "not_required" {
       let bar = policy_zero_touch_confidence_bar_for_client(vault, &client_id);
       let requires_approval_above = policy_requires_approval_above_for_client(vault, &client_id);
-      if !zero_touch_eligible(&item, &requires_approval_above, &bar) {
+      if !zero_touch_eligible(&fact, &requires_approval_above, &bar) {
         return Err("ContextPack item is no longer eligible for zero-touch delivery.".to_string());
       }
     }
@@ -5728,29 +5753,45 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 }
 
 fn sanitize_secret_material(text: &str) -> String {
-  let tokens = text.split_whitespace().collect::<Vec<_>>();
+  // Operate per line so a secret indicator only redacts the rest of its OWN
+  // line, never across line boundaries. Once an indicator (or the "api key"
+  // pattern) is seen, redact the indicator AND every remaining token on the
+  // line: a credential separated from its keyword by >=2 tokens (e.g.
+  // "My password is hunter2") would otherwise survive verbatim in the
+  // persisted source body. Fail closed — mask more, not less.
+  text
+    .split('\n')
+    .map(sanitize_secret_material_line)
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn sanitize_secret_material_line(line: &str) -> String {
+  let tokens = line.split_whitespace().collect::<Vec<_>>();
   let mut sanitized = Vec::new();
   let mut index = 0;
   while index < tokens.len() {
     let token = tokens[index];
     let lower = token.to_lowercase();
-    let next_lower = tokens
+    let next_is_key = tokens
       .get(index + 1)
-      .map(|next| next.to_lowercase())
-      .unwrap_or_default();
+      .map(|next| next.to_lowercase().starts_with("key"))
+      .unwrap_or(false);
 
-    if lower == "api" && next_lower.starts_with("key") {
-      sanitized.push("[REDACTED_SECRET]".to_string());
-      sanitized.push("[REDACTED_SECRET]".to_string());
-      if index + 2 < tokens.len() {
+    // High confidence (api-key pattern, or a whole-word / pluralized keyword):
+    // redact the indicator AND the rest of the line, so a value separated from
+    // its keyword by >=2 tokens ("password is hunter2") cannot survive.
+    if (lower == "api" && next_is_key) || is_strong_secret_indicator(&lower) {
+      for _ in index..tokens.len() {
         sanitized.push("[REDACTED_SECRET]".to_string());
-        index += 3;
-      } else {
-        index += 2;
       }
-      continue;
+      break;
     }
 
+    // Low confidence (keyword only as a substring, e.g. an unseparated compound
+    // like "secretkey"): keep the baseline bounded blast — the indicator plus the
+    // next token — so we never under-redact versus substring matching, without
+    // nuking a whole line on a false positive like "secretary".
     if is_secret_indicator(&lower) {
       sanitized.push("[REDACTED_SECRET]".to_string());
       if index + 1 < tokens.len() {
@@ -5759,22 +5800,76 @@ fn sanitize_secret_material(text: &str) -> String {
       } else {
         index += 1;
       }
-    } else {
-      sanitized.push(token.to_string());
-      index += 1;
+      continue;
     }
+
+    sanitized.push(token.to_string());
+    index += 1;
   }
   sanitized.join(" ")
 }
 
 fn sanitize_source_body(text: &str) -> String {
+  // Map the per-line sanitizer directly over lines — sanitize_secret_material is
+  // itself line-aware now, so calling it here would split on '\n' a second time.
   text
     .lines()
-    .map(sanitize_secret_material)
+    .map(sanitize_secret_material_line)
     .collect::<Vec<_>>()
     .join("\n")
 }
 
+/// True if `needle` occurs in `token` as a whole word — delimited by
+/// non-alphanumeric chars (or string boundaries) on the left, and on the right
+/// by a boundary OR only a plural/possessive suffix ("s"/"es") before a boundary.
+/// Matches "password=x", "x-api-key", "my_secret", and the plurals
+/// "passwords"/"tokens"/"secrets", while rejecting false positives like
+/// "secretary", "tokenize", "subtoken". `needle` is ASCII, so byte offsets from
+/// `find` always land on char boundaries in UTF-8 input.
+fn contains_secret_word(token: &str, needle: &str) -> bool {
+  let mut start = 0;
+  while let Some(pos) = token[start..].find(needle) {
+    let abs = start + pos;
+    let before_ok = abs == 0
+      || !token[..abs]
+        .chars()
+        .next_back()
+        .map(|c| c.is_alphanumeric())
+        .unwrap_or(false);
+    if before_ok {
+      // The keyword may be followed only by a plural/possessive suffix before a
+      // boundary: accept "secrets"/"tokens"/"passwords", reject "secretary".
+      let suffix: String = token[abs + needle.len()..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric())
+        .collect();
+      if matches!(suffix.as_str(), "" | "s" | "es") {
+        return true;
+      }
+    }
+    start = abs + 1;
+  }
+  false
+}
+
+/// High-confidence indicator: the token IS a secret keyword (whole word or
+/// pluralized), or a Japanese keyword. Triggers the to-end-of-line redaction.
+fn is_strong_secret_indicator(lower: &str) -> bool {
+  contains_secret_word(lower, "password")
+    || contains_secret_word(lower, "token")
+    || contains_secret_word(lower, "secret")
+    || contains_secret_word(lower, "api_key")
+    || contains_secret_word(lower, "apikey")
+    || contains_secret_word(lower, "passcode")
+    || lower.contains("パスワード")
+    || lower.contains("秘密鍵")
+}
+
+/// Low-confidence indicator: the keyword appears anywhere as a substring
+/// (e.g. an unseparated compound like "secretkey"). Used only for the bounded
+/// fallback redaction so we never under-redact versus substring matching.
+/// NOTE: redaction is at-rest masking only; classification via detect_sensitivity
+/// is independent, so neither matcher affects the trust boundary.
 fn is_secret_indicator(lower: &str) -> bool {
   lower.contains("password")
     || lower.contains("token")
@@ -6891,10 +6986,18 @@ fn run_command_with_timeout(
     .stderr
     .take()
     .ok_or_else(|| format!("{provider_label}の標準エラー出力を取得できませんでした。"))?;
-  let stdout_reader =
-    thread::spawn(move || drain_reader_limited(stdout, MAX_PROVIDER_STDOUT_BYTES));
-  let stderr_reader =
-    thread::spawn(move || drain_reader_limited(stderr, MAX_PROVIDER_STDERR_BYTES));
+  // Reader threads stream their result over a channel rather than being join()ed
+  // directly, so we can always collect them with a deadline. A provider that
+  // spawns a grandchild inheriting the stdout pipe would keep the pipe open even
+  // after child.kill(), so an unbounded join() would hang and defeat the timeout.
+  let (stdout_tx, stdout_rx) = mpsc::channel();
+  thread::spawn(move || {
+    let _ = stdout_tx.send(drain_reader_limited(stdout, MAX_PROVIDER_STDOUT_BYTES));
+  });
+  let (stderr_tx, stderr_rx) = mpsc::channel();
+  thread::spawn(move || {
+    let _ = stderr_tx.send(drain_reader_limited(stderr, MAX_PROVIDER_STDERR_BYTES));
+  });
   let started_at = SystemTime::now();
   let status = loop {
     match child
@@ -6911,8 +7014,10 @@ fn run_command_with_timeout(
         if elapsed >= timeout {
           let _ = child.kill();
           let _ = child.wait();
-          let _ = stdout_reader.join();
-          let _ = stderr_reader.join();
+          // Bounded drain only — never wait forever for readers that a lingering
+          // grandchild may be holding open.
+          let _ = stdout_rx.recv_timeout(PROVIDER_READER_DRAIN_GRACE);
+          let _ = stderr_rx.recv_timeout(PROVIDER_READER_DRAIN_GRACE);
           return Err(format!(
             "{provider_label}が{}秒以内に完了しなかったため停止しました。",
             timeout.as_secs()
@@ -6922,8 +7027,8 @@ fn run_command_with_timeout(
       }
     }
   };
-  let stdout = join_drained_output(stdout_reader, provider_label, "標準出力")?;
-  let stderr = join_drained_output(stderr_reader, provider_label, "標準エラー出力")?;
+  let stdout = collect_drained_output(&stdout_rx, provider_label, "標準出力")?;
+  let stderr = collect_drained_output(&stderr_rx, provider_label, "標準エラー出力")?;
   if stdout.exceeded {
     return Err(format!(
       "{provider_label}の標準出力が大きすぎます。ローカルProvider出力は{}MBまでです。",
@@ -6964,15 +7069,22 @@ fn drain_reader_limited<R: Read>(mut reader: R, limit: usize) -> Result<DrainedO
   Ok(DrainedOutput { bytes, exceeded })
 }
 
-fn join_drained_output(
-  handle: thread::JoinHandle<Result<DrainedOutput, String>>,
+fn collect_drained_output(
+  rx: &mpsc::Receiver<Result<DrainedOutput, String>>,
   provider_label: &str,
   stream_label: &str,
 ) -> Result<DrainedOutput, String> {
-  handle
-    .join()
-    .map_err(|_| format!("{provider_label}の{stream_label}Readerが停止しました。"))?
-    .map_err(|error| format!("{provider_label}の{stream_label}を読めませんでした: {error}"))
+  match rx.recv_timeout(PROVIDER_READER_DRAIN_GRACE) {
+    Ok(result) => {
+      result.map_err(|error| format!("{provider_label}の{stream_label}を読めませんでした: {error}"))
+    }
+    Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+      "{provider_label}の{stream_label}の読み取りが時間内に完了しませんでした（子プロセスが出力を保持している可能性があります）。"
+    )),
+    Err(mpsc::RecvTimeoutError::Disconnected) => {
+      Err(format!("{provider_label}の{stream_label}Readerが停止しました。"))
+    }
+  }
 }
 
 fn extract_plain_text_document(bytes: &[u8]) -> Result<String, String> {
@@ -7025,6 +7137,13 @@ where
 
   let mut parts = Vec::new();
   let mut warnings = Vec::new();
+  // Bound the *aggregate* extracted text as we go. The per-entry (8 MiB) and
+  // entry-count (2000) guards above do not cap the sum, so a zip-bomb document
+  // whose many entries each declare large uncompressed sizes could otherwise
+  // accumulate gigabytes in `parts` before the post-hoc cap in
+  // normalize_extracted_document_text ever runs. Stop reading further entries
+  // once the cumulative char budget is exhausted (fail closed: surface less).
+  let mut total_chars: usize = 0;
   for index in 0..archive.len() {
     let mut file = archive
       .by_index(index)
@@ -7042,9 +7161,28 @@ where
       .read_to_end(&mut xml)
       .map_err(|error| format!("文書XMLを読めませんでした: {error}"))?;
     let text = extract_visible_text_from_xml(&xml)?;
-    if !text.trim().is_empty() {
-      parts.push(text);
+    if text.trim().is_empty() {
+      continue;
     }
+    let remaining = MAX_EXTRACTED_TEXT_CHARS.saturating_sub(total_chars);
+    if remaining == 0 {
+      warnings.push(
+        "抽出テキストが上限に達したため、以降の内部ファイルは抽出しませんでした。".to_string(),
+      );
+      break;
+    }
+    let text_chars = text.chars().count();
+    if text_chars > remaining {
+      let truncated: String = text.chars().take(remaining).collect();
+      parts.push(truncated);
+      warnings.push(
+        "抽出テキストが上限に達したため、一部を切り詰めて以降の内部ファイルは抽出しませんでした。"
+          .to_string(),
+      );
+      break;
+    }
+    total_chars += text_chars;
+    parts.push(text);
   }
 
   if parts.is_empty() {
@@ -11608,6 +11746,65 @@ mod tests {
   }
 
   #[test]
+  fn sanitize_secret_material_redacts_to_end_of_line_without_bleeding_across_lines() {
+    // Credential separated from its keyword by >=2 tokens must not survive.
+    let out = sanitize_secret_material("My password is hunter2");
+    assert!(!out.contains("hunter2"), "secret value leaked: {out}");
+    assert!(out.contains("[REDACTED_SECRET]"));
+
+    // "api key <value>" pattern is fully masked.
+    let api = sanitize_secret_material("the api key sk-abc123 rotates monthly");
+    assert!(!api.contains("sk-abc123"), "api key leaked: {api}");
+
+    // Redaction stops at the line boundary: a later, unrelated line survives.
+    let multi =
+      sanitize_secret_material("password is hunter2\nNeed to update address before moving.");
+    assert!(!multi.contains("hunter2"), "secret value leaked: {multi}");
+    assert!(
+      multi.contains("Need to update address before moving."),
+      "non-secret line was over-redacted: {multi}"
+    );
+
+    // Lines with no indicator are untouched.
+    let clean = sanitize_secret_material("Tone preference: concise and calm.");
+    assert_eq!(clean, "Tone preference: concise and calm.");
+
+    // False positives (a word merely CONTAINING a keyword) must NOT nuke the
+    // whole line — only the baseline bounded blast applies, so the tail survives.
+    let secretary = sanitize_secret_material("My secretary scheduled the meeting for Tuesday");
+    assert!(
+      secretary.contains("the meeting for Tuesday"),
+      "false-positive over-redacted to end of line: {secretary}"
+    );
+
+    // Genuine keywords still match even with adjacent punctuation.
+    let punct = sanitize_secret_material("token: abc123");
+    assert!(
+      !punct.contains("abc123"),
+      "punctuated keyword missed: {punct}"
+    );
+    let kv = sanitize_secret_material("password=hunter2 and more");
+    assert!(!kv.contains("hunter2"), "kv secret leaked: {kv}");
+
+    // Pluralized/suffixed keywords must NOT bypass redaction — a value >=2 tokens
+    // after a plural keyword must still be masked (the security-review regression).
+    let plural = sanitize_secret_material("my passwords are hunter2 and swordfish");
+    assert!(
+      !plural.contains("hunter2"),
+      "plural keyword bypassed redaction: {plural}"
+    );
+    assert!(
+      !plural.contains("swordfish"),
+      "plural keyword bypassed redaction: {plural}"
+    );
+    let toks = sanitize_secret_material("api tokens: tok_abc tok_def");
+    assert!(
+      !toks.contains("tok_abc"),
+      "plural keyword bypassed redaction: {toks}"
+    );
+  }
+
+  #[test]
   fn passive_capture_site_policy_matches_allowed_browser_and_local_clients() {
     let vault = empty_vault_json();
 
@@ -14903,8 +15100,11 @@ mod tests {
 
   #[test]
   fn retrieval_revalidation_rejects_pack_when_item_becomes_unclassified() {
-    // After a pack is built, if a pack item's classification is cleared,
-    // ensure_context_pack_allowed_by_current_policy must reject it.
+    // Realistic degradation: a zero-touch (not_required) pack was built from a
+    // classified Fact, then the CURRENT Fact silently became unclassified.
+    // ensure_context_pack_allowed_by_current_policy re-validates against the
+    // current Fact (not the frozen pack item) and must fail closed — mirroring
+    // the TS analogue's `itemWasClassified && !factIsNowClassified` check.
     use_test_vault_key();
     let path = temp_vault_path("retrieval-revalidate");
     let r = add_source_with_candidates_at_path(
@@ -14929,7 +15129,9 @@ mod tests {
     .expect("pack");
     let pack_id = pack_result.pack_id;
 
-    // Simulate classification clearing on the pack item and mark pack as not_required.
+    // Simulate the realistic degradation: the pack item is a frozen build-time
+    // snapshot that WAS classified, but the current Fact has since become
+    // unclassified. Mark the pack as zero-touch (not_required).
     let mut connection = vault_crypto::open_encrypted_vault_connection(&path).expect("open");
     let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
     if let Some(packs) = vault.get_mut("contextPacks").and_then(Value::as_array_mut) {
@@ -14937,11 +15139,17 @@ mod tests {
         if str_field(pack, "id") == pack_id {
           if let Some(items) = pack.get_mut("items").and_then(Value::as_array_mut) {
             for item in items.iter_mut() {
-              item["sensitivityClassified"] = Value::Bool(false);
+              item["sensitivityClassified"] = Value::Bool(true);
             }
           }
           pack["confirmationStatus"] = Value::String("not_required".to_string());
         }
+      }
+    }
+    // The current Fact silently loses its classification after the pack was built.
+    if let Some(facts) = vault.get_mut("facts").and_then(Value::as_array_mut) {
+      for fact in facts.iter_mut() {
+        fact["sensitivityClassified"] = Value::Bool(false);
       }
     }
     if let Some(requests) = vault

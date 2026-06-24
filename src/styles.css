@@ -1783,6 +1783,46 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+/* "Why was this excluded" explainer — generalized to every policy/lifecycle
+   reason, shown on the trusted local preview only. */
+.exclusion-list > .excluded-context-items {
+  flex: 1 1 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.excluded-context-item--reason {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.excluded-context-item__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.excluded-reason-tag {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--bg-base, var(--bg-surface));
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.excluded-reason-hint {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .answer-box {
   overflow: auto;
   max-height: 440px;

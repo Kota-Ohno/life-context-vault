@@ -623,11 +623,9 @@ export function approveCandidate(
     kind: "stale_fact",
     message: "Factが新しいFactに置き換えられたため、このContext Packは無効化されました。"
   });
-  const invalidatedPacks = nextPacks.filter(
-    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
-  );
-  const invalidatedRequestIds = new Set(
-    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  const { invalidatedPacks, invalidatedRequestIds } = diffInvalidatedPacks(
+    state.contextPacks,
+    nextPacks
   );
 
   return {
@@ -772,12 +770,7 @@ export function updateSourceLifecycle(
         message: "根拠Sourceが削除または消去されたため、このContext Packは無効化されました。"
       })
     : state.contextPacks;
-  const invalidatedRequestIds = new Set(
-    nextPacks
-      .filter((pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus)
-      .map((pack) => pack.requestId)
-      .filter((requestId): requestId is string => Boolean(requestId))
-  );
+  const { invalidatedRequestIds } = diffInvalidatedPacks(state.contextPacks, nextPacks);
   const nextRequests = isDeleting
     ? state.contextPackRequests.map((request) =>
         invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
@@ -820,11 +813,9 @@ export function updateSourceMetadata(
     kind: "stale_fact",
     message: "根拠Sourceのメタデータが更新されたため、このContext Packは無効化されました。"
   });
-  const invalidatedPacks = nextPacks.filter(
-    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
-  );
-  const invalidatedRequestIds = new Set(
-    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  const { invalidatedPacks, invalidatedRequestIds } = diffInvalidatedPacks(
+    state.contextPacks,
+    nextPacks
   );
   const promotedToLongTerm = source.retentionUntil
     ? input.promotedToLongTerm ?? source.promotedToLongTerm ?? false
@@ -906,11 +897,9 @@ export function updateSourceBody(
     kind: "stale_fact",
     message: "根拠Source本文が更新されたため、このContext Packは無効化されました。"
   });
-  const invalidatedPacks = nextPacks.filter(
-    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
-  );
-  const invalidatedRequestIds = new Set(
-    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  const { invalidatedPacks, invalidatedRequestIds } = diffInvalidatedPacks(
+    state.contextPacks,
+    nextPacks
   );
 
   return {
@@ -978,12 +967,7 @@ export function updateFactLifecycle(
         message: "Factの表示状態が変更されたため、このContext Packは無効化されました。"
       })
     : state.contextPacks;
-  const invalidatedRequestIds = new Set(
-    nextPacks
-      .filter((pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus)
-      .map((pack) => pack.requestId)
-      .filter((requestId): requestId is string => Boolean(requestId))
-  );
+  const { invalidatedRequestIds } = diffInvalidatedPacks(state.contextPacks, nextPacks);
   const nextRequests = isRemovingFromActiveContext
     ? state.contextPackRequests.map((request) =>
         invalidatedRequestIds.has(request.id) ? { ...request, status: "expired" as const } : request
@@ -1041,11 +1025,9 @@ export function updateFactMetadata(
     kind: "stale_fact",
     message: "Factが更新されたため、このContext Packは無効化されました。"
   });
-  const invalidatedPacks = nextPacks.filter(
-    (pack, index) => pack.confirmationStatus !== state.contextPacks[index]?.confirmationStatus
-  );
-  const invalidatedRequestIds = new Set(
-    invalidatedPacks.map((pack) => pack.requestId).filter((requestId): requestId is string => Boolean(requestId))
+  const { invalidatedPacks, invalidatedRequestIds } = diffInvalidatedPacks(
+    state.contextPacks,
+    nextPacks
   );
   return {
     ...state,
@@ -1112,6 +1094,29 @@ function invalidatePacksForFacts(
       ]
     };
   });
+}
+
+/**
+ * Diff a freshly-recomputed pack array against the previous one to find which
+ * packs were just invalidated (confirmationStatus changed) and the request IDs
+ * to expire. RELIES on `next` being a same-order projection of `prev`, which
+ * invalidatePacksForFacts guarantees (it map()s over the input preserving order,
+ * or returns it unchanged). Centralizes the positional-diff idiom that was
+ * previously re-implemented in every lifecycle mutator.
+ */
+function diffInvalidatedPacks(
+  prev: VaultState["contextPacks"],
+  next: VaultState["contextPacks"]
+): { invalidatedPacks: VaultState["contextPacks"]; invalidatedRequestIds: Set<string> } {
+  const invalidatedPacks = next.filter(
+    (pack, index) => pack.confirmationStatus !== prev[index]?.confirmationStatus
+  );
+  const invalidatedRequestIds = new Set(
+    invalidatedPacks
+      .map((pack) => pack.requestId)
+      .filter((requestId): requestId is string => Boolean(requestId))
+  );
+  return { invalidatedPacks, invalidatedRequestIds };
 }
 
 function invalidatePacksForClientPolicy(

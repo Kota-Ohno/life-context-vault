@@ -5,7 +5,7 @@
  * All handler props are forwarded verbatim; no approval/lifecycle/boundary logic changed.
  */
 
-import { useState, useEffect, useId } from "react";
+import { useState, useEffect, useId, useRef } from "react";
 import {
   Archive,
   Check,
@@ -118,17 +118,19 @@ function FieldInput({
   value,
   onChange,
   placeholder,
+  inputRef,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  inputRef?: React.Ref<HTMLInputElement>;
 }) {
   const id = useId();
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
-      <input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <input ref={inputRef} id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
     </div>
   );
 }
@@ -168,7 +170,6 @@ export interface IngestViewProps {
   reject: (candidate: MemoryCandidate) => void;
   archive: (candidate: MemoryCandidate) => void;
   markSensitive: (candidate: MemoryCandidate) => void;
-  goHome: () => void;
   goConnections: () => void;
 
   /* ── Sources ── */
@@ -179,7 +180,7 @@ export interface IngestViewProps {
   setManualTitle: (value: string) => void;
   setManualBody: (value: string) => void;
   addManualSource: () => void;
-  handleFileUpload: (file: File) => void;
+  handleFileUpload: (file: File) => void | Promise<void>;
   ocrExtractionAvailable: boolean;
   ocrProviderLabel: string | null;
   legacyOfficeConversionAvailable: boolean;
@@ -206,7 +207,6 @@ export function IngestView({
   reject,
   archive,
   markSensitive,
-  goHome,
   goConnections,
   sources,
   contextPacks,
@@ -230,8 +230,44 @@ export function IngestView({
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [batchApproving, setBatchApproving] = useState(false);
+  // Which candidates have their full same-domain supersede list expanded.
+  const [expandedSupersede, setExpandedSupersede] = useState<ReadonlySet<string>>(new Set());
+  const manualTitleRef = useRef<HTMLInputElement>(null);
 
   const eligibleCandidates = candidates.filter(isBatchEligible);
+
+  // Empty-state CTAs route to the on-page manual-add form instead of leaving for
+  // Home (which only sent the user straight back to this view — a round-trip).
+  function focusManualForm() {
+    manualTitleRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    manualTitleRef.current?.focus({ preventScroll: true });
+  }
+
+  function toggleSupersedeExpanded(candidateId: string) {
+    setExpandedSupersede((prev) => {
+      const next = new Set(prev);
+      if (next.has(candidateId)) {
+        next.delete(candidateId);
+      } else {
+        next.add(candidateId);
+      }
+      return next;
+    });
+  }
+
+  // Upload N files sequentially with per-file error isolation: one failed file
+  // must not abort the rest, and sequential keeps per-file feedback + avoids
+  // native save contention.
+  async function uploadFiles(files: FileList | File[]) {
+    for (const file of Array.from(files)) {
+      try {
+        await handleFileUpload(file);
+      } catch {
+        // handleFileUpload surfaces its own feedback; keep going for remaining files.
+      }
+    }
+  }
 
   function toggleSelectionMode() {
     setSelectionMode((on) => !on);
@@ -263,9 +299,14 @@ export function IngestView({
     if (chosen.length === 0) return;
     const ok = window.confirm(`${chosen.length}件の記憶を承認します。よろしいですか？`);
     if (!ok) return;
-    await approveBatch(chosen);
-    setSelectedIds(new Set());
-    setSelectionMode(false);
+    setBatchApproving(true);
+    try {
+      await approveBatch(chosen);
+    } finally {
+      setBatchApproving(false);
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+    }
   }
 
   const pendingCount = candidates.length;
@@ -293,8 +334,8 @@ export function IngestView({
     event.preventDefault();
     event.stopPropagation();
     setIsDragActive(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) void handleFileUpload(file);
+    const files = event.dataTransfer.files;
+    if (files && files.length > 0) void uploadFiles(files);
   }
 
   return (
@@ -325,7 +366,12 @@ export function IngestView({
 
           {selectionMode && eligibleCandidates.length > 0 && (
             <>
-              <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleSelectAll}
+                disabled={batchApproving}
+              >
                 {selectedIds.size === eligibleCandidates.length ? (
                   <CheckSquare size={14} aria-hidden="true" />
                 ) : (
@@ -337,13 +383,16 @@ export function IngestView({
                 variant="primary"
                 size="sm"
                 onClick={() => void handleBatchApprove()}
-                disabled={selectedIds.size === 0}
+                disabled={selectedIds.size === 0 || batchApproving}
+                aria-busy={batchApproving}
                 aria-label={`選択した${selectedIds.size}件の記憶を承認`}
               >
                 <Check size={14} aria-hidden="true" />
-                {selectedIds.size > 0
-                  ? `${selectedIds.size}件を承認`
-                  : "記憶を選択してください"}
+                {batchApproving
+                  ? `${selectedIds.size}件を承認中…`
+                  : selectedIds.size > 0
+                    ? `${selectedIds.size}件を承認`
+                    : "記憶を選択してください"}
               </Button>
             </>
           )}
@@ -356,7 +405,7 @@ export function IngestView({
           body="取り込み元・メモ・AI会話から記憶を作ると、ここに届きます。"
           action={
             <div className="qv-ingest__empty-actions">
-              <Button variant="primary" onClick={goHome}>
+              <Button variant="primary" onClick={focusManualForm}>
                 <Sparkles size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>
@@ -375,16 +424,21 @@ export function IngestView({
         <div className="qv-ingest__candidate-list">
           {candidates.map((candidate) => {
             const conflictFactIds = candidate.conflictWithFactIds ?? [];
+            // Always offer every detected conflict — never truncate these.
             const conflictOptions = facts.filter((f) => conflictFactIds.includes(f.id));
-            const replacementOptions = [
-              ...conflictOptions,
-              ...facts.filter(
-                (f) =>
-                  f.domain === candidate.domain &&
-                  f.status === "active" &&
-                  !conflictFactIds.includes(f.id)
-              ),
-            ].slice(0, 4);
+            const domainMatches = facts.filter(
+              (f) =>
+                f.domain === candidate.domain &&
+                f.status === "active" &&
+                !conflictFactIds.includes(f.id)
+            );
+            const supersedeExpanded = expandedSupersede.has(candidate.id);
+            const SUPERSEDE_DOMAIN_PREVIEW = 4;
+            const shownDomainMatches = supersedeExpanded
+              ? domainMatches
+              : domainMatches.slice(0, SUPERSEDE_DOMAIN_PREVIEW);
+            const hiddenDomainCount = domainMatches.length - shownDomainMatches.length;
+            const replacementOptions = [...conflictOptions, ...shownDomainMatches];
             const selectedSupersedes = supersedes[candidate.id] ?? [];
 
             const eligible = isBatchEligible(candidate);
@@ -452,7 +506,7 @@ export function IngestView({
                       <RefreshCw size={13} aria-hidden="true" />
                       <span>古い記憶を置き換える場合だけ選択します。置き換えた記憶はAIに渡らなくなり、履歴に残ります。</span>
                     </div>
-                    <div className="qv-ingest__supersede-options">
+                    <div className="qv-ingest__supersede-options" id={`supersede-options-${candidate.id}`}>
                       {replacementOptions.map((fact) => (
                         <label className="qv-ingest__supersede-option" key={fact.id}>
                           <input
@@ -467,6 +521,19 @@ export function IngestView({
                         </label>
                       ))}
                     </div>
+                    {(hiddenDomainCount > 0 || supersedeExpanded) && (
+                      <Button
+                        variant="quiet"
+                        size="sm"
+                        onClick={() => toggleSupersedeExpanded(candidate.id)}
+                        aria-expanded={supersedeExpanded}
+                        aria-controls={`supersede-options-${candidate.id}`}
+                      >
+                        {supersedeExpanded
+                          ? "置き換え候補を閉じる"
+                          : `同じ領域の記憶をもっと見る（あと${hiddenDomainCount}件）`}
+                      </Button>
+                    )}
                   </div>
                 )}
 
@@ -524,7 +591,7 @@ export function IngestView({
             <span>ここで保存されるのは取り込み元と未承認の記憶です。AIへ渡るのは承認した記憶だけです。</span>
           </div>
           <div className="qv-ingest__form-stack">
-            <FieldInput label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" />
+            <FieldInput label="タイトル" value={manualTitle} onChange={setManualTitle} placeholder="例: 引っ越しの相談メモ" inputRef={manualTitleRef} />
             <FieldTextarea label="本文" value={manualBody} onChange={setManualBody} placeholder="生活背景として覚えておくと役立つ内容" />
             <Button variant="primary" onClick={addManualSource}>
               <Sparkles size={15} aria-hidden="true" />
@@ -547,14 +614,15 @@ export function IngestView({
             <Upload size={22} aria-hidden="true" />
             <strong>{isDragActive ? "ここにドロップ" : "ファイルを選択 / ドロップ"}</strong>
             <span className="qv-ingest__drop-label">{sourceLabel}</span>
-            <small>1ファイルずつ追加します</small>
+            <small>複数ファイルをまとめて追加できます</small>
             <input
               aria-label="文書ファイルを選択"
               accept={sourceAccept}
               type="file"
+              multiple
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void handleFileUpload(file);
+                const files = event.target.files;
+                if (files && files.length > 0) void uploadFiles(files);
                 event.currentTarget.value = "";
               }}
             />
@@ -607,7 +675,7 @@ export function IngestView({
           body="メモや文書を追加すると、ここに記録が残ります。"
           action={
             <div className="qv-ingest__empty-actions">
-              <Button variant="ghost" onClick={goHome}>
+              <Button variant="ghost" onClick={focusManualForm}>
                 <FileText size={15} aria-hidden="true" />
                 背景情報を追加
               </Button>

@@ -89,9 +89,16 @@ export function ConnectView({
           )}
 
           {claudeInstallResult ? (
-            <p className="qv-connect-card__result">
-              設定パス: {claudeInstallResult.configPath}
-            </p>
+            <div className="qv-connect-card__result">
+              <p>設定パス: {claudeInstallResult.configPath}</p>
+              <p className="qv-connect-card__note">
+                次のステップ: Claude Desktopを再起動して質問すると、要求が「AI要求」に届きます。
+              </p>
+              <Button variant="primary" size="md" onClick={goRequests}>
+                <MessageSquare size={14} aria-hidden="true" />
+                AI要求を見る
+              </Button>
+            </div>
           ) : null}
 
           {/* Manual config — last resort fallback */}
@@ -113,7 +120,7 @@ export function ConnectView({
           </div>
 
           <p className="qv-connect-card__desc">
-            MCPを使わず、RequestsでAIに渡す内容（記憶）を作成してコピーし、ChatGPTやClaudeなど任意のAIに貼り付けられます。設定は不要です。
+            MCPを使わず、AI要求でAIに渡す内容（記憶）を作成してコピーし、ChatGPTやClaudeなど任意のAIに貼り付けられます。設定は不要です。
           </p>
 
           <div className="qv-connect-card__actions">
