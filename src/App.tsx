@@ -1856,7 +1856,6 @@ export function App() {
             markSensitive={(candidate) =>
               void reviewCandidateStatus(candidate, "blocked_sensitive", "記憶を要確認扱いにしました。")
             }
-            goHome={() => setView("home")}
             goConnections={() => setView("connections")}
             sources={state.sources}
             contextPacks={state.contextPacks}
