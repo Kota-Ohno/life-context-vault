@@ -2024,6 +2024,7 @@ export function App() {
             currentPack={currentPack}
             facts={state.facts}
             approvePackForAi={approvePackForAi}
+            setStandingDelivery={setStandingDelivery}
             copyPackForAi={copyPackForAi}
             generateAnswer={generateAnswer}
             denyActiveRequest={denyActiveRequest}
@@ -2100,6 +2101,7 @@ function ContextRequestsView({
   currentPack,
   facts,
   approvePackForAi,
+  setStandingDelivery,
   copyPackForAi,
   generateAnswer,
   denyActiveRequest,
@@ -2120,6 +2122,7 @@ function ContextRequestsView({
   currentPack: ContextPack | null;
   facts: ApprovedFact[];
   approvePackForAi: (pack: ContextPack) => void;
+  setStandingDelivery: (clientId: string, enabled: boolean) => void;
   copyPackForAi: (pack: ContextPack) => void;
   generateAnswer: (pack: ContextPack) => void;
   denyActiveRequest: () => void;
@@ -2308,6 +2311,21 @@ function ContextRequestsView({
                 <CheckCircle2 size={16} aria-hidden="true" />
                 {currentDeliveryState?.requiresApproval ? "この内容だけAIへ許可" : "この内容だけAIへ返す"}
               </button>
+              {currentDeliveryState?.requiresApproval && (
+                <button
+                  className="primary-button"
+                  disabled={requestClosed || aiReady}
+                  onClick={() => {
+                    setStandingDelivery(requestClientId, true);
+                    approvePackForAi(currentPack);
+                  }}
+                  type="button"
+                  title="このAIを信頼すると、以後この感度までは確認なしで自動的に渡します（高感度はその都度確認）。"
+                >
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  このAIを信頼（以後自動）
+                </button>
+              )}
               <button
                 className="secondary-button"
                 disabled={requestClosed}
