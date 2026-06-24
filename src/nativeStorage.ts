@@ -25,6 +25,29 @@ export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 }
 
+/**
+ * The single Tauri IPC entry point. Returns null outside the Tauri runtime
+ * (browser preview / tests) — this silent-null contract is centralized HERE so
+ * every command shares it and callers handle a single, well-known sentinel.
+ */
+async function invokeNative<T>(
+  command: string,
+  args?: Record<string, unknown>
+): Promise<T | null> {
+  if (!isTauriRuntime()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+}
+
+/** Convert any core payload that carries a JSON `payload` string into the
+ * UI-facing shape with a parsed, normalized `state`. */
+function withState<P extends { payload: string }>(
+  result: P
+): Omit<P, "payload"> & { state: VaultState } {
+  const { payload, ...rest } = result;
+  return { ...rest, state: normalizeVaultState(JSON.parse(payload)) };
+}
+
 export interface NativeVaultSnapshot {
   state: VaultState | null;
   updatedAt: string | null;
@@ -76,9 +99,8 @@ interface SaveNativeVaultPayload {
 }
 
 export async function loadNativeVaultSnapshot(): Promise<NativeVaultSnapshot | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const snapshot = await invoke<NativeVaultSnapshotPayload>("load_vault_state_snapshot");
+  const snapshot = await invokeNative<NativeVaultSnapshotPayload>("load_vault_state_snapshot");
+  if (!snapshot) return null;
   return {
     state: snapshot.payload ? normalizeVaultState(JSON.parse(snapshot.payload)) : null,
     updatedAt: snapshot.updatedAt
@@ -89,12 +111,11 @@ export async function saveNativeVault(
   state: VaultState,
   expectedUpdatedAt: string | null
 ): Promise<SaveNativeVaultResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<SaveNativeVaultPayload>("save_vault_state", {
+  const result = await invokeNative<SaveNativeVaultPayload>("save_vault_state", {
     payload: JSON.stringify(state),
     expectedUpdatedAt
   });
+  if (!result) return null;
   return {
     updatedAt: result.updatedAt,
     conflict: result.conflict,
@@ -106,9 +127,7 @@ export async function saveNativeVault(
 }
 
 export async function getNativeVaultPath(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("vault_storage_path");
+  return invokeNative<string>("vault_storage_path");
 }
 
 /**
@@ -118,9 +137,7 @@ export async function getNativeVaultPath(): Promise<string | null> {
  * preview (which has no native vault).
  */
 export async function exportNativeEncryptedBackup(passphrase: string): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("export_native_encrypted_backup", { passphrase });
+  return invokeNative<string>("export_native_encrypted_backup", { passphrase });
 }
 
 /**
@@ -133,10 +150,11 @@ export async function importNativeEncryptedBackup(
   backupText: string,
   passphrase: string
 ): Promise<VaultState | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const payload = await invoke<string>("import_native_encrypted_backup", { backupText, passphrase });
-  return normalizeVaultState(JSON.parse(payload));
+  const payload = await invokeNative<string>("import_native_encrypted_backup", {
+    backupText,
+    passphrase
+  });
+  return payload ? normalizeVaultState(JSON.parse(payload)) : null;
 }
 
 export async function extractNativeDocumentText(input: {
@@ -150,27 +168,25 @@ export async function extractNativeDocumentText(input: {
   legacyOfficeArgs?: string | null;
   legacyOfficeTimeoutSeconds?: number | null;
 }): Promise<NativeDocumentExtractionResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<NativeDocumentExtractionResult>("extract_native_document_text", input);
+  return invokeNative<NativeDocumentExtractionResult>("extract_native_document_text", input);
 }
 
 export async function getNativeDocumentExtractionCapabilities(): Promise<NativeDocumentExtractionCapabilities | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<NativeDocumentExtractionCapabilities>("native_document_extraction_capabilities");
+  return invokeNative<NativeDocumentExtractionCapabilities>(
+    "native_document_extraction_capabilities"
+  );
 }
 
 export async function detectNativeOcrProviderCandidates(): Promise<NativeOcrProviderCandidate[]> {
-  if (!isTauriRuntime()) return [];
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<NativeOcrProviderCandidate[]>("detect_ocr_provider_candidates");
+  return (await invokeNative<NativeOcrProviderCandidate[]>("detect_ocr_provider_candidates")) ?? [];
 }
 
 export async function detectNativeLegacyOfficeProviderCandidates(): Promise<NativeLegacyOfficeProviderCandidate[]> {
-  if (!isTauriRuntime()) return [];
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<NativeLegacyOfficeProviderCandidate[]>("detect_legacy_office_provider_candidates");
+  return (
+    (await invokeNative<NativeLegacyOfficeProviderCandidate[]>(
+      "detect_legacy_office_provider_candidates"
+    )) ?? []
+  );
 }
 
 export interface ClaudeDesktopConfigInstallResult {
@@ -231,20 +247,6 @@ interface NativeCandidateReviewPayload {
   generatedBy: "native_vault_core";
 }
 
-interface NativePassiveCapturePayload {
-  payload: string;
-  updatedAt: string | null;
-  accepted: boolean;
-  status: "capture_paused" | "site_not_allowed" | "captured" | "candidate_generated" | "ignored";
-  message: string;
-  eventId: string | null;
-  sourceId: string | null;
-  candidateIds: string[];
-  detectedSensitivity: SensitivityTier;
-  retentionUntil: string | null;
-  generatedBy: "native_vault_core";
-}
-
 interface NativeVaultSettingsUpdatePayload {
   payload: string;
   updatedAt: string | null;
@@ -300,101 +302,44 @@ interface NativeFactMetadataPayload {
   generatedBy: "native_vault_core";
 }
 
-export interface NativeContextPackBuildResult {
+// The UI-facing *Result shapes are the payload shapes with the JSON `payload`
+// string swapped for a parsed `state`. Deriving them keeps the field lists in
+// one place — adding a field to a payload now forces the mapping to follow (tsc
+// errors otherwise) instead of silently drifting.
+export type NativeContextPackBuildResult = Omit<NativeContextPackBuildPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  requestId: string;
-  packId: string | null;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeContextPackMutationResult {
+};
+export type NativeContextPackMutationResult = Omit<NativeContextPackMutationPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  requestId: string | null;
-  packId: string | null;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeSourceIngestResult {
+};
+export type NativeSourceIngestResult = Omit<NativeSourceIngestPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  sourceId: string;
-  candidateIds: string[];
-  detectedSensitivity: SensitivityTier;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeCandidateReviewResult {
+};
+export type NativeCandidateReviewResult = Omit<NativeCandidateReviewPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  candidateId: string;
-  status: CandidateStatus;
-  factId: string | null;
-  supersededFactIds: string[];
-  invalidatedPackCount: number;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeVaultSettingsUpdateResult {
+};
+export type NativeVaultSettingsUpdateResult = Omit<NativeVaultSettingsUpdatePayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeSourceLifecycleResult {
+};
+export type NativeSourceLifecycleResult = Omit<NativeSourceLifecyclePayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  sourceId: string;
-  action: SourceLifecycleAction;
-  affectedCandidateCount: number;
-  affectedFactCount: number;
-  invalidatedPackCount: number;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeSourceMetadataResult {
+};
+export type NativeSourceMetadataResult = Omit<NativeSourceMetadataPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  sourceId: string;
-  invalidatedPackCount: number;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeSourceBodyResult {
+};
+export type NativeSourceBodyResult = Omit<NativeSourceBodyPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  sourceId: string;
-  candidateIds: string[];
-  affectedCandidateCount: number;
-  affectedFactCount: number;
-  invalidatedPackCount: number;
-  detectedSensitivity: SensitivityTier;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeFactLifecycleResult {
+};
+export type NativeFactLifecycleResult = Omit<NativeFactLifecyclePayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  factId: string;
-  action: FactLifecycleAction;
-  status: ApprovedFact["status"];
-  invalidatedPackCount: number;
-  generatedBy: "native_vault_core";
-}
-
-export interface NativeFactMetadataResult {
+};
+export type NativeFactMetadataResult = Omit<NativeFactMetadataPayload, "payload"> & {
   state: VaultState;
-  updatedAt: string | null;
-  factId: string;
-  invalidatedPackCount: number;
-  generatedBy: "native_vault_core";
-}
+};
 
 export async function writeNativeRecoveryEnvelope(recoveryKey: string): Promise<boolean | null> {
   if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke<void>("write_recovery_envelope", { recoveryKey });
+  await invokeNative<void>("write_recovery_envelope", { recoveryKey });
   return true;
 }
 
@@ -402,23 +347,18 @@ export async function writeNativeRecoveryEnvelope(recoveryKey: string): Promise<
  * (after a Keychain loss). Throws on a wrong recovery key. */
 export async function recoverVaultWithRecoveryKey(recoveryKey: string): Promise<boolean | null> {
   if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke<void>("recover_vault_with_recovery_key", { recoveryKey });
+  await invokeNative<void>("recover_vault_with_recovery_key", { recoveryKey });
   return true;
 }
 
 /** Write a vault-key-derived backup now to the default Backups directory. */
 export async function runLocalBackupNow(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("run_local_backup_now");
+  return invokeNative<string>("run_local_backup_now");
 }
 
 /** Read runtime preferences (OCR/Office/autoStart) persisted in the vault. */
 export async function getNativeRuntimePreferences(): Promise<Partial<RuntimePreferences> | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<Partial<RuntimePreferences>>("get_native_runtime_preferences");
+  return invokeNative<Partial<RuntimePreferences>>("get_native_runtime_preferences");
 }
 
 /** Persist runtime preferences into the vault (so they survive reinstall and
@@ -427,8 +367,7 @@ export async function saveNativeRuntimePreferences(
   preferences: RuntimePreferences
 ): Promise<boolean | null> {
   if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke<void>("save_native_runtime_preferences", { prefs: preferences });
+  await invokeNative<void>("save_native_runtime_preferences", { prefs: preferences });
   return true;
 }
 
@@ -441,40 +380,28 @@ export async function saveNativeRuntimePreferences(
 export async function setNativeDeliveryNotificationsEnabled(
   enabled: boolean
 ): Promise<boolean | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<boolean>("set_delivery_notifications_enabled", { enabled });
+  return invokeNative<boolean>("set_delivery_notifications_enabled", { enabled });
 }
 
 /** Install the local Claude Desktop MCP config entry for lcv-mcp. */
 export async function installClaudeDesktopConfig(): Promise<ClaudeDesktopConfigInstallResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<ClaudeDesktopConfigInstallResult>("install_claude_desktop_config");
+  return invokeNative<ClaudeDesktopConfigInstallResult>("install_claude_desktop_config");
 }
 
 export async function getClaudeDesktopConfigTemplate(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("claude_desktop_config_template");
+  return invokeNative<string>("claude_desktop_config_template");
 }
 
 export async function getLoginItemStatus(): Promise<LoginItemStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<LoginItemStatus>("login_item_status");
+  return invokeNative<LoginItemStatus>("login_item_status");
 }
 
 export async function installLoginItem(): Promise<LoginItemStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<LoginItemStatus>("install_login_item");
+  return invokeNative<LoginItemStatus>("install_login_item");
 }
 
 export async function uninstallLoginItem(): Promise<LoginItemStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<LoginItemStatus>("uninstall_login_item");
+  return invokeNative<LoginItemStatus>("uninstall_login_item");
 }
 
 export async function searchNativeFacts(options: {
@@ -483,9 +410,7 @@ export async function searchNativeFacts(options: {
   sensitivity: SensitivityTier | "all";
   limit?: number;
 }): Promise<NativeFactSearchResult[] | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<NativeFactSearchResult[]>("search_vault_facts", {
+  return invokeNative<NativeFactSearchResult[]>("search_vault_facts", {
     query: options.query,
     domain: options.domain === "all" ? null : options.domain,
     sensitivity: options.sensitivity === "all" ? null : options.sensitivity,
@@ -501,9 +426,7 @@ export async function createNativeContextPackRequest(input: {
   sensitivityCeiling?: SensitivityTier;
   approvalMode?: "auto_low_risk" | "always_review" | "explicit_sensitive";
 }): Promise<NativeContextPackBuildResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeContextPackBuildPayload>(
+  const result = await invokeNative<NativeContextPackBuildPayload>(
     "create_native_context_pack_request",
     {
       clientId: input.clientId,
@@ -514,13 +437,7 @@ export async function createNativeContextPackRequest(input: {
       approvalMode: input.approvalMode ?? null
     }
   );
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    requestId: result.requestId,
-    packId: result.packId,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeContextPackItemVisibility(input: {
@@ -528,9 +445,7 @@ export async function updateNativeContextPackItemVisibility(input: {
   factId: string;
   included: boolean;
 }): Promise<NativeContextPackMutationResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeContextPackMutationPayload>(
+  const result = await invokeNative<NativeContextPackMutationPayload>(
     "update_native_context_pack_item_visibility",
     {
       packId: input.packId,
@@ -538,45 +453,27 @@ export async function updateNativeContextPackItemVisibility(input: {
       included: input.included
     }
   );
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    requestId: result.requestId,
-    packId: result.packId,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
-export async function confirmNativeContextPack(packId: string): Promise<NativeContextPackMutationResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeContextPackMutationPayload>("confirm_native_context_pack", {
-    packId
-  });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    requestId: result.requestId,
-    packId: result.packId,
-    generatedBy: result.generatedBy
-  };
+export async function confirmNativeContextPack(
+  packId: string
+): Promise<NativeContextPackMutationResult | null> {
+  const result = await invokeNative<NativeContextPackMutationPayload>(
+    "confirm_native_context_pack",
+    { packId }
+  );
+  return result ? withState(result) : null;
 }
 
 export async function denyNativeContextPackRequest(
   requestId: string
 ): Promise<NativeContextPackMutationResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeContextPackMutationPayload>("deny_native_context_pack_request", {
-    requestId
-  });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    requestId: result.requestId,
-    packId: result.packId,
-    generatedBy: result.generatedBy
-  };
+  const result = await invokeNative<NativeContextPackMutationPayload>(
+    "deny_native_context_pack_request",
+    { requestId }
+  );
+  return result ? withState(result) : null;
 }
 
 export async function addNativeSourcePendingRuntime(input: {
@@ -584,21 +481,12 @@ export async function addNativeSourcePendingRuntime(input: {
   origin: SourceOrigin;
   title: string;
 }): Promise<NativeSourceIngestResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeSourceIngestPayload>("add_native_source_pending_runtime", {
+  const result = await invokeNative<NativeSourceIngestPayload>("add_native_source_pending_runtime", {
     kind: input.kind,
     origin: input.origin,
     title: input.title
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    sourceId: result.sourceId,
-    candidateIds: result.candidateIds,
-    detectedSensitivity: result.detectedSensitivity,
-    generatedBy: "native_vault_core"
-  };
+  return result ? withState(result) : null;
 }
 
 export async function addNativeSourceWithCandidates(input: {
@@ -607,22 +495,13 @@ export async function addNativeSourceWithCandidates(input: {
   title: string;
   body: string;
 }): Promise<NativeSourceIngestResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeSourceIngestPayload>("add_native_source_with_candidates", {
+  const result = await invokeNative<NativeSourceIngestPayload>("add_native_source_with_candidates", {
     kind: input.kind,
     origin: input.origin,
     title: input.title,
     body: input.body
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    sourceId: result.sourceId,
-    candidateIds: result.candidateIds,
-    detectedSensitivity: result.detectedSensitivity,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function approveNativeCandidate(input: {
@@ -630,45 +509,23 @@ export async function approveNativeCandidate(input: {
   editedText?: string;
   supersedeFactIds?: string[];
 }): Promise<NativeCandidateReviewResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeCandidateReviewPayload>("approve_native_candidate", {
+  const result = await invokeNative<NativeCandidateReviewPayload>("approve_native_candidate", {
     candidateId: input.candidateId,
     editedText: input.editedText ?? null,
     supersedeFactIds: input.supersedeFactIds ?? []
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    candidateId: result.candidateId,
-    status: result.status,
-    factId: result.factId,
-    supersededFactIds: result.supersededFactIds,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeCandidateStatus(input: {
   candidateId: string;
   status: CandidateStatus;
 }): Promise<NativeCandidateReviewResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeCandidateReviewPayload>("update_native_candidate_status", {
+  const result = await invokeNative<NativeCandidateReviewPayload>("update_native_candidate_status", {
     candidateId: input.candidateId,
     status: input.status
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    candidateId: result.candidateId,
-    status: result.status,
-    factId: result.factId,
-    supersededFactIds: result.supersededFactIds,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeAccessPolicy(input: {
@@ -678,133 +535,81 @@ export async function updateNativeAccessPolicy(input: {
   domainAllowlist?: LifeContextDomain[];
   passiveCaptureAllowed?: boolean;
 }): Promise<NativeVaultSettingsUpdateResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeVaultSettingsUpdatePayload>("update_native_access_policy", {
+  const result = await invokeNative<NativeVaultSettingsUpdatePayload>("update_native_access_policy", {
     clientId: input.clientId,
     sensitivityCeiling: input.sensitivityCeiling ?? null,
     requiresApprovalAbove: input.requiresApprovalAbove ?? null,
     domainAllowlist: input.domainAllowlist ?? null,
     passiveCaptureAllowed: input.passiveCaptureAllowed ?? null
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function setNativeConnectionStandingDelivery(input: {
   clientId: string;
   enabled: boolean;
 }): Promise<NativeVaultSettingsUpdateResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeVaultSettingsUpdatePayload>("set_connection_standing_delivery", {
-    clientId: input.clientId,
-    enabled: input.enabled
-  });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    generatedBy: result.generatedBy
-  };
+  const result = await invokeNative<NativeVaultSettingsUpdatePayload>(
+    "set_connection_standing_delivery",
+    {
+      clientId: input.clientId,
+      enabled: input.enabled
+    }
+  );
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeSourceLifecycle(input: {
   sourceId: string;
   action: SourceLifecycleAction;
 }): Promise<NativeSourceLifecycleResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeSourceLifecyclePayload>("update_native_source_lifecycle", {
+  const result = await invokeNative<NativeSourceLifecyclePayload>("update_native_source_lifecycle", {
     sourceId: input.sourceId,
     action: input.action
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    sourceId: result.sourceId,
-    action: result.action,
-    affectedCandidateCount: result.affectedCandidateCount,
-    affectedFactCount: result.affectedFactCount,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeSourceMetadata(
   sourceId: string,
   input: SourceMetadataUpdate
 ): Promise<NativeSourceMetadataResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeSourceMetadataPayload>("update_native_source_metadata", {
+  const result = await invokeNative<NativeSourceMetadataPayload>("update_native_source_metadata", {
     sourceId,
     title: input.title,
     defaultSensitivity: input.defaultSensitivity,
     promotedToLongTerm: input.promotedToLongTerm ?? null
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    sourceId: result.sourceId,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeSourceBody(
   sourceId: string,
   input: SourceBodyUpdate
 ): Promise<NativeSourceBodyResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeSourceBodyPayload>("update_native_source_body", {
+  const result = await invokeNative<NativeSourceBodyPayload>("update_native_source_body", {
     sourceId,
     body: input.body
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    sourceId: result.sourceId,
-    candidateIds: result.candidateIds,
-    affectedCandidateCount: result.affectedCandidateCount,
-    affectedFactCount: result.affectedFactCount,
-    invalidatedPackCount: result.invalidatedPackCount,
-    detectedSensitivity: result.detectedSensitivity,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeFactLifecycle(input: {
   factId: string;
   action: FactLifecycleAction;
 }): Promise<NativeFactLifecycleResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeFactLifecyclePayload>("update_native_fact_lifecycle", {
+  const result = await invokeNative<NativeFactLifecyclePayload>("update_native_fact_lifecycle", {
     factId: input.factId,
     action: input.action
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    factId: result.factId,
-    action: result.action,
-    status: result.status,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
 
 export async function updateNativeFactMetadata(
   factId: string,
   input: FactMetadataUpdate
 ): Promise<NativeFactMetadataResult | null> {
-  if (!isTauriRuntime()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const result = await invoke<NativeFactMetadataPayload>("update_native_fact_metadata", {
+  const result = await invokeNative<NativeFactMetadataPayload>("update_native_fact_metadata", {
     factId,
     factText: input.factText,
     domain: input.domain,
@@ -813,11 +618,5 @@ export async function updateNativeFactMetadata(
     validUntil: input.validUntil ?? null,
     dueDate: input.dueDate ?? null
   });
-  return {
-    state: normalizeVaultState(JSON.parse(result.payload)),
-    updatedAt: result.updatedAt,
-    factId: result.factId,
-    invalidatedPackCount: result.invalidatedPackCount,
-    generatedBy: result.generatedBy
-  };
+  return result ? withState(result) : null;
 }
