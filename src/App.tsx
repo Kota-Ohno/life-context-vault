@@ -615,6 +615,12 @@ export function App() {
     let cancelled = false;
 
     async function syncNativeExternalChanges() {
+      // While the native vault failed to load, the auto-save effect is blocked to
+      // protect recoverable data. Suspend external sync too: otherwise a later
+      // successful snapshot read would blindly setState over in-memory edits (no
+      // merge), discarding exactly the data the guard exists to protect — and
+      // contradict the "saves are stopped" banner.
+      if (nativeLoadFailedRef.current) return;
       try {
         const snapshot = await loadNativeVaultSnapshot();
         if (
