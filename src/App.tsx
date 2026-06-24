@@ -3569,7 +3569,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "未承認で止める",
-      value: `${reviewCandidateCount} candidates`,
+      value: `${reviewCandidateCount} 件の候補`,
       detail:
         reviewCandidateCount > 0
           ? "取り込みで保存するまで、記憶はAIの確定文脈に使いません。"
@@ -3578,7 +3578,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "確認/返却待ち",
-      value: `${actionableRequestCount} requests`,
+      value: `${actionableRequestCount} 件の要求`,
       detail:
         actionableRequestCount > 0
           ? "承認、返却、またはコピー操作までは記憶の内容を外部AIへ返しません。"
@@ -3587,7 +3587,7 @@ export function homeAiBoundarySections({
     },
     {
       label: "AIへ返せる記憶",
-      value: `${deliverablePackCount} ready`,
+      value: `${deliverablePackCount} 件`,
       detail:
         expiredPackCount > 0
           ? `${expiredPackCount}件の期限切れの記憶はAIへ返せません。`
@@ -3642,7 +3642,7 @@ export function contextPackBoundaryReceipt(
     {
       label: "AIに渡らない",
       tone: pack.excludedItems.length > 0 ? "attention" : "ready",
-      value: `${pack.excludedItems.length} exclusions`,
+      value: `${pack.excludedItems.length}件を除外`,
       detail: exclusionDetail
     },
     {
