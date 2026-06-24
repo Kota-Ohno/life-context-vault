@@ -748,7 +748,7 @@ function IngestSourceRow({
             />
             <div className="qv-ingest__trust-note">
               <RefreshCw size={13} aria-hidden="true" />
-              <span>保存すると未承認の記憶を作り直します。承認済みの記憶は再確認待ちになり、AIに渡した内容（記憶）は無効化されます。</span>
+              <span>保存すると未承認の記憶を作り直します。承認済みの記憶は再確認待ちになり、AIに送った内容は無効化されます。</span>
             </div>
           </div>
         ) : draft ? (
@@ -815,7 +815,7 @@ function IngestSourceRow({
                 <strong>この取り込み元の原文を消去します</strong>
                 <span>
                   本文は戻せません。確認待ちの記憶 {linkedCandidateCount}件、関連する記憶 {linkedFactCount}件、
-                  AIに渡した内容（記憶）{linkedPackCount}件に影響します。
+                  AIに送った内容{linkedPackCount}件に影響します。
                 </span>
                 <Button variant="quiet" size="sm" onClick={() => setConfirmBodyPurge(false)}>
                   <X size={13} aria-hidden="true" />
