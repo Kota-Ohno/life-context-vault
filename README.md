@@ -66,7 +66,9 @@ place.
   an opt-in "trust this AI" mode for lower-friction delivery of low-sensitivity
   context.
 - **Product-grade retrieval.** Normalized SQLite projection tables plus native
-  FTS, benchmarked at 100k facts / 500k chunks.
+  FTS — benchmarked at 100k facts / 500k chunks with p95 latency around 160 ms
+  for full-text search and 65 ms for Context Pack build (dev laptop;
+  `npm run retrieval:bench`).
 - **Open standards.** A local MCP stdio sidecar exposes a tiny, controlled tool
   surface to any same-device MCP client.
 
