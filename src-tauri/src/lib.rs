@@ -10735,6 +10735,22 @@ mod tests {
     ];
     let mut pack_samples = Vec::new();
     let mut vault = empty_vault_json();
+    // Grant the benchmark client a "sensitive" ceiling. The default per-client
+    // policy caps at "public" (conservative), which would exclude the personal/
+    // private/sensitive tiers the corpus is seeded with — this benchmark measures
+    // retrieval at scale, not policy filtering, so lift the cap explicitly.
+    ensure_access_policy_for_client(&mut vault, "conn_benchmark");
+    if let Some(policy) = vault
+      .get_mut("accessPolicies")
+      .and_then(Value::as_array_mut)
+      .and_then(|policies| {
+        policies
+          .iter_mut()
+          .find(|p| str_field(p, "clientId") == "conn_benchmark")
+      })
+    {
+      policy["sensitivityCeiling"] = Value::String("sensitive".to_string());
+    }
     for _ in 0..3 {
       for task in pack_tasks {
         let started = Instant::now();
