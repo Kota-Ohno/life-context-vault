@@ -2,6 +2,8 @@
 
 **Give your AI the context to actually help you — without handing it your whole life.**
 
+**[→ ランディングページ / Landing page](https://kota-ohno.github.io/life-context-vault/)**
+
 Life Context Vault is a local-first desktop app that keeps a private, encrypted
 vault of your personal life context and lets AI clients (Claude Desktop, ChatGPT,
 Codex, …) request small, **reviewed Context Packs** — never the raw vault, never
