@@ -4,12 +4,9 @@
   macOS entitlements for the signed/notarized Life Context Vault build.
 
   Hardened-runtime compatible. The app needs:
-    - network client: it connects to the managed MCP relay and AI providers.
-    - network server: the optional local MCP relay binds a loopback port.
     - JIT / unsigned-executable-memory / disable-library-validation: required by
-      the Tauri/WebKit webview, and because the four sidecar binaries
-      (lcv-mcp/lcv-relay/lcv-agent/lcv-capture-host) are signed as separate
-      Mach-O images embedded as resources.
+      the Tauri/WebKit webview, and because the sidecar binary (lcv-mcp) is
+      signed as a separate Mach-O image embedded as a resource.
 
   Keychain access uses the `security` CLI against the user login keychain, so no
   keychain-access-groups entitlement is required. Revisit if the app moves to
@@ -22,10 +19,6 @@
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
   <key>com.apple.security.cs.disable-library-validation</key>
-  <true/>
-  <key>com.apple.security.network.client</key>
-  <true/>
-  <key>com.apple.security.network.server</key>
   <true/>
 </dict>
 </plist>

@@ -35,13 +35,18 @@ Open the printed local URL only when you want that preview mode.
 
 ## Verify
 
+The release gate — exactly what CI runs (frontend tests, type-check + build,
+`cargo fmt --check`, `cargo test`, `cargo build --bins`, whitespace check):
+
 ```bash
-npm test
-npm run build
-npm run sidecars:prepare
-npm run mcp:build
-npm run tauri:build
-npm run tauri:bundle
+npm run product:check
+```
+
+To also exercise the bundled sidecar integration and the large-retrieval
+benchmark (slower):
+
+```bash
+npm run product:check:full
 ```
 
 ## Current Product Slice

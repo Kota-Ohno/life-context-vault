@@ -60,7 +60,7 @@ to main/master, plus a weekly cron. Commits/pushes are NOT automated — do them
 ## Architecture
 
 **One Rust crate → 2 binaries.** `src-tauri/` is a single crate that builds the Tauri app
-plus four sidecar binaries. **All sidecars call the same `*_at_path` core functions in
+plus the `lcv-mcp` sidecar. **Both call the same `*_at_path` core functions in
 `lib.rs`**, so the security boundary is enforced in exactly one place regardless of transport.
 
 - `life-context-vault` (app) — Tauri shell, ~35 IPC commands, tray/login-item, AI access supervisor
@@ -125,7 +125,7 @@ Pack invalidation is automatic and cascading: any Source/Fact lifecycle change c
 | `src/App.tsx` | Single-file UI (~8k lines, no router) |
 | `src-tauri/src/lib.rs` | Rust Vault Core: schema, all IPC commands, all `*_at_path` shared fns |
 | `src-tauri/src/vault_crypto.rs` | SQLCipher open path, key resolution, Keychain, migration |
-| `src-tauri/src/bin/lcv-*.rs` | The four sidecar binaries (thin transports) |
+| `src-tauri/src/bin/lcv-mcp.rs` | The `lcv-mcp` sidecar (thin stdio transport) |
 | `scripts/prepare-tauri-sidecars.mjs` | Stages sidecars for bundling (build-order critical) |
 | `scripts/run-product-release-checks.mjs` | The `product:check` gate |
 
@@ -163,7 +163,7 @@ Tests inject `LCV_VAULT_DB_KEY=0123456789abcdef0123456789abcdef` via `use_test_v
    Tauri, so encrypted persistence and MCP are all inert. Use `npm run tauri:dev` for any
    feature work.
 2. **Sidecar build ordering matters.** `tauri:build`/`tauri:bundle` run
-   `prepare-tauri-sidecars.mjs`, which builds all 4 binaries in release and copies them to
+   `prepare-tauri-sidecars.mjs`, which builds the `lcv-mcp` sidecar in release and copies it to
    `src-tauri/binaries/<host-triple>/` with a triple suffix (Tauri `externalBin` requirement).
    That dir is gitignored and always regenerated — a manual `cargo build` without staging will
    bundle stale/missing sidecars.

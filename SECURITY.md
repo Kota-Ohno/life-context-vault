@@ -9,9 +9,9 @@ the device* — as the core security property of the product.
 
 Please report security issues **privately** — do not open a public issue.
 
-- **Email:** _(set `SECURITY_CONTACT` before public release)_ — replace this
-  address with the maintainer's security mailbox.
-- **PGP:** _(publish a key and fingerprint here before public release)_.
+Use **GitHub Private Vulnerability Reporting**: open the repository's
+**Security** tab and choose **Report a vulnerability**. This opens a private
+advisory visible only to the maintainers.
 
 Include:
 - A description of the issue and its impact.
@@ -32,8 +32,10 @@ mitigation within **90 days**, coordinated with you on disclosure timing.
   short-lived, user-confirmed Context Pack that is **re-validated against the
   current access policy at retrieval time**.
 - `secret_never_send` facts can never become approved or appear in any pack.
-- The MCP/relay path always queues packs as `pending_user_confirmation`; the AI
-  client receives nothing until the user approves it in the Control Center.
+- The local MCP path queues packs as `pending_user_confirmation` unless the user
+  has explicitly granted a connection standing delivery; the AI client receives
+  nothing until the policy is satisfied and (for reviewed packs) the user
+  approves it in the Control Center.
 - Encrypted backups (`.lcvbak`) contain the full vault including raw sources;
   the backup passphrase is as sensitive as the vault key.
 
@@ -43,21 +45,16 @@ mitigation within **90 days**, coordinated with you on disclosure timing.
   mean the vault cannot be recovered. Keep an encrypted backup.
 - A remote AI provider that receives an approved Context Pack can read its
   contents. Review packs before confirming.
-- The hosted relay (when used) handles only request/pack **metadata**, never
-  vault data, and is a separate trust surface; see
-  `docs/relay-public-exposure.md` (P0-F).
 
 ## Hardened configuration defaults
 
-- The managed/HTTP MCP relay refuses non-loopback binds without explicit
-  allowed-origins and tenant isolation, refuses static bearer tokens, and
-  validates CIMD metadata-fetch targets (rejects localhost/non-public IPs).
+- AI access is local-only: the single sidecar (`lcv-mcp`) speaks MCP over stdio
+  to a same-device client. The product makes no network egress of its own.
 - Tauri webview enforces a Content-Security-Policy that blocks remote scripts
   and connections (`src-tauri/tauri.conf.json`).
 
 ## Scope
 
-This policy covers the Life Context Vault desktop app and its sidecar binaries
-(`lcv-mcp`, `lcv-relay`, `lcv-agent`, `lcv-capture-host`). Out of scope: the
-user's chosen AI providers, the OS, and third-party document runtimes
-(Tesseract/LibreOffice) invoked for ingestion.
+This policy covers the Life Context Vault desktop app and its sidecar binary
+(`lcv-mcp`). Out of scope: the user's chosen AI providers, the OS, and
+third-party document runtimes (Tesseract/LibreOffice) invoked for ingestion.
