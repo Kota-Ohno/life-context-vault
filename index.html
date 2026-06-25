@@ -183,7 +183,7 @@
       <ul class="feature-list">
         <li><b>ローカルファースト＆暗号化。</b>状態はSQLCipher暗号化SQLiteに保存。鍵はOSの資格情報ストア（macOS Keychain）。製品自身のネットワーク送信はゼロ。</li>
         <li><b>感度ティアと接続ごとのポリシー。</b>記憶は public 〜 secret_never_send に階層化。接続ごとに上限・ドメイン許可・「このAIを信頼」モード。</li>
-        <li><b>製品級の検索。</b>正規化SQLite射影テーブル＋ネイティブFTS。10万ファクト/50万チャンクでベンチ済み。</li>
+        <li><b>製品級の検索。</b>正規化SQLite射影テーブル＋ネイティブFTS。10万ファクト/50万チャンクで、全文検索 p95 ≈160ms・Context Pack構築 p95 ≈65ms（開発機実測）。</li>
         <li><b>開かれた標準。</b>ローカルMCP stdio サイドカーが、同一端末のMCPクライアントに最小限のツール面を公開。</li>
         <li><b>すべて監査・取消可能。</b>取り込み元・候補・要求・Pack・配信は監査台帳に。Packは10分で失効し、ポリシー強化や記憶の編集/非表示は遡って無効化。</li>
         <li><b>Claude Desktop 連携。</b>「Claude設定へ追加」ボタンで <code>life-context-vault</code> MCPサーバーを設定にマージ（既存設定はバックアップ）。</li>
