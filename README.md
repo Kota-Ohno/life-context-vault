@@ -10,6 +10,8 @@ your source documents, never anything you haven't approved.
 The trust boundary *is* the product. Everything else is built to make that
 boundary real, visible, and enforced in code.
 
+![Life Context Vault — every disclosure is reviewed, auditable, and revocable](docs/assets/demo.gif)
+
 ## Why it exists
 
 Useful AI needs context about you. The usual ways to give it that context are
