@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Life Context Vault — AIに、人生を渡さずに文脈を渡す</title>
+<meta name="description" content="ローカルファーストで暗号化された個人の文脈の保管庫。AIには「確認済みのContext Pack」だけを渡し、生のVaultは決して渡さない。トラスト境界こそがプロダクトです。" />
+<meta property="og:title" content="Life Context Vault" />
+<meta property="og:description" content="AIに、人生を渡さずに文脈を渡す。ローカルファースト・暗号化・確認済みのContext Packだけを共有。" />
+<meta property="og:type" content="website" />
+<style>
+  :root {
+    --bg: #0c1110;
+    --bg-soft: #121917;
+    --panel: #161e1c;
+    --hairline: #243029;
+    --ink: #eef3f0;
+    --ink-soft: #b6c4bd;
+    --ink-faint: #7d8d86;
+    --pine: #6fae8f;
+    --pine-strong: #8fd0ad;
+    --brass: #c8a96a;
+    --radius: 14px;
+    --maxw: 1080px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 700px at 70% -200px, #16221d 0%, var(--bg) 60%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Segoe UI", sans-serif;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--pine-strong); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+  .display { font-family: "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; }
+
+  header.nav { padding: 22px 0; border-bottom: 1px solid var(--hairline); position: sticky; top: 0; backdrop-filter: blur(8px); background: rgba(12,17,16,.72); z-index: 10; }
+  .nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .brand .mark { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--pine), var(--brass)); display: grid; place-items: center; color: #0c1110; font-weight: 800; }
+  .brand small { color: var(--ink-faint); font-weight: 400; }
+  .nav-links { display: flex; gap: 18px; align-items: center; font-size: 14px; color: var(--ink-soft); }
+
+  .hero { padding: 84px 0 40px; }
+  .eyebrow { color: var(--brass); letter-spacing: .12em; font-size: 13px; text-transform: uppercase; margin: 0 0 14px; }
+  h1.title { font-size: clamp(34px, 5vw, 56px); line-height: 1.18; margin: 0 0 20px; letter-spacing: .01em; }
+  h1 .accent { color: var(--pine-strong); }
+  .lede { font-size: clamp(17px, 2.1vw, 20px); color: var(--ink-soft); max-width: 720px; margin: 0 0 30px; }
+  .cta { display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; font-weight: 600; font-size: 15px; border: 1px solid transparent; }
+  .btn-primary { background: var(--pine); color: #08110d; }
+  .btn-primary:hover { background: var(--pine-strong); text-decoration: none; }
+  .btn-ghost { border-color: var(--hairline); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--pine); text-decoration: none; }
+
+  .demo { margin: 46px 0 8px; }
+  .demo figure { margin: 0; }
+  .demo img { width: 100%; height: auto; display: block; border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: 0 30px 80px -40px rgba(0,0,0,.8); }
+  .demo figcaption { color: var(--ink-faint); font-size: 13px; text-align: center; margin-top: 12px; }
+
+  section { padding: 56px 0; }
+  .section-head { max-width: 760px; margin-bottom: 34px; }
+  .section-head h2 { font-size: clamp(24px, 3vw, 34px); margin: 0 0 12px; }
+  .section-head p { color: var(--ink-soft); margin: 0; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 24px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; }
+  .card h3 .tag { color: var(--brass); font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; letter-spacing: .04em; }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+
+  .flow { background: var(--bg-soft); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 26px; overflow-x: auto; }
+  .flow pre { margin: 0; color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; line-height: 1.8; }
+  .flow .hl { color: var(--pine-strong); }
+  .flow .br { color: var(--brass); }
+  .twin { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 18px; margin-top: 22px; }
+
+  .feature-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px 30px; padding: 0; list-style: none; margin: 0; }
+  .feature-list li { padding-left: 26px; position: relative; color: var(--ink-soft); }
+  .feature-list li::before { content: "›"; position: absolute; left: 6px; color: var(--pine); font-weight: 700; }
+  .feature-list b { color: var(--ink); font-weight: 600; }
+
+  .install { background: var(--panel); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 0; }
+  pre.code { margin: 0; padding: 18px 22px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; color: var(--ink); }
+  pre.code .c { color: var(--ink-faint); }
+
+  .note { color: var(--ink-faint); font-size: 14px; margin-top: 16px; }
+  footer { border-top: 1px solid var(--hairline); padding: 34px 0 60px; color: var(--ink-faint); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .badge { display:inline-block; border:1px solid var(--hairline); border-radius:999px; padding:3px 12px; font-size:12.5px; color:var(--ink-soft); }
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <div class="brand"><span class="mark">L</span> Life Context Vault <small>あなたの中に留める</small></div>
+    <nav class="nav-links">
+      <a href="#why">なぜ</a>
+      <a href="#how">仕組み</a>
+      <a href="#features">特長</a>
+      <a href="https://github.com/Kota-Ohno/life-context-vault">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Local-first · Encrypted · MCP</p>
+      <h1 class="title display">AIに、<span class="accent">人生を渡さず</span>に<br>文脈を渡す。</h1>
+      <p class="lede">Life Context Vault は、暗号化された個人の文脈をこの端末の中だけに保管し、AIには<strong>確認済みのContext Pack</strong>だけを渡すローカルファーストのデスクトップアプリ。生のVaultも、元の資料も、承認していない候補も、AIには決して渡りません。</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/Kota-Ohno/life-context-vault">GitHubで見る →</a>
+        <a class="btn btn-ghost" href="#how">仕組みを見る</a>
+      </div>
+      <div class="demo">
+        <figure>
+          <img src="demo.gif" alt="文脈の台帳・記憶一覧・送る内容の確認・AI連携の画面遷移" loading="lazy" />
+          <figcaption>渡したものはすべて台帳に残り、いつでも取り消せる。</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 class="display">逆のトレードをする。</h2>
+        <p>役に立つAIには、あなたの文脈が要る。けれど従来のやり方は割に合わない ── チャット欄に人生を貼り付けて行方を見失うか、メール・ファイル・履歴への包括アクセスを渡して祈るか。どちらもタスクに必要な以上を漏らし、何を共有したか見ることも取り消すこともできない。</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <h3><span class="tag">入力はあなたが選ぶ</span>キュレートされた取り込み</h3>
+          <p>手入力・ファイルアップロード・オプトインのブラウザ取り込みのみ。メールやカレンダー、閲覧履歴をバックグラウンドで吸い上げることはしません。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag">出力は確認済みだけ</span>Context Pack</h3>
+          <p>要求ごとに関連する承認済みの記憶をランク付けし、送る内容をあなたに提示。ポリシーを満たし（確認が要るものは確認するまで）何も送りません。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag">秘密は出ていけない</span>secret_never_send</h3>
+          <p>最も機微なものはそもそも承認済みの記憶になれず、Packにも入れません。設定ではなくコードで強制します。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 class="display">境界はコードで、二重に強制される。</h2>
+        <p>記憶候補が承認済みの記憶になるのは明示的な操作を経たときだけ。そしてすべてのContext Packは、作った時点ではなく<strong>取得の瞬間に、現在のポリシーで再検証</strong>されます。</p>
+      </div>
+      <div class="flow">
+<pre>RawSource → 候補 <span class="br">(UNTRUSTED)</span> → <span class="hl">あなたが承認</span> → ApprovedFact <span class="hl">(canonical)</span>
+                                              │
+            audit ← Context Pack ← rank + filter ← <span class="br">(現在のポリシーで再検証)</span>
+                          │
+            <span class="hl">あなたが確認</span> → AI クライアント</pre>
+      </div>
+      <div class="twin">
+        <div class="card">
+          <h3>渡した先には理由だけ</h3>
+          <p>AIが受け取るペイロードは、除外項目を「理由」だけに絞ります。何が伏せられたかをAIが知ることはありません。</p>
+        </div>
+        <div class="card">
+          <h3>一つのコアで一箇所に</h3>
+          <p>デスクトップアプリもMCPサイドカーも同じ <code>*_at_path</code> コアを呼ぶので、境界はちょうど一箇所に存在します。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 class="display">中身</h2>
+      </div>
+      <ul class="feature-list">
+        <li><b>ローカルファースト＆暗号化。</b>状態はSQLCipher暗号化SQLiteに保存。鍵はOSの資格情報ストア（macOS Keychain）。製品自身のネットワーク送信はゼロ。</li>
+        <li><b>感度ティアと接続ごとのポリシー。</b>記憶は public 〜 secret_never_send に階層化。接続ごとに上限・ドメイン許可・「このAIを信頼」モード。</li>
+        <li><b>製品級の検索。</b>正規化SQLite射影テーブル＋ネイティブFTS。10万ファクト/50万チャンクでベンチ済み。</li>
+        <li><b>開かれた標準。</b>ローカルMCP stdio サイドカーが、同一端末のMCPクライアントに最小限のツール面を公開。</li>
+        <li><b>すべて監査・取消可能。</b>取り込み元・候補・要求・Pack・配信は監査台帳に。Packは10分で失効し、ポリシー強化や記憶の編集/非表示は遡って無効化。</li>
+        <li><b>Claude Desktop 連携。</b>「Claude設定へ追加」ボタンで <code>life-context-vault</code> MCPサーバーを設定にマージ（既存設定はバックアップ）。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 class="display">動かす</h2>
+        <p>デスクトップ優先。AIアクセス・暗号化ネイティブ永続化・ローカルMCPはTauriアプリで。</p>
+      </div>
+      <div class="install">
+<pre class="code"><span class="c"># フル機能のデスクトップアプリ</span>
+npm install
+npm run tauri:dev
+
+<span class="c"># ローカルMCPサイドカーをビルド → アプリの「接続」から追加</span>
+npm run mcp:build</pre>
+      </div>
+      <p class="note">早期版（0.1.0）。トラスト境界とその強制は実装済みで、RustコアとTypeScriptフォールバックの両方でテスト済みです。<span class="badge">MIT</span> <span class="badge">UIは日本語ファースト</span></p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© Life Context Vault — あなたの中に留める。</span>
+    <span><a href="https://github.com/Kota-Ohno/life-context-vault">GitHub</a> · <a href="https://github.com/Kota-Ohno/life-context-vault/blob/master/SECURITY.md">Security</a> · <a href="https://github.com/Kota-Ohno/life-context-vault/blob/master/CONTRIBUTING.md">Contributing</a></span>
+  </div>
+</footer>
+</body>
+</html>
