@@ -17,6 +17,11 @@ use sha2::{Digest, Sha256};
 
 const BACKUP_KDF_ITERATIONS: u32 = 600_000;
 const LEGACY_BACKUP_KDF_ITERATIONS: u32 = 120_000;
+// Upper bound on the iteration count honored from an (untrusted) backup file.
+// Export uses 600k; this leaves generous headroom for future increases while
+// preventing a hostile backup from forcing an unbounded PBKDF2 work factor
+// (CPU-exhaustion DoS) before the passphrase is even checked.
+const MAX_BACKUP_KDF_ITERATIONS: u32 = 10_000_000;
 const BACKUP_ENVELOPE_VERSION: u64 = 1;
 const BACKUP_SALT_LEN: usize = 16;
 const BACKUP_IV_LEN: usize = 12;
@@ -103,11 +108,17 @@ pub fn import_encrypted_backup(backup_text: &str, passphrase: &str) -> Result<St
   if version != BACKUP_ENVELOPE_VERSION {
     return Err(format!("unsupported backup version: {version}"));
   }
-  let iterations = value
+  let iterations_raw = value
     .get("iterations")
     .and_then(serde_json::Value::as_u64)
     .filter(|rounds| *rounds > 0)
-    .unwrap_or(LEGACY_BACKUP_KDF_ITERATIONS as u64) as u32;
+    .unwrap_or(LEGACY_BACKUP_KDF_ITERATIONS as u64);
+  if iterations_raw > MAX_BACKUP_KDF_ITERATIONS as u64 {
+    return Err(format!(
+      "backup iteration count {iterations_raw} exceeds the maximum {MAX_BACKUP_KDF_ITERATIONS}"
+    ));
+  }
+  let iterations = iterations_raw as u32;
   let salt = decode_required_field(&value, "salt")?;
   let iv = decode_required_field(&value, "iv")?;
   let ciphertext = decode_required_field(&value, "cipherText")?;
@@ -277,6 +288,26 @@ mod tests {
     assert!(value["salt"].is_string());
     assert!(value["iv"].is_string());
     assert!(value["cipherText"].is_string());
+  }
+
+  #[test]
+  fn backup_import_rejects_excessive_iteration_count() {
+    // A hostile backup file must not be able to force an unbounded PBKDF2 work
+    // factor (CPU-exhaustion DoS) before the passphrase is even checked.
+    let bogus = serde_json::json!({
+      "version": BACKUP_ENVELOPE_VERSION,
+      "kdf": BACKUP_KDF_NAME,
+      "iterations": 10_000_001u64,
+      "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+      "iv": "AAAAAAAAAAAAAAAA",
+      "cipherText": "AAAA"
+    })
+    .to_string();
+    let err = import_encrypted_backup(&bogus, STRONG_PASSPHRASE).expect_err("must reject");
+    assert!(
+      err.contains("iteration"),
+      "error should name the iteration cap, got: {err}"
+    );
   }
 
   #[test]
