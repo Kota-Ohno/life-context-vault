@@ -35,7 +35,7 @@ Manual copy remains available in **Connections**. A development config looks lik
   "mcpServers": {
     "life-context-vault": {
       "type": "stdio",
-      "command": "/Users/kota/Documents/My Context/src-tauri/target/release/lcv-mcp",
+      "command": "/path/to/life-context-vault/src-tauri/target/release/lcv-mcp",
       "env": {
         "LCV_VAULT_DB_PATH": "$HOME/Library/Application Support/dev.life-context-vault.poc/vault.sqlite3"
       }

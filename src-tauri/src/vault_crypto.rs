@@ -1,7 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{
   fs,
-  io::Read,
   path::{Path, PathBuf},
   time::{SystemTime, UNIX_EPOCH},
 };
@@ -173,9 +172,16 @@ pub(crate) fn vault_key() -> Result<String, String> {
         "LCV_VAULT_DB_KEY or LCV_VAULT_KEY_FILE is required on this platform".to_string()
       })?;
     if key_file.exists() {
-      return fs::read_to_string(&key_file)
+      let key = fs::read_to_string(&key_file)
         .map(|value| value.trim().to_string())
-        .map_err(|error| format!("failed to read key file: {error}"));
+        .map_err(|error| format!("failed to read key file: {error}"))?;
+      // Apply the same strength floor as the LCV_VAULT_DB_KEY env path — a short
+      // key file would otherwise silently weaken the at-rest SQLCipher KDF below
+      // the documented guarantee.
+      if key.len() < 32 {
+        return Err("LCV_VAULT_KEY_FILE must contain at least 32 characters".to_string());
+      }
+      return Ok(key);
     }
     let key = generate_hex_key()?;
     if let Some(parent) = key_file.parent() {
@@ -255,11 +261,12 @@ fn store_keychain_password(key: &str) -> Result<(), String> {
 }
 
 fn generate_hex_key() -> Result<String, String> {
+  // Use the getrandom CSPRNG (already a direct dependency, used by vault_backup
+  // and vault_recovery) rather than reading /dev/urandom directly: portable
+  // (incl. Windows, which this non-macOS branch otherwise can't generate a key
+  // on) and consistent with the rest of the crate.
   let mut bytes = [0u8; 32];
-  let mut file = fs::File::open("/dev/urandom")
-    .map_err(|error| format!("failed to open /dev/urandom: {error}"))?;
-  file
-    .read_exact(&mut bytes)
+  getrandom::getrandom(&mut bytes)
     .map_err(|error| format!("failed to read random key bytes: {error}"))?;
   Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }

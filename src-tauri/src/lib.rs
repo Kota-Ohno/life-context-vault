@@ -21,8 +21,7 @@ use std::{
 use tauri::{
   menu::{MenuBuilder, MenuItemBuilder},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-  ActivationPolicy, App, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
-  WindowEvent,
+  ActivationPolicy, App, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 
@@ -3485,6 +3484,25 @@ fn get_context_request_status_at_path_with_client(
         context_pack: None,
       });
     };
+    // Enforce the PACK-level TTL, not just the request window. confirm_context_pack
+    // re-stamps pack.expiresAt to a 10-minute delivery window (the request keeps its
+    // ~24h confirmation window); checking only the request would leave a confirmed
+    // pack deliverable for ~24h, violating the documented 10-minute guarantee.
+    // Mirrors vault.ts (isExpired(pack.expiresAt ?? request.expiresAt)).
+    let pack_expires_at = str_field(pack, "expiresAt");
+    let effective_expires_at = if pack_expires_at.is_empty() {
+      expires_at.clone()
+    } else {
+      pack_expires_at
+    };
+    if !effective_expires_at.is_empty() && is_expired(&effective_expires_at) {
+      return Ok(VaultCoreRequestStatusResult {
+        status: "expired".to_string(),
+        request_id: request_id.to_string(),
+        expires_at: Some(effective_expires_at),
+        context_pack: None,
+      });
+    }
     if ensure_context_pack_allowed_by_current_policy(&vault, pack).is_err() {
       return Ok(VaultCoreRequestStatusResult {
         status: "expired".to_string(),
@@ -4746,7 +4764,6 @@ fn detect_sensitivity(text: &str) -> &'static str {
 // Mirrors src/sensitivity.ts SIGNALS list exactly: structured patterns → "high",
 // bare keyword hits → "low"; secret-first ordering; no match → public/low/false.
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SensitivityResult {
@@ -4756,7 +4773,6 @@ struct SensitivityResult {
   reasons: Vec<String>,
 }
 
-#[allow(dead_code)]
 fn confidence_rank(c: &str) -> u8 {
   match c {
     "high" => 2,
@@ -4765,7 +4781,6 @@ fn confidence_rank(c: &str) -> u8 {
   }
 }
 
-#[allow(dead_code)]
 fn tier_rank_str(t: &str) -> u8 {
   match t {
     "secret_never_send" => 4,
@@ -4779,7 +4794,6 @@ fn tier_rank_str(t: &str) -> u8 {
 /// Match credential assignment: keyword = value (structured, high confidence).
 /// Mirrors: /\b(password|passcode|api[_\s-]?key|token|secret|private[_\s-]?key|
 ///           recovery[_\s-]?code|bearer\s+[a-z0-9._-]{12,})\b\s*[:=]\s*\S+/i
-#[allow(dead_code)]
 fn match_credential_assignment(text: &str) -> bool {
   let lower = text.to_lowercase();
   // Find each keyword group, then check if followed by [:=] and a value.
@@ -4853,7 +4867,6 @@ fn match_credential_assignment(text: &str) -> bool {
 }
 
 /// Match email address pattern. Mirrors: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
-#[allow(dead_code)]
 fn match_email(text: &str) -> bool {
   // Simple state-machine email scan
   let lower = text.to_lowercase();
@@ -4909,7 +4922,6 @@ fn match_email(text: &str) -> bool {
 
 /// Luhn algorithm check for credit card numbers.
 /// Mirrors: luhnValid() in src/sensitivity.ts
-#[allow(dead_code)]
 fn luhn_valid(digits: &str) -> bool {
   let mut sum: u32 = 0;
   let mut alternate = false;
@@ -4932,7 +4944,6 @@ fn luhn_valid(digits: &str) -> bool {
 
 /// Match マイナンバー keyword followed (within 10 non-digit chars) by a 12-digit number.
 /// Mirrors: /マイナンバー[^\d]{0,10}\d{4}[ -]?\d{4}[ -]?\d{4}/ in src/sensitivity.ts
-#[allow(dead_code)]
 fn match_my_number(text: &str) -> bool {
   const KW: &str = "マイナンバー";
   let mut search = text;
@@ -4993,7 +5004,6 @@ fn match_my_number(text: &str) -> bool {
 /// Mirrors: containsLuhnCard() in src/sensitivity.ts
 /// Pattern: \b\d{4}(?:[ -]\d{4}){2,4}\b | \b\d{13,19}\b — then strip spaces/hyphens,
 /// check 13–19 digits, run Luhn.
-#[allow(dead_code)]
 fn match_card_luhn(text: &str) -> bool {
   let bytes = text.as_bytes();
   let len = bytes.len();
@@ -5036,7 +5046,6 @@ fn match_card_luhn(text: &str) -> bool {
 
 /// Match US SSN pattern: \b\d{3}-\d{2}-\d{4}\b(?!-).
 /// Mirrors: /\b\d{3}-\d{2}-\d{4}\b(?!-)/ in src/sensitivity.ts
-#[allow(dead_code)]
 fn match_ssn(text: &str) -> bool {
   let bytes = text.as_bytes();
   let len = bytes.len();
@@ -5077,7 +5086,6 @@ fn match_ssn(text: &str) -> bool {
 
 /// Match IBAN pattern: \b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{1,3}\b
 /// Mirrors: IBAN signal in src/sensitivity.ts
-#[allow(dead_code)]
 fn match_iban(text: &str) -> bool {
   let chars: Vec<char> = text.chars().collect();
   let len = chars.len();
@@ -5154,7 +5162,6 @@ fn match_iban(text: &str) -> bool {
 /// Pattern: /(?:\+\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4,}|
 ///            \(\d{3}\)[\s.-]?\d{3}[-.\s]?\d{4}|
 ///            \b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)/
-#[allow(dead_code)]
 fn match_phone(text: &str) -> bool {
   let bytes = text.as_bytes();
   let len = bytes.len();
@@ -5162,9 +5169,6 @@ fn match_phone(text: &str) -> bool {
   // Helper: is separator (space, dot, hyphen)
   fn is_sep(b: u8) -> bool {
     b == b' ' || b == b'.' || b == b'-'
-  }
-  fn is_sep_or_none(bytes: &[u8], idx: usize) -> bool {
-    idx >= bytes.len() || is_sep(bytes[idx])
   }
 
   let mut i = 0;
@@ -5325,7 +5329,6 @@ fn match_phone(text: &str) -> bool {
 /// Mirrors: /\b\d{1,5}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}\s+
 ///   (?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct)\b/
 /// in src/sensitivity.ts
-#[allow(dead_code)]
 fn match_address(text: &str) -> bool {
   let chars: Vec<char> = text.chars().collect();
   let len = chars.len();
@@ -5408,7 +5411,6 @@ fn match_address(text: &str) -> bool {
 
 /// Match Japanese postal code: 〒\d{3}-\d{4}
 /// Mirrors: /〒\d{3}-\d{4}/ in src/sensitivity.ts
-#[allow(dead_code)]
 fn match_jp_postal(text: &str) -> bool {
   let chars: Vec<char> = text.chars().collect();
   let len = chars.len();
@@ -5436,7 +5438,6 @@ fn match_jp_postal(text: &str) -> bool {
 
 /// Classify text with full parity to TS classifySensitivity.
 /// Signals ordered secret-first. Returns highest-tier, highest-confidence match.
-#[allow(dead_code)]
 fn classify_sensitivity(text: &str) -> SensitivityResult {
   // Build signals list mirroring SIGNALS in src/sensitivity.ts
   // Each entry: (matcher_fn, tier, confidence, reason)
@@ -5799,20 +5800,6 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
   needles.iter().any(|needle| text.contains(needle))
 }
 
-fn sanitize_secret_material(text: &str) -> String {
-  // Operate per line so a secret indicator only redacts the rest of its OWN
-  // line, never across line boundaries. Once an indicator (or the "api key"
-  // pattern) is seen, redact the indicator AND every remaining token on the
-  // line: a credential separated from its keyword by >=2 tokens (e.g.
-  // "My password is hunter2") would otherwise survive verbatim in the
-  // persisted source body. Fail closed — mask more, not less.
-  text
-    .split('\n')
-    .map(sanitize_secret_material_line)
-    .collect::<Vec<_>>()
-    .join("\n")
-}
-
 fn sanitize_secret_material_line(line: &str) -> String {
   let tokens = line.split_whitespace().collect::<Vec<_>>();
   let mut sanitized = Vec::new();
@@ -5857,8 +5844,10 @@ fn sanitize_secret_material_line(line: &str) -> String {
 }
 
 fn sanitize_source_body(text: &str) -> String {
-  // Map the per-line sanitizer directly over lines — sanitize_secret_material is
-  // itself line-aware now, so calling it here would split on '\n' a second time.
+  // Map the per-line secret sanitizer over each line: an indicator only redacts
+  // the rest of its OWN line, never across line boundaries. The per-line helper
+  // (sanitize_secret_material_line) is fail-closed — once a credential indicator
+  // is seen it masks that token AND every remaining token on the line.
   text
     .lines()
     .map(sanitize_secret_material_line)
@@ -6342,8 +6331,18 @@ fn extract_standard_native_document_text(
 ) -> Result<String, String> {
   Ok(match kind {
     NativeDocumentKind::Text => extract_plain_text_document(bytes)?,
-    NativeDocumentKind::Pdf => pdf_extract::extract_text_from_mem(bytes)
-      .map_err(|error| format!("PDF本文を抽出できませんでした: {error}"))?,
+    NativeDocumentKind::Pdf => {
+      // pdf-extract can panic (not just Err) on malformed input; isolate it so a
+      // corrupt/hostile PDF surfaces as a clean user-facing error rather than
+      // unwinding through the IPC boundary and taking down the process.
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(bytes)
+      }))
+      .map_err(|_| {
+        "PDF本文を抽出できませんでした: ファイルが破損している可能性があります".to_string()
+      })?
+      .map_err(|error| format!("PDF本文を抽出できませんでした: {error}"))?
+    }
     NativeDocumentKind::Docx => {
       let (text, document_warnings) = extract_zip_xml_document_text(bytes, is_docx_text_entry)?;
       warnings.extend(document_warnings);
@@ -10736,6 +10735,22 @@ mod tests {
     ];
     let mut pack_samples = Vec::new();
     let mut vault = empty_vault_json();
+    // Grant the benchmark client a "sensitive" ceiling. The default per-client
+    // policy caps at "public" (conservative), which would exclude the personal/
+    // private/sensitive tiers the corpus is seeded with — this benchmark measures
+    // retrieval at scale, not policy filtering, so lift the cap explicitly.
+    ensure_access_policy_for_client(&mut vault, "conn_benchmark");
+    if let Some(policy) = vault
+      .get_mut("accessPolicies")
+      .and_then(Value::as_array_mut)
+      .and_then(|policies| {
+        policies
+          .iter_mut()
+          .find(|p| str_field(p, "clientId") == "conn_benchmark")
+      })
+    {
+      policy["sensitivityCeiling"] = Value::String("sensitive".to_string());
+    }
     for _ in 0..3 {
       for task in pack_tasks {
         let started = Instant::now();
@@ -11846,17 +11861,16 @@ mod tests {
   #[test]
   fn sanitize_secret_material_redacts_to_end_of_line_without_bleeding_across_lines() {
     // Credential separated from its keyword by >=2 tokens must not survive.
-    let out = sanitize_secret_material("My password is hunter2");
+    let out = sanitize_source_body("My password is hunter2");
     assert!(!out.contains("hunter2"), "secret value leaked: {out}");
     assert!(out.contains("[REDACTED_SECRET]"));
 
     // "api key <value>" pattern is fully masked.
-    let api = sanitize_secret_material("the api key sk-abc123 rotates monthly");
+    let api = sanitize_source_body("the api key sk-abc123 rotates monthly");
     assert!(!api.contains("sk-abc123"), "api key leaked: {api}");
 
     // Redaction stops at the line boundary: a later, unrelated line survives.
-    let multi =
-      sanitize_secret_material("password is hunter2\nNeed to update address before moving.");
+    let multi = sanitize_source_body("password is hunter2\nNeed to update address before moving.");
     assert!(!multi.contains("hunter2"), "secret value leaked: {multi}");
     assert!(
       multi.contains("Need to update address before moving."),
@@ -11864,29 +11878,29 @@ mod tests {
     );
 
     // Lines with no indicator are untouched.
-    let clean = sanitize_secret_material("Tone preference: concise and calm.");
+    let clean = sanitize_source_body("Tone preference: concise and calm.");
     assert_eq!(clean, "Tone preference: concise and calm.");
 
     // False positives (a word merely CONTAINING a keyword) must NOT nuke the
     // whole line — only the baseline bounded blast applies, so the tail survives.
-    let secretary = sanitize_secret_material("My secretary scheduled the meeting for Tuesday");
+    let secretary = sanitize_source_body("My secretary scheduled the meeting for Tuesday");
     assert!(
       secretary.contains("the meeting for Tuesday"),
       "false-positive over-redacted to end of line: {secretary}"
     );
 
     // Genuine keywords still match even with adjacent punctuation.
-    let punct = sanitize_secret_material("token: abc123");
+    let punct = sanitize_source_body("token: abc123");
     assert!(
       !punct.contains("abc123"),
       "punctuated keyword missed: {punct}"
     );
-    let kv = sanitize_secret_material("password=hunter2 and more");
+    let kv = sanitize_source_body("password=hunter2 and more");
     assert!(!kv.contains("hunter2"), "kv secret leaked: {kv}");
 
     // Pluralized/suffixed keywords must NOT bypass redaction — a value >=2 tokens
     // after a plural keyword must still be masked (the security-review regression).
-    let plural = sanitize_secret_material("my passwords are hunter2 and swordfish");
+    let plural = sanitize_source_body("my passwords are hunter2 and swordfish");
     assert!(
       !plural.contains("hunter2"),
       "plural keyword bypassed redaction: {plural}"
@@ -11895,7 +11909,7 @@ mod tests {
       !plural.contains("swordfish"),
       "plural keyword bypassed redaction: {plural}"
     );
-    let toks = sanitize_secret_material("api tokens: tok_abc tok_def");
+    let toks = sanitize_source_body("api tokens: tok_abc tok_def");
     assert!(
       !toks.contains("tok_abc"),
       "plural keyword bypassed redaction: {toks}"
@@ -13338,6 +13352,63 @@ mod tests {
       }
     }
     save_vault_json_with_projection(&mut connection, &vault).expect("save expired vault");
+
+    let status =
+      get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")
+        .expect("request status");
+
+    assert_eq!(status.status, "expired");
+    assert!(status.context_pack.is_none());
+    remove_temp_vault(&path);
+  }
+
+  #[test]
+  fn confirmed_context_pack_enforces_pack_ttl_even_while_request_window_open() {
+    // The confirmation-required REQUEST gets a 24h window, but confirm_context_pack
+    // re-stamps the PACK to a 10-minute delivery window. The retrieval path must
+    // honor the (shorter) pack TTL — otherwise a confirmed pack stays deliverable
+    // for ~24h, violating the documented 10-minute guarantee. Parity with vault.ts.
+    use_test_vault_key();
+    let path = temp_vault_path("confirmed-pack-ttl-only");
+    let source = add_source_with_candidates_at_path(
+      &path,
+      "manual_note",
+      "manual_entry",
+      "Travel reminder",
+      "Passport expires on 2028-05-01.",
+    )
+    .expect("source");
+    approve_candidate_at_path(
+      &path,
+      source.candidate_ids.first().expect("candidate"),
+      None,
+    )
+    .expect("approve candidate");
+    let built = create_context_pack_request_at_path(
+      &path,
+      "conn_chatgpt",
+      "ChatGPT",
+      "When does my passport expire?",
+      Some("普段使うAIへの回答文脈"),
+      Some("personal"),
+      Some("explicit_sensitive"),
+    )
+    .expect("context pack");
+    confirm_context_pack_at_path(&path, &built.pack_id).expect("confirm pack");
+
+    let mut connection = open_vault_db_at_path(&path).expect("open vault");
+    let mut vault = load_vault_json_from_connection(&connection).expect("load vault");
+    // Leave the REQUEST window open (its natural ~24h); expire ONLY the pack.
+    for pack in vault
+      .get_mut("contextPacks")
+      .and_then(Value::as_array_mut)
+      .expect("packs")
+    {
+      if str_field(pack, "id") == built.pack_id {
+        pack["expiresAt"] = Value::String(minutes_from_now(-1));
+      }
+    }
+    save_vault_json_with_projection(&mut connection, &vault).expect("save pack-expired vault");
 
     let status =
       get_context_request_status_for_client_at_path(&path, &built.request_id, "conn_chatgpt")

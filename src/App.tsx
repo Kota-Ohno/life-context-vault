@@ -1678,11 +1678,26 @@ export function App() {
       return;
     }
     try {
-      const restored = isTauriRuntime()
-        ? (await importNativeEncryptedBackup(backupText, backupPassphrase)) ??
-          (await importEncryptedBackup(backupText, backupPassphrase))
-        : await importEncryptedBackup(backupText, backupPassphrase);
+      const nativeRestored = isTauriRuntime()
+        ? await importNativeEncryptedBackup(backupText, backupPassphrase)
+        : null;
+      const restored =
+        nativeRestored ?? (await importEncryptedBackup(backupText, backupPassphrase));
       apply(restored, "バックアップを復元しました。");
+      // A successful NATIVE restore overwrote the on-disk vault, so the
+      // load-failed guard (if it was armed) must be cleared and the revision
+      // resynced — otherwise auto-save stays suspended and every post-restore
+      // edit would persist only to the localStorage fallback, vanishing on the
+      // next restart (the exact durability failure the guard exists to prevent).
+      if (nativeRestored) {
+        const snapshot = await loadNativeVaultSnapshot();
+        if (snapshot?.state) {
+          nativeRevisionRef.current = snapshot.updatedAt;
+          setNativeRevision(snapshot.updatedAt);
+        }
+        nativeLoadFailedRef.current = false;
+        setNativeLoadFailed(false);
+      }
       setActivePackId(null);
       setActiveRequestId(null);
       setRestorePreview(null);
@@ -1702,6 +1717,11 @@ export function App() {
       setState(nativeSnapshot.state);
       nativeRevisionRef.current = nativeSnapshot.updatedAt;
       setNativeRevision(nativeSnapshot.updatedAt);
+      // Re-reading the native vault succeeded, so a prior (transient) load
+      // failure has recovered: clear the guard to resume auto-save. Leaving it
+      // armed would keep persisting only to the localStorage fallback.
+      nativeLoadFailedRef.current = false;
+      setNativeLoadFailed(false);
       setNotice("Native Vaultから最新状態を読み込みました。");
     } catch (error) {
       setNotice(formatVaultError(error, "Native Vaultの再読み込みに失敗しました。"));
